@@ -1,0 +1,34 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+
+  <!-- K vertical stem -->
+  <rect x="100" y="96" width="56" height="320" rx="28" fill="white"/>
+
+  <!-- K bottom arm - solid -->
+  <path d="M156 280 L156 320 L320 416 L360 416 L360 376 L180 280 Z" fill="white"/>
+
+  <!-- K top arm - outer cable sheath (darker) -->
+  <path d="M156 232 L156 192 L320 96 L360 96 L360 136 L180 232 Z" fill="#e0e7ff"/>
+
+  <!-- Inner cables - showing through the split -->
+  <!-- Cable 1 - red -->
+  <path d="M200 205 Q260 160, 330 115" stroke="#ef4444" stroke-width="14" stroke-linecap="round" fill="none"/>
+  <!-- Cable 2 - green -->
+  <path d="M185 220 Q250 175, 340 125" stroke="#22c55e" stroke-width="12" stroke-linecap="round" fill="none"/>
+  <!-- Cable 3 - blue -->
+  <path d="M175 200 Q235 155, 320 105" stroke="#3b82f6" stroke-width="12" stroke-linecap="round" fill="none"/>
+  <!-- Cable 4 - yellow -->
+  <path d="M210 215 Q270 170, 350 135" stroke="#eab308" stroke-width="10" stroke-linecap="round" fill="none"/>
+
+  <!-- Cable sheath edge highlight -->
+  <path d="M156 195 L175 180" stroke="white" stroke-width="8" stroke-linecap="round"/>
+  <path d="M340 96 L360 110" stroke="white" stroke-width="8" stroke-linecap="round"/>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+</svg>

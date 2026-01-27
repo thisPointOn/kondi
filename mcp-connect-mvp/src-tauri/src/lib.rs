@@ -1,0 +1,39 @@
+use tauri::Manager;
+use tauri::image::Image;
+
+mod commands;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .manage(commands::AppState::default())
+        .invoke_handler(tauri::generate_handler![
+            commands::save_api_keys,
+            commands::get_api_keys,
+            commands::save_server_config,
+            commands::get_server_configs,
+            commands::delete_server_config,
+            commands::start_oauth,
+            commands::mcp_request,
+            commands::anthropic_request,
+        ])
+        .setup(|app| {
+            // Set window icon for Linux
+            if let Some(window) = app.get_webview_window("main") {
+                // Load icon from bytes embedded at compile time
+                let icon_bytes = include_bytes!("../icons/128x128.png");
+                if let Ok(icon) = Image::from_bytes(icon_bytes) {
+                    let _ = window.set_icon(icon);
+                }
+
+                #[cfg(debug_assertions)]
+                {
+                    window.open_devtools();
+                }
+            }
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

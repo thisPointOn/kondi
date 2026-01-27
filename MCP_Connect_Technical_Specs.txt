@@ -1,0 +1,655 @@
+MCP Connect
+Technical Implementation Specification
+MVP Development Blueprint
+Complete specifications for LLM-assisted development
+Version
+2.0 - Technical Specs
+Date
+January 2026
+Audience
+Engineering Team &amp; AI Assistants
+Document Overview
+This document provides complete technical specifications for implementing the MCP Connect MVP. It includes formal API contracts, state machine definitions, orchestration rules, security policies, and resource constraints detailed enough for an LLM to generate working code.
+Document Structure:
+Formal API Contracts - OpenAPI 3.0 specifications for all APIs
+State Machines - Complete lifecycle definitions with transitions
+Deterministic Orchestration Rules - Hard rules for planning and execution
+Security Policy Language - Policy schema and enforcement
+Cost &amp; Resource Envelopes - Exact resource limits and budgets
+Implementation Guidance - Detailed instructions for each component
+Testing Requirements - Acceptance criteria and test scenarios
+1. Formal API Contracts
+1.1 Orchestrator API (OpenAPI 3.0)
+Base URL: https://api.mcpconnect.app/v1
+Authentication: Bearer token (JWT) in Authorization header
+OpenAPI Schema:
+openapi: 3.0.3
+info:
+ title: MCP Connect Orchestrator API
+ version: 1.0.0
+ description: Core API for MCP orchestration
+paths:
+ /conversations:
+ post:
+ summary: Create new conversation
+ requestBody:
+ content:
+ application/json:
+ schema:
+ type: object
+ properties:
+ user_id:
+ type: string
+ format: uuid
+ required: [user_id]
+ responses:
+ &apos;201&apos;:
+ description: Conversation created
+ content:
+ application/json:
+ schema:
+ $ref: &apos;#/components/schemas/Conversation&apos;
+ /conversations/{conversation_id}/messages:
+ post:
+ summary: Send message to conversation
+ parameters:
+ - name: conversation_id
+ in: path
+ required: true
+ schema:
+ type: string
+ format: uuid
+ requestBody:
+ content:
+ application/json:
+ schema:
+ type: object
+ properties:
+ content:
+ type: string
+ maxLength: 10000
+ attachments:
+ type: array
+ items:
+ $ref: &apos;#/components/schemas/Attachment&apos;
+ required: [content]
+ responses:
+ &apos;200&apos;:
+ description: Message processed
+ content:
+ application/json:
+ schema:
+ $ref: &apos;#/components/schemas/Message&apos;
+components:
+ schemas:
+ Conversation:
+ type: object
+ properties:
+ id:
+ type: string
+ format: uuid
+ user_id:
+ type: string
+ format: uuid
+ created_at:
+ type: string
+ format: date-time
+ state:
+ type: string
+ enum: [active, archived]
+ required: [id, user_id, created_at, state]
+ Message:
+ type: object
+ properties:
+ id:
+ type: string
+ format: uuid
+ conversation_id:
+ type: string
+ format: uuid
+ role:
+ type: string
+ enum: [user, assistant, system]
+ content:
+ type: string
+ mcp_calls:
+ type: array
+ items:
+ $ref: &apos;#/components/schemas/MCPCall&apos;
+ created_at:
+ type: string
+ format: date-time
+ required: [id, conversation_id, role, content]
+1.1.1 Message Processing Endpoint
+POST /conversations/{id}/messages
+Request Body:
+{
+ &quot;content&quot;: string, // User message (max 10k chars)
+ &quot;attachments&quot;: [ // Optional
+ {
+ &quot;type&quot;: &quot;image&quot; | &quot;file&quot;,
+ &quot;url&quot;: string,
+ &quot;mime_type&quot;: string
+ }
+ ],
+ &quot;context&quot;: { // Optional
+ &quot;mcp_preferences&quot;: [string], // MCP IDs to prefer
+ &quot;budget_limit&quot;: number // Max $ for this request
+ }
+}
+Response (streaming):
+{
+ &quot;message_id&quot;: uuid,
+ &quot;conversation_id&quot;: uuid,
+ &quot;chunks&quot;: [ // Server-sent events
+ {
+ &quot;type&quot;: &quot;text&quot; | &quot;mcp_call&quot; | &quot;approval_request&quot;,
+ &quot;content&quot;: string,
+ &quot;metadata&quot;: object
+ }
+ ]
+}
+1.2 MCP Runtime API
+Internal API for managing MCP server lifecycle and tool execution.
+POST /runtime/mcp/start
+Request:
+{
+ &quot;mcp_id&quot;: string,
+ &quot;server_config&quot;: {
+ &quot;command&quot;: string,
+ &quot;args&quot;: [string],
+ &quot;env&quot;: {string: string},
+ &quot;transport&quot;: &quot;stdio&quot; | &quot;sse&quot;
+ },
+ &quot;resource_limits&quot;: {
+ &quot;cpu_cores&quot;: number,
+ &quot;memory_mb&quot;: number,
+ &quot;execution_timeout_sec&quot;: number
+ }
+}
+Response:
+{
+ &quot;instance_id&quot;: uuid,
+ &quot;status&quot;: &quot;starting&quot; | &quot;ready&quot; | &quot;failed&quot;,
+ &quot;endpoint&quot;: string, // For SSE transport
+ &quot;capabilities&quot;: {
+ &quot;tools&quot;: [ToolDefinition],
+ &quot;resources&quot;: [ResourceDefinition]
+ }
+}
+POST /runtime/mcp/{instance_id}/tool
+Request:
+{
+ &quot;tool_name&quot;: string,
+ &quot;arguments&quot;: {string: any},
+ &quot;timeout_ms&quot;: number,
+ &quot;idempotency_key&quot;: string // For retry safety
+}
+Response:
+{
+ &quot;call_id&quot;: uuid,
+ &quot;result&quot;: any | null,
+ &quot;error&quot;: string | null,
+ &quot;execution_time_ms&quot;: number,
+ &quot;resource_usage&quot;: {
+ &quot;cpu_ms&quot;: number,
+ &quot;memory_peak_mb&quot;: number,
+ &quot;network_bytes&quot;: number
+ }
+}
+DELETE /runtime/mcp/{instance_id}
+Response:
+{
+ &quot;instance_id&quot;: uuid,
+ &quot;status&quot;: &quot;stopped&quot;,
+ &quot;total_runtime_sec&quot;: number
+}
+1.3 Client IPC Protocol
+WebSocket-based bidirectional communication between desktop/mobile clients and backend. All messages are JSON.
+Client → Server Messages:
+// User sends message
+{
+ &quot;type&quot;: &quot;message&quot;,
+ &quot;conversation_id&quot;: uuid,
+ &quot;content&quot;: string,
+ &quot;attachments&quot;: [Attachment]
+}
+// User approves action
+{
+ &quot;type&quot;: &quot;approval&quot;,
+ &quot;approval_request_id&quot;: uuid,
+ &quot;decision&quot;: &quot;approve&quot; | &quot;deny&quot;,
+ &quot;note&quot;: string | null
+}
+// User cancels in-progress operation
+{
+ &quot;type&quot;: &quot;cancel&quot;,
+ &quot;message_id&quot;: uuid
+}
+Server → Client Messages:
+// Streaming text response
+{
+ &quot;type&quot;: &quot;text_chunk&quot;,
+ &quot;message_id&quot;: uuid,
+ &quot;content&quot;: string,
+ &quot;is_final&quot;: boolean
+}
+// MCP tool invocation started
+{
+ &quot;type&quot;: &quot;mcp_call_start&quot;,
+ &quot;call_id&quot;: uuid,
+ &quot;mcp_name&quot;: string,
+ &quot;tool_name&quot;: string,
+ &quot;arguments&quot;: object
+}
+// MCP tool result
+{
+ &quot;type&quot;: &quot;mcp_call_result&quot;,
+ &quot;call_id&quot;: uuid,
+ &quot;success&quot;: boolean,
+ &quot;result&quot;: any,
+ &quot;error&quot;: string | null
+}
+// Request user approval
+{
+ &quot;type&quot;: &quot;approval_request&quot;,
+ &quot;request_id&quot;: uuid,
+ &quot;action&quot;: {
+ &quot;type&quot;: &quot;purchase&quot; | &quot;booking&quot; | &quot;data_write&quot;,
+ &quot;description&quot;: string,
+ &quot;risk_level&quot;: &quot;low&quot; | &quot;medium&quot; | &quot;high&quot;,
+ &quot;details&quot;: object
+ },
+ &quot;timeout_sec&quot;: number
+}
+// Error notification
+{
+ &quot;type&quot;: &quot;error&quot;,
+ &quot;error_code&quot;: string,
+ &quot;message&quot;: string,
+ &quot;recoverable&quot;: boolean
+}
+2. State Machines
+Complete state machine definitions for all major components. Each state machine specifies valid states, transitions, triggers, and invariants.
+2.1 MCP Lifecycle State Machine
+State
+Trigger
+Next State
+Action
+Timeout
+UNINITIALIZED
+start()
+STARTING
+Spawn container
+N/A
+STARTING
+ready_signal
+READY
+Cache capabilities
+30s → FAILED
+READY
+execute_tool()
+EXECUTING
+Send tool call
+N/A
+EXECUTING
+result_received
+READY
+Return result
+60s → ERROR
+READY
+idle_timeout
+STOPPING
+Graceful shutdown
+300s (5min)
+ANY
+stop()
+STOPPING
+Send SIGTERM
+N/A
+STOPPING
+exit_clean
+STOPPED
+Cleanup resources
+10s → SIGKILL
+State Invariants:
+Only one tool execution per MCP instance at a time
+EXECUTING state must transition within 60 seconds or timeout
+STOPPED state is terminal - instance cannot be reused
+Resource limits enforced in all states except STOPPED
+2.2 Tool Execution Lifecycle
+State machine for individual tool call execution within an MCP instance.
+State
+Description
+Valid Transitions
+Side Effects
+PENDING
+Tool call created, awaiting execution
+RUNNING, CANCELLED
+Log creation to audit DB
+RUNNING
+Executing in MCP, awaiting result
+SUCCESS, FAILED, TIMEOUT, CANCELLED
+Start resource metering
+SUCCESS
+Tool completed successfully
+Terminal state
+Record metrics, cache result
+FAILED
+Tool returned error
+RETRY_PENDING (if retryable)
+Log error, check retry policy
+TIMEOUT
+Execution exceeded time limit
+Terminal state
+Kill process, log incident
+RETRY_PENDING
+Waiting before retry attempt
+RUNNING, CANCELLED
+Wait with exponential backoff
+2.2.1 Retry Policy
+Max Retries: 3 attempts
+Backoff: Exponential: 1s, 2s, 4s
+Retryable Errors: Network timeout, 5xx HTTP, connection refused
+Non-Retryable: 4xx HTTP (except 429), invalid arguments, permission denied
+Idempotency: Use idempotency_key header for retry safety
+2.3 Approval Lifecycle
+User approval workflow for high-risk actions (purchases, bookings, data writes).
+State
+Trigger
+Next State
+CREATED
+High-risk action detected, create approval request
+PENDING_USER
+PENDING_USER
+Send to client, wait for user decision
+APPROVED, DENIED, EXPIRED (timeout)
+APPROVED
+User approved, execute action
+Terminal - proceed with action
+DENIED
+User rejected, abort action
+Terminal - cancel action gracefully
+EXPIRED
+Timeout reached (default 300s = 5 minutes)
+Terminal - abort action, notify user
+Approval Request Schema:
+{
+ &quot;request_id&quot;: uuid,
+ &quot;action_type&quot;: &quot;purchase&quot; | &quot;booking&quot; | &quot;data_write&quot; | &quot;send_message&quot;,
+ &quot;risk_level&quot;: &quot;low&quot; | &quot;medium&quot; | &quot;high&quot;,
+ &quot;description&quot;: string,
+ &quot;details&quot;: {
+ &quot;amount&quot;: number | null, // For purchases/bookings
+ &quot;currency&quot;: string | null,
+ &quot;merchant&quot;: string | null,
+ &quot;items&quot;: [object] | null,
+ &quot;scope&quot;: string | null // For data writes
+ },
+ &quot;timeout_sec&quot;: number, // Default: 300
+ &quot;created_at&quot;: timestamp
+}
+2.4 Conversation Lifecycle
+End-to-end conversation flow from user message to response.
+MESSAGE_RECEIVED: Client sends user message via WebSocket
+ANALYZING: LLM analyzes message, generates execution plan
+PLANNING: Orchestrator selects MCPs, checks resource budgets
+EXECUTING: Parallel/sequential MCP tool calls per plan
+AGGREGATING: Collect results from all MCPs, deduplicate, merge
+SYNTHESIZING: LLM generates natural language response from aggregated data
+STREAMING: Stream response chunks to client via WebSocket
+COMPLETE: Persist to DB, clean up resources, ready for next message
+Error Handling States:
+PARTIAL_FAILURE: Some MCPs succeeded, some failed - return partial results with warnings
+TOTAL_FAILURE: All MCPs failed or critical error - return error message to user
+CANCELLED: User explicitly cancelled operation mid-execution
+TIMEOUT: Conversation-level timeout exceeded (default: 120s)
+3. Deterministic Orchestration Rules
+Hard rules governing how the orchestrator plans and executes MCP calls. These rules are deterministic and must be followed exactly.
+3.1 Planning Rules
+3.1.1 MCP Selection
+Rule P1: For queries requiring data from category C, select ALL enabled MCPs in category C
+Rule P2: If user specifies MCP preference (e.g., &quot;use Sabre&quot;), that MCP MUST be included
+Rule P3: If MCP health status is RED, exclude from selection (fallback to remaining MCPs)
+Rule P4: Maximum 5 MCPs per query to prevent resource exhaustion
+3.1.2 Tool Selection
+Rule P5: Within each MCP, select the MINIMAL set of tools needed to answer query
+Rule P6: If multiple tools provide same data, prefer tool with lower cost (check tool metadata)
+Rule P7: Read-only tools (searches, queries) execute without approval; write tools require approval check
+3.2 Parallelism Rules
+Rule PAR1: Tools with NO data dependencies execute in PARALLEL
+Rule PAR2: Tools within same MCP execute SEQUENTIALLY (one at a time per instance)
+Rule PAR3: Tools across different MCPs execute PARALLELLY if rule PAR1 holds
+Rule PAR4: Maximum concurrency = min(5, number_of_selected_mcps)
+Rule PAR5: If tool B requires output from tool A, A executes first, then B (strict ordering)
+Example:
+Query: &quot;Find flights and hotels to Paris&quot;
+Plan:
+- Sabre.search_flights(Paris) [Parallel Group 1]
+- Kiwi.search_flights(Paris) [Parallel Group 1]
+- Jinko.search_hotels(Paris) [Parallel Group 1]
+Execution:
+1. Start all 3 in parallel (different MCPs, no dependencies)
+2. Wait for all to complete
+3. Aggregate results
+3.3 Cancellation Rules
+Rule C1: User can cancel at ANY time by sending cancel message with message_id
+Rule C2: On cancel, immediately stop PENDING and RUNNING tool calls
+Rule C3: Completed tool calls are NOT rolled back (idempotency prevents duplicates)
+Rule C4: Return partial results to user if some tools completed before cancel
+Rule C5: Cancellation must complete within 5 seconds (force kill if needed)
+3.4 Timeout Rules
+Scope
+Timeout
+Action on Timeout
+Single tool call
+60 seconds
+Mark as TIMEOUT, continue with other tools
+Parallel group
+90 seconds
+Cancel all remaining, use partial results
+Full conversation
+120 seconds
+Abort everything, return error to user
+Approval request
+300 seconds (5 min)
+Auto-deny, abort action, notify user
+MCP instance idle
+300 seconds (5 min)
+Gracefully stop instance, free resources
+3.5 Idempotency Rules
+Rule I1: Every tool call MUST include idempotency_key = hash(mcp_id + tool_name + arguments)
+Rule I2: Cache results by idempotency_key for 60 seconds
+Rule I3: If retrying failed call, use SAME idempotency_key to prevent duplicates
+Rule I4: If call with same key is IN_PROGRESS, wait for result instead of duplicate execution
+4. Security Policy Language
+Formal schema for defining security policies, enforcement points, and audit requirements.
+4.1 Policy Schema (JSON Schema)
+{
+ &quot;type&quot;: &quot;object&quot;,
+ &quot;properties&quot;: {
+ &quot;policy_id&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;format&quot;: &quot;uuid&quot;},
+ &quot;version&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;pattern&quot;: &quot;^[0-9]+\.[0-9]+$&quot;},
+ &quot;scope&quot;: {
+ &quot;type&quot;: &quot;string&quot;,
+ &quot;enum&quot;: [&quot;global&quot;, &quot;user&quot;, &quot;mcp&quot;, &quot;tool&quot;]
+ },
+ &quot;rules&quot;: {
+ &quot;type&quot;: &quot;array&quot;,
+ &quot;items&quot;: {
+ &quot;type&quot;: &quot;object&quot;,
+ &quot;properties&quot;: {
+ &quot;rule_id&quot;: {&quot;type&quot;: &quot;string&quot;},
+ &quot;condition&quot;: {
+ &quot;type&quot;: &quot;object&quot;,
+ &quot;properties&quot;: {
+ &quot;action_type&quot;: {
+ &quot;type&quot;: &quot;string&quot;,
+ &quot;enum&quot;: [&quot;read&quot;, &quot;write&quot;, &quot;purchase&quot;, &quot;booking&quot;, &quot;send&quot;]
+ },
+ &quot;risk_level&quot;: {
+ &quot;type&quot;: &quot;string&quot;,
+ &quot;enum&quot;: [&quot;low&quot;, &quot;medium&quot;, &quot;high&quot;]
+ },
+ &quot;amount_threshold&quot;: {&quot;type&quot;: &quot;number&quot;},
+ &quot;mcp_ids&quot;: {&quot;type&quot;: &quot;array&quot;, &quot;items&quot;: {&quot;type&quot;: &quot;string&quot;}},
+ &quot;tool_names&quot;: {&quot;type&quot;: &quot;array&quot;, &quot;items&quot;: {&quot;type&quot;: &quot;string&quot;}}
+ }
+ },
+ &quot;effect&quot;: {
+ &quot;type&quot;: &quot;string&quot;,
+ &quot;enum&quot;: [&quot;allow&quot;, &quot;deny&quot;, &quot;approve_required&quot;]
+ },
+ &quot;enforcement&quot;: {
+ &quot;type&quot;: &quot;string&quot;,
+ &quot;enum&quot;: [&quot;pre_execution&quot;, &quot;post_execution&quot;, &quot;audit_only&quot;]
+ }
+ },
+ &quot;required&quot;: [&quot;rule_id&quot;, &quot;condition&quot;, &quot;effect&quot;]
+ }
+ }
+ },
+ &quot;required&quot;: [&quot;policy_id&quot;, &quot;version&quot;, &quot;scope&quot;, &quot;rules&quot;]
+}
+4.1.1 Example Policies
+Policy 1: Auto-approve small purchases
+{
+ &quot;policy_id&quot;: &quot;auto-approve-small&quot;,
+ &quot;version&quot;: &quot;1.0&quot;,
+ &quot;scope&quot;: &quot;user&quot;,
+ &quot;rules&quot;: [
+ {
+ &quot;rule_id&quot;: &quot;R1&quot;,
+ &quot;condition&quot;: {
+ &quot;action_type&quot;: &quot;purchase&quot;,
+ &quot;amount_threshold&quot;: 50.00,
+ &quot;risk_level&quot;: &quot;low&quot;
+ },
+ &quot;effect&quot;: &quot;allow&quot;,
+ &quot;enforcement&quot;: &quot;pre_execution&quot;
+ }
+ ]
+}
+Policy 2: Require approval for data writes
+{
+ &quot;policy_id&quot;: &quot;data-write-approval&quot;,
+ &quot;version&quot;: &quot;1.0&quot;,
+ &quot;scope&quot;: &quot;global&quot;,
+ &quot;rules&quot;: [
+ {
+ &quot;rule_id&quot;: &quot;R2&quot;,
+ &quot;condition&quot;: {
+ &quot;action_type&quot;: &quot;write&quot;,
+ &quot;risk_level&quot;: &quot;medium&quot;
+ },
+ &quot;effect&quot;: &quot;approve_required&quot;,
+ &quot;enforcement&quot;: &quot;pre_execution&quot;
+ }
+ ]
+}
+4.2 Enforcement Points
+Point
+When
+Actions
+EP1: Pre-Execution
+Before sending tool call to MCP
+Check policy, request approval if needed, block if denied
+EP2: Post-Execution
+After MCP returns result
+Audit result, filter sensitive data, check anomalies
+EP3: Audit-Only
+Asynchronously after execution
+Log to audit trail, trigger alerts, no blocking
+4.3 Audit Guarantees
+AG1: Every tool call MUST be logged with: timestamp, user_id, mcp_id, tool_name, arguments_hash, result_status
+AG2: Every approval request MUST be logged with: timestamp, user_id, action_type, decision, decision_time
+AG3: Audit logs are IMMUTABLE: Append-only, never delete, store for minimum 90 days
+AG4: Sensitive data (passwords, tokens) NEVER logged: Redact before writing to audit trail
+AG5: Audit export available to user: CSV/JSON format, includes all their actions, GDPR compliant
+5. Cost &amp; Resource Envelopes
+Exact resource limits and budgets for all components. These are HARD LIMITS enforced by the runtime.
+5.1 Per-MCP Resource Limits
+Resource
+Limit (MVP)
+Enforcement
+CPU Cores
+0.5 cores
+Docker --cpus=0.5
+Memory (RAM)
+512 MB
+Docker --memory=512m
+Network Egress
+100 MB per call
+Application-level monitoring
+Disk I/O
+10 MB/s read/write
+Docker --device-write-bps
+Execution Time
+60 sec per tool call
+Application timeout + SIGKILL
+Process Count
+32 processes
+Docker --pids-limit=32
+5.2 Tool Call Concurrency Limits
+Scope
+Limit
+Rationale
+Per MCP Instance
+1 concurrent call
+Most MCPs not designed for concurrency
+Per User Query
+5 parallel MCPs max
+Balance speed vs resource usage
+Per User (Global)
+10 concurrent queries
+Prevent abuse, ensure fairness
+System-Wide
+1000 MCP instances
+Infrastructure capacity (MVP scale)
+5.3 LLM Token Limits
+Context
+Token Limit
+Cost Impact
+Input (user message)
+4,000 tokens
+~$0.006 @ GPT-4o rates
+Conversation history
+8,000 tokens (last 10 msgs)
+~$0.012 @ GPT-4o rates
+MCP tool definitions
+2,000 tokens (all MCPs)
+~$0.003 @ GPT-4o rates
+Output (response)
+2,000 tokens max
+~$0.012 @ GPT-4o rates
+Total per query
+16,000 tokens
+~$0.033
+5.4 Cost Budgets
+Free Tier Limits (per month):
+Messages: 50
+LLM tokens: ~800k total
+MCP calls: 200 total
+Active MCPs: 3 max
+Pro Tier Limits (per month):
+Messages: Unlimited
+LLM tokens: Unlimited (fair use: ~10M tokens)
+MCP calls: Unlimited (fair use: ~5000 calls)
+Active MCPs: Unlimited
+Implementation Summary
+This technical specification provides a complete blueprint for implementing MCP Connect MVP. All APIs, state machines, orchestration rules, security policies, and resource limits are precisely defined.
+Implementation Checklist:
+Implement OpenAPI endpoints for Orchestrator API (Section 1.1)
+Build MCP Runtime with Docker sandboxing (Section 1.2, 5.1)
+Implement WebSocket IPC protocol (Section 1.3)
+Code state machines exactly as specified (Section 2)
+Implement orchestration rules with hardcoded limits (Section 3)
+Build policy engine and enforcement points (Section 4)
+Enforce all resource limits at runtime (Section 5)
+Write comprehensive tests covering all state transitions and edge cases
+Critical Implementation Notes:
+NO DEVIATIONS: These specs are deterministic - do not introduce variability or &quot;best effort&quot; logic
+FAIL FAST: If resource limit exceeded, timeout hit, or policy violated - fail immediately with clear error
+AUDIT EVERYTHING: Every state transition, policy check, and resource usage must be logged
+SECURITY FIRST: When in doubt between usability and security, choose security
+— End of Technical Specification —

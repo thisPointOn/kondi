@@ -1,0 +1,758 @@
+MCP Connect MVP
+Implementation Guide for Claude Code
+Simple Cross-Platform MCP Client
+What This Builds:
+A desktop/mobile app that connects to MCP servers, discovers their tools, lets users invoke them via a simple UI, and uses OpenAI&apos;s API to provide natural language interaction.
+Tech Stack:
+• Tauri 2.0 (Rust + TypeScript)
+• React 18 + TypeScript
+• TailwindCSS for styling
+• MCP TypeScript SDK (@modelcontextprotocol/sdk)
+• OpenAI API (gpt-4o)
+Build Time: ~4-6 hours for experienced developer
+Table of Contents
+1. Project Setup
+2. Project Structure
+3. Backend Implementation (Rust)
+4. Frontend Implementation (React + TypeScript)
+5. MCP Client Implementation
+6. OpenAI Integration
+7. UI Components
+8. Build and Run Instructions
+9. Testing
+1. Project Setup
+Follow these steps exactly to create the project.
+1.1 Prerequisites
+Install Required Tools:
+# Install Node.js 20+ and npm
+# Install Rust (https://rustup.rs)
+curl --proto &apos;=https&apos; --tlsv1.2 -sSf https://sh.rustup.rs | sh
+1.2 Create Tauri Project
+npm create tauri-app@latest
+When prompted:
+Project name: mcp-connect-mvp
+Package manager: npm
+UI template: React + TypeScript
+UI flavor: TypeScript
+cd mcp-connect-mvp
+1.3 Install Dependencies
+npm install @modelcontextprotocol/sdk openai eventsource
+npm install -D tailwindcss postcss autoprefixer
+npx tailwindcss init -p
+1.4 Configure TailwindCSS
+File: tailwind.config.js
+/** @type {import(&apos;tailwindcss&apos;).Config} */
+export default {
+ content: [
+ &quot;./index.html&quot;,
+ &quot;./src/**/*.{js,ts,jsx,tsx}&quot;,
+ ],
+ theme: {
+ extend: {},
+ },
+ plugins: [],
+}
+File: src/index.css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+2. Project Structure
+The project follows this exact structure:
+mcp-connect-mvp/
+├── src/ # React frontend
+│ ├── components/
+│ │ ├── ChatInterface.tsx # Main chat UI
+│ │ ├── ServerList.tsx # MCP server list
+│ │ ├── ToolList.tsx # Available tools
+│ │ └── SettingsPanel.tsx # OpenAI API key config
+│ ├── services/
+│ │ ├── mcpClient.ts # MCP HTTP/SSE client
+│ │ └── openaiClient.ts # OpenAI API wrapper
+│ ├── types/
+│ │ └── mcp.ts # TypeScript interfaces
+│ ├── App.tsx # Main app component
+│ ├── main.tsx # React entry point
+│ └── index.css # Tailwind imports
+├── src-tauri/ # Rust backend
+│ ├── src/
+│ │ ├── main.rs # Tauri entry point
+│ │ ├── commands.rs # Backend commands
+│ │ └── lib.rs # Library exports
+│ └── Cargo.toml # Rust dependencies
+├── package.json
+└── tsconfig.json
+3. Backend Implementation (Rust)
+The Rust backend handles system-level operations and provides secure storage.
+3.1 Update Cargo.toml
+File: src-tauri/Cargo.toml
+Add these dependencies to the [dependencies] section:
+serde = { version = &quot;1.0&quot;, features = [&quot;derive&quot;] }
+serde_json = &quot;1.0&quot;
+tauri = { version = &quot;2.0&quot;, features = [&quot;devtools&quot;] }
+tauri-plugin-store = &quot;2.0&quot;
+3.2 Main Rust File
+File: src-tauri/src/main.rs
+// Prevents additional console window on Windows in release
+#![cfg_attr(not(debug_assertions), windows_subsystem = &quot;windows&quot;)]
+use tauri::Manager;
+mod commands;
+fn main() {
+ tauri::Builder::default()
+ .plugin(tauri_plugin_store::Builder::default().build())
+ .invoke_handler(tauri::generate_handler![
+ commands::save_api_key,
+ commands::get_api_key,
+ commands::save_server_config,
+ commands::get_server_configs,
+ ])
+ .setup(|app| {
+ #[cfg(debug_assertions)]
+ {
+ let window = app.get_webview_window(&quot;main&quot;).unwrap();
+ window.open_devtools();
+ }
+ Ok(())
+ })
+ .run(tauri::generate_context!())
+ .expect(&quot;error while running tauri application&quot;);
+}
+File: src-tauri/src/commands.rs
+use serde::{Deserialize, Serialize};
+use tauri::State;
+use std::sync::Mutex;
+use std::collections::HashMap;
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ServerConfig {
+ pub id: String,
+ pub name: String,
+ pub url: String,
+ pub transport: String, // &quot;http&quot; or &quot;sse&quot;
+}
+pub struct AppState {
+ pub api_key: Mutex&lt;Option&lt;String&gt;&gt;,
+ pub servers: Mutex&lt;HashMap&lt;String, ServerConfig&gt;&gt;,
+}
+impl Default for AppState {
+ fn default() -&gt; Self {
+ Self {
+ api_key: Mutex::new(None),
+ servers: Mutex::new(HashMap::new()),
+ }
+ }
+}
+#[tauri::command]
+pub fn save_api_key(key: String, state: State&lt;AppState&gt;) -&gt; Result&lt;(), String&gt; {
+ let mut api_key = state.api_key.lock().map_err(|e| e.to_string())?;
+ *api_key = Some(key);
+ Ok(())
+}
+#[tauri::command]
+pub fn get_api_key(state: State&lt;AppState&gt;) -&gt; Result&lt;Option&lt;String&gt;, String&gt; {
+ let api_key = state.api_key.lock().map_err(|e| e.to_string())?;
+ Ok(api_key.clone())
+}
+#[tauri::command]
+pub fn save_server_config(
+ config: ServerConfig,
+ state: State&lt;AppState&gt;
+) -&gt; Result&lt;(), String&gt; {
+ let mut servers = state.servers.lock().map_err(|e| e.to_string())?;
+ servers.insert(config.id.clone(), config);
+ Ok(())
+}
+#[tauri::command]
+pub fn get_server_configs(
+ state: State&lt;AppState&gt;
+) -&gt; Result&lt;Vec&lt;ServerConfig&gt;, String&gt; {
+ let servers = state.servers.lock().map_err(|e| e.to_string())?;
+ Ok(servers.values().cloned().collect())
+}
+4. Frontend Implementation
+4.1 TypeScript Types
+File: src/types/mcp.ts
+export interface MCPServer {
+ id: string;
+ name: string;
+ url: string;
+ transport: &apos;http&apos; | &apos;sse&apos;;
+ status: &apos;disconnected&apos; | &apos;connecting&apos; | &apos;connected&apos; | &apos;error&apos;;
+}
+export interface MCPTool {
+ name: string;
+ description: string;
+ inputSchema: {
+ type: string;
+ properties: Record&lt;string, any&gt;;
+ required?: string[];
+ };
+}
+export interface ToolCall {
+ id: string;
+ serverId: string;
+ toolName: string;
+ arguments: Record&lt;string, any&gt;;
+ status: &apos;pending&apos; | &apos;running&apos; | &apos;completed&apos; | &apos;failed&apos;;
+ result?: any;
+ error?: string;
+}
+export interface Message {
+ id: string;
+ role: &apos;user&apos; | &apos;assistant&apos; | &apos;system&apos;;
+ content: string;
+ toolCalls?: ToolCall[];
+ timestamp: Date;
+}
+4.2 MCP Client Service
+File: src/services/mcpClient.ts
+import { MCPServer, MCPTool } from &apos;../types/mcp&apos;;
+export class MCPClient {
+ private servers: Map&lt;string, MCPServer&gt; = new Map();
+ private tools: Map&lt;string, MCPTool[]&gt; = new Map();
+ async connectServer(server: MCPServer): Promise&lt;void&gt; {
+ try {
+ // Update status
+ server.status = &apos;connecting&apos;;
+ this.servers.set(server.id, server);
+ // HTTP: POST to /initialize
+ if (server.transport === &apos;http&apos;) {
+ const response = await fetch(`${server.url}/initialize`, {
+ method: &apos;POST&apos;,
+ headers: { &apos;Content-Type&apos;: &apos;application/json&apos; },
+ body: JSON.stringify({
+ protocolVersion: &apos;2024-11-05&apos;,
+ capabilities: { tools: {} },
+ clientInfo: { name: &apos;mcp-connect-mvp&apos;, version: &apos;1.0.0&apos; }
+ })
+ });
+ if (!response.ok) throw new Error(&apos;Failed to initialize&apos;);
+ 
+ // List tools
+ const toolsResp = await fetch(`${server.url}/tools/list`, {
+ method: &apos;POST&apos;,
+ headers: { &apos;Content-Type&apos;: &apos;application/json&apos; },
+ body: JSON.stringify({})
+ });
+ const toolsData = await toolsResp.json();
+ this.tools.set(server.id, toolsData.tools || []);
+ }
+ server.status = &apos;connected&apos;;
+ this.servers.set(server.id, server);
+ } catch (error) {
+ server.status = &apos;error&apos;;
+ this.servers.set(server.id, server);
+ throw error;
+ }
+ }
+ async callTool(
+ serverId: string,
+ toolName: string,
+ args: Record&lt;string, any&gt;
+ ): Promise&lt;any&gt; {
+ const server = this.servers.get(serverId);
+ if (!server) throw new Error(&apos;Server not found&apos;);
+ if (server.status !== &apos;connected&apos;) throw new Error(&apos;Server not connected&apos;);
+ const response = await fetch(`${server.url}/tools/call`, {
+ method: &apos;POST&apos;,
+ headers: { &apos;Content-Type&apos;: &apos;application/json&apos; },
+ body: JSON.stringify({
+ name: toolName,
+ arguments: args
+ })
+ });
+ if (!response.ok) {
+ const error = await response.json();
+ throw new Error(error.error?.message || &apos;Tool call failed&apos;);
+ }
+ const result = await response.json();
+ return result.content;
+ }
+ getTools(serverId: string): MCPTool[] {
+ return this.tools.get(serverId) || [];
+ }
+ getAllServers(): MCPServer[] {
+ return Array.from(this.servers.values());
+ }
+}
+export const mcpClient = new MCPClient();
+4.3 OpenAI Client Service
+File: src/services/openaiClient.ts
+import OpenAI from &apos;openai&apos;;
+import { MCPTool, Message, ToolCall } from &apos;../types/mcp&apos;;
+import { mcpClient } from &apos;./mcpClient&apos;;
+export class OpenAIClient {
+ private client: OpenAI | null = null;
+ private apiKey: string = &apos;&apos;;
+ setApiKey(key: string) {
+ this.apiKey = key;
+ this.client = new OpenAI({
+ apiKey: key,
+ dangerouslyAllowBrowser: true
+ });
+ }
+ async chat(
+ messages: Message[],
+ availableTools: Map&lt;string, { serverId: string; tools: MCPTool[] }&gt;
+ ): Promise&lt;{ message: Message; toolCalls: ToolCall[] }&gt; {
+ if (!this.client) throw new Error(&apos;OpenAI client not initialized&apos;);
+ // Convert MCP tools to OpenAI format
+ const tools: OpenAI.Chat.ChatCompletionTool[] = [];
+ const toolMap = new Map&lt;string, { serverId: string; tool: MCPTool }&gt;();
+ for (const [serverId, { tools: serverTools }] of availableTools) {
+ for (const tool of serverTools) {
+ tools.push({
+ type: &apos;function&apos;,
+ function: {
+ name: `${serverId}__${tool.name}`,
+ description: tool.description,
+ parameters: tool.inputSchema
+ }
+ });
+ toolMap.set(`${serverId}__${tool.name}`, { serverId, tool });
+ }
+ }
+ // Call OpenAI
+ const completion = await this.client.chat.completions.create({
+ model: &apos;gpt-4o&apos;,
+ messages: messages.map(m =&gt; ({
+ role: m.role,
+ content: m.content
+ })),
+ tools: tools.length &gt; 0 ? tools : undefined,
+ tool_choice: &apos;auto&apos;
+ });
+ const response = completion.choices[0].message;
+ const toolCalls: ToolCall[] = [];
+ // Execute tool calls
+ if (response.tool_calls &amp;&amp; response.tool_calls.length &gt; 0) {
+ for (const tc of response.tool_calls) {
+ const toolInfo = toolMap.get(tc.function.name);
+ if (!toolInfo) continue;
+ const toolCall: ToolCall = {
+ id: tc.id,
+ serverId: toolInfo.serverId,
+ toolName: toolInfo.tool.name,
+ arguments: JSON.parse(tc.function.arguments),
+ status: &apos;pending&apos;
+ };
+ try {
+ toolCall.status = &apos;running&apos;;
+ const result = await mcpClient.callTool(
+ toolInfo.serverId,
+ toolInfo.tool.name,
+ toolCall.arguments
+ );
+ toolCall.result = result;
+ toolCall.status = &apos;completed&apos;;
+ } catch (error) {
+ toolCall.error = error instanceof Error ? error.message : &apos;Unknown error&apos;;
+ toolCall.status = &apos;failed&apos;;
+ }
+ toolCalls.push(toolCall);
+ }
+ }
+ return {
+ message: {
+ id: crypto.randomUUID(),
+ role: &apos;assistant&apos;,
+ content: response.content || &apos;&apos;,
+ timestamp: new Date()
+ },
+ toolCalls
+ };
+ }
+}
+export const openaiClient = new OpenAIClient();
+5. UI Components
+5.1 Settings Panel
+File: src/components/SettingsPanel.tsx
+import React, { useState } from &apos;react&apos;;
+import { openaiClient } from &apos;../services/openaiClient&apos;;
+export const SettingsPanel: React.FC = () =&gt; {
+ const [apiKey, setApiKey] = useState(&apos;&apos;);
+ const [saved, setSaved] = useState(false);
+ const handleSave = () =&gt; {
+ openaiClient.setApiKey(apiKey);
+ setSaved(true);
+ setTimeout(() =&gt; setSaved(false), 2000);
+ };
+ return (
+ &lt;div className=&quot;p-4 bg-gray-100 border-b&quot;&gt;
+ &lt;h2 className=&quot;text-lg font-bold mb-2&quot;&gt;Settings&lt;/h2&gt;
+ &lt;div className=&quot;flex gap-2&quot;&gt;
+ &lt;input
+ type=&quot;password&quot;
+ placeholder=&quot;OpenAI API Key&quot;
+ value={apiKey}
+ onChange={(e) =&gt; setApiKey(e.target.value)}
+ className=&quot;flex-1 px-3 py-2 border rounded&quot;
+ /&gt;
+ &lt;button
+ onClick={handleSave}
+ className=&quot;px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600&quot;
+ &gt;
+ Save
+ &lt;/button&gt;
+ &lt;/div&gt;
+ {saved &amp;&amp; (
+ &lt;p className=&quot;text-green-600 text-sm mt-1&quot;&gt;API key saved!&lt;/p&gt;
+ )}
+ &lt;/div&gt;
+ );
+};
+5.2 Server List Component
+File: src/components/ServerList.tsx
+import React, { useState } from &apos;react&apos;;
+import { MCPServer } from &apos;../types/mcp&apos;;
+import { mcpClient } from &apos;../services/mcpClient&apos;;
+interface Props {
+ servers: MCPServer[];
+ onServersChange: () =&gt; void;
+}
+export const ServerList: React.FC&lt;Props&gt; = ({ servers, onServersChange }) =&gt; {
+ const [newUrl, setNewUrl] = useState(&apos;&apos;);
+ const [newName, setNewName] = useState(&apos;&apos;);
+ const addServer = async () =&gt; {
+ if (!newUrl || !newName) return;
+ const server: MCPServer = {
+ id: crypto.randomUUID(),
+ name: newName,
+ url: newUrl,
+ transport: &apos;http&apos;,
+ status: &apos;disconnected&apos;
+ };
+ try {
+ await mcpClient.connectServer(server);
+ setNewUrl(&apos;&apos;);
+ setNewName(&apos;&apos;);
+ onServersChange();
+ } catch (error) {
+ alert(&apos;Failed to connect: &apos; + error);
+ }
+ };
+ return (
+ &lt;div className=&quot;p-4 bg-white border-r w-64&quot;&gt;
+ &lt;h2 className=&quot;text-lg font-bold mb-4&quot;&gt;MCP Servers&lt;/h2&gt;
+ 
+ &lt;div className=&quot;mb-4 space-y-2&quot;&gt;
+ &lt;input
+ type=&quot;text&quot;
+ placeholder=&quot;Server Name&quot;
+ value={newName}
+ onChange={(e) =&gt; setNewName(e.target.value)}
+ className=&quot;w-full px-2 py-1 border rounded text-sm&quot;
+ /&gt;
+ &lt;input
+ type=&quot;text&quot;
+ placeholder=&quot;http://localhost:3000&quot;
+ value={newUrl}
+ onChange={(e) =&gt; setNewUrl(e.target.value)}
+ className=&quot;w-full px-2 py-1 border rounded text-sm&quot;
+ /&gt;
+ &lt;button
+ onClick={addServer}
+ className=&quot;w-full px-2 py-1 bg-green-500 text-white rounded text-sm hover:bg-green-600&quot;
+ &gt;
+ Add Server
+ &lt;/button&gt;
+ &lt;/div&gt;
+ &lt;div className=&quot;space-y-2&quot;&gt;
+ {servers.map(server =&gt; (
+ &lt;div key={server.id} className=&quot;p-2 border rounded&quot;&gt;
+ &lt;div className=&quot;font-medium text-sm&quot;&gt;{server.name}&lt;/div&gt;
+ &lt;div className=&quot;text-xs text-gray-500&quot;&gt;{server.url}&lt;/div&gt;
+ &lt;div className={`text-xs mt-1 ${
+ server.status === &apos;connected&apos; ? &apos;text-green-600&apos; :
+ server.status === &apos;error&apos; ? &apos;text-red-600&apos; :
+ &apos;text-gray-600&apos;
+ }`}&gt;
+ {server.status}
+ &lt;/div&gt;
+ &lt;/div&gt;
+ ))}
+ &lt;/div&gt;
+ &lt;/div&gt;
+ );
+};
+5.3 Tool List Component
+File: src/components/ToolList.tsx
+import React from &apos;react&apos;;
+import { MCPTool } from &apos;../types/mcp&apos;;
+interface Props {
+ tools: Map&lt;string, { serverId: string; tools: MCPTool[] }&gt;;
+}
+export const ToolList: React.FC&lt;Props&gt; = ({ tools }) =&gt; {
+ return (
+ &lt;div className=&quot;p-4 bg-white border-r w-64 overflow-y-auto&quot;&gt;
+ &lt;h2 className=&quot;text-lg font-bold mb-4&quot;&gt;Available Tools&lt;/h2&gt;
+ 
+ {Array.from(tools.entries()).map(([serverName, { tools: serverTools }]) =&gt; (
+ &lt;div key={serverName} className=&quot;mb-4&quot;&gt;
+ &lt;h3 className=&quot;font-semibold text-sm text-gray-700 mb-2&quot;&gt;{serverName}&lt;/h3&gt;
+ &lt;div className=&quot;space-y-2&quot;&gt;
+ {serverTools.map(tool =&gt; (
+ &lt;div key={tool.name} className=&quot;p-2 border rounded bg-gray-50&quot;&gt;
+ &lt;div className=&quot;font-medium text-sm&quot;&gt;{tool.name}&lt;/div&gt;
+ &lt;div className=&quot;text-xs text-gray-600 mt-1&quot;&gt;{tool.description}&lt;/div&gt;
+ &lt;/div&gt;
+ ))}
+ &lt;/div&gt;
+ &lt;/div&gt;
+ ))}
+ {tools.size === 0 &amp;&amp; (
+ &lt;p className=&quot;text-sm text-gray-500&quot;&gt;No tools available. Connect to an MCP server first.&lt;/p&gt;
+ )}
+ &lt;/div&gt;
+ );
+};
+5.4 Chat Interface
+File: src/components/ChatInterface.tsx
+import React, { useState, useRef, useEffect } from &apos;react&apos;;
+import { Message, MCPTool } from &apos;../types/mcp&apos;;
+import { openaiClient } from &apos;../services/openaiClient&apos;;
+interface Props {
+ availableTools: Map&lt;string, { serverId: string; tools: MCPTool[] }&gt;;
+}
+export const ChatInterface: React.FC&lt;Props&gt; = ({ availableTools }) =&gt; {
+ const [messages, setMessages] = useState&lt;Message[]&gt;([]);
+ const [input, setInput] = useState(&apos;&apos;);
+ const [loading, setLoading] = useState(false);
+ const messagesEndRef = useRef&lt;HTMLDivElement&gt;(null);
+ useEffect(() =&gt; {
+ messagesEndRef.current?.scrollIntoView({ behavior: &apos;smooth&apos; });
+ }, [messages]);
+ const sendMessage = async () =&gt; {
+ if (!input.trim() || loading) return;
+ const userMessage: Message = {
+ id: crypto.randomUUID(),
+ role: &apos;user&apos;,
+ content: input,
+ timestamp: new Date()
+ };
+ setMessages(prev =&gt; [...prev, userMessage]);
+ setInput(&apos;&apos;);
+ setLoading(true);
+ try {
+ const { message, toolCalls } = await openaiClient.chat(
+ [...messages, userMessage],
+ availableTools
+ );
+ message.toolCalls = toolCalls;
+ setMessages(prev =&gt; [...prev, message]);
+ } catch (error) {
+ const errorMessage: Message = {
+ id: crypto.randomUUID(),
+ role: &apos;assistant&apos;,
+ content: &apos;Error: &apos; + (error instanceof Error ? error.message : &apos;Unknown error&apos;),
+ timestamp: new Date()
+ };
+ setMessages(prev =&gt; [...prev, errorMessage]);
+ } finally {
+ setLoading(false);
+ }
+ };
+ return (
+ &lt;div className=&quot;flex-1 flex flex-col&quot;&gt;
+ &lt;div className=&quot;flex-1 overflow-y-auto p-4 space-y-4&quot;&gt;
+ {messages.map(msg =&gt; (
+ &lt;div key={msg.id} className={`flex ${msg.role === &apos;user&apos; ? &apos;justify-end&apos; : &apos;justify-start&apos;}`}&gt;
+ &lt;div className={`max-w-2xl px-4 py-2 rounded-lg ${
+ msg.role === &apos;user&apos; 
+ ? &apos;bg-blue-500 text-white&apos; 
+ : &apos;bg-gray-200 text-gray-900&apos;
+ }`}&gt;
+ &lt;div className=&quot;whitespace-pre-wrap&quot;&gt;{msg.content}&lt;/div&gt;
+ 
+ {msg.toolCalls &amp;&amp; msg.toolCalls.length &gt; 0 &amp;&amp; (
+ &lt;div className=&quot;mt-2 pt-2 border-t border-gray-300&quot;&gt;
+ &lt;div className=&quot;text-xs font-semibold mb-1&quot;&gt;Tool Calls:&lt;/div&gt;
+ {msg.toolCalls.map(tc =&gt; (
+ &lt;div key={tc.id} className=&quot;text-xs mb-1&quot;&gt;
+ &lt;span className=&quot;font-mono&quot;&gt;{tc.toolName}&lt;/span&gt;
+ &lt;span className={` ml-2 ${
+ tc.status === &apos;completed&apos; ? &apos;text-green-600&apos; :
+ tc.status === &apos;failed&apos; ? &apos;text-red-600&apos; :
+ &apos;text-yellow-600&apos;
+ }`}&gt;
+ [{tc.status}]
+ &lt;/span&gt;
+ &lt;/div&gt;
+ ))}
+ &lt;/div&gt;
+ )}
+ &lt;/div&gt;
+ &lt;/div&gt;
+ ))}
+ {loading &amp;&amp; (
+ &lt;div className=&quot;flex justify-start&quot;&gt;
+ &lt;div className=&quot;bg-gray-200 px-4 py-2 rounded-lg&quot;&gt;
+ &lt;div className=&quot;animate-pulse&quot;&gt;Thinking...&lt;/div&gt;
+ &lt;/div&gt;
+ &lt;/div&gt;
+ )}
+ &lt;div ref={messagesEndRef} /&gt;
+ &lt;/div&gt;
+ &lt;div className=&quot;p-4 border-t&quot;&gt;
+ &lt;div className=&quot;flex gap-2&quot;&gt;
+ &lt;input
+ type=&quot;text&quot;
+ value={input}
+ onChange={(e) =&gt; setInput(e.target.value)}
+ onKeyPress={(e) =&gt; e.key === &apos;Enter&apos; &amp;&amp; sendMessage()}
+ placeholder=&quot;Type a message...&quot;
+ className=&quot;flex-1 px-4 py-2 border rounded-lg&quot;
+ disabled={loading}
+ /&gt;
+ &lt;button
+ onClick={sendMessage}
+ disabled={loading || !input.trim()}
+ className=&quot;px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:bg-gray-400&quot;
+ &gt;
+ Send
+ &lt;/button&gt;
+ &lt;/div&gt;
+ &lt;/div&gt;
+ &lt;/div&gt;
+ );
+};
+5.5 Main App Component
+File: src/App.tsx
+import React, { useState, useEffect } from &apos;react&apos;;
+import { SettingsPanel } from &apos;./components/SettingsPanel&apos;;
+import { ServerList } from &apos;./components/ServerList&apos;;
+import { ToolList } from &apos;./components/ToolList&apos;;
+import { ChatInterface } from &apos;./components/ChatInterface&apos;;
+import { mcpClient } from &apos;./services/mcpClient&apos;;
+import { MCPServer, MCPTool } from &apos;./types/mcp&apos;;
+function App() {
+ const [servers, setServers] = useState&lt;MCPServer[]&gt;([]);
+ const [tools, setTools] = useState&lt;Map&lt;string, { serverId: string; tools: MCPTool[] }&gt;&gt;(new Map());
+ const refreshData = () =&gt; {
+ const allServers = mcpClient.getAllServers();
+ setServers(allServers);
+ const toolsMap = new Map&lt;string, { serverId: string; tools: MCPTool[] }&gt;();
+ for (const server of allServers) {
+ if (server.status === &apos;connected&apos;) {
+ const serverTools = mcpClient.getTools(server.id);
+ if (serverTools.length &gt; 0) {
+ toolsMap.set(server.name, { serverId: server.id, tools: serverTools });
+ }
+ }
+ }
+ setTools(toolsMap);
+ };
+ useEffect(() =&gt; {
+ refreshData();
+ }, []);
+ return (
+ &lt;div className=&quot;h-screen flex flex-col&quot;&gt;
+ &lt;SettingsPanel /&gt;
+ &lt;div className=&quot;flex-1 flex overflow-hidden&quot;&gt;
+ &lt;ServerList servers={servers} onServersChange={refreshData} /&gt;
+ &lt;ToolList tools={tools} /&gt;
+ &lt;ChatInterface availableTools={tools} /&gt;
+ &lt;/div&gt;
+ &lt;/div&gt;
+ );
+}
+export default App;
+6. Build and Run Instructions
+6.1 Development Mode
+npm run tauri dev
+This will start the dev server and open the app window.
+6.2 Production Build
+npm run tauri build
+Output locations:
+Windows: src-tauri/target/release/mcp-connect-mvp.exe
+macOS: src-tauri/target/release/bundle/macos/
+Linux: src-tauri/target/release/mcp-connect-mvp
+7. Testing
+7.1 Test MCP Server
+Create a simple test MCP server for development:
+File: test-mcp-server.js
+const express = require(&apos;express&apos;);
+const cors = require(&apos;cors&apos;);
+const app = express();
+app.use(cors());
+app.use(express.json());
+app.post(&apos;/initialize&apos;, (req, res) =&gt; {
+ res.json({
+ protocolVersion: &apos;2024-11-05&apos;,
+ capabilities: { tools: {} },
+ serverInfo: { name: &apos;test-server&apos;, version: &apos;1.0.0&apos; }
+ });
+});
+app.post(&apos;/tools/list&apos;, (req, res) =&gt; {
+ res.json({
+ tools: [
+ {
+ name: &apos;get_weather&apos;,
+ description: &apos;Get current weather for a city&apos;,
+ inputSchema: {
+ type: &apos;object&apos;,
+ properties: {
+ city: { type: &apos;string&apos;, description: &apos;City name&apos; }
+ },
+ required: [&apos;city&apos;]
+ }
+ },
+ {
+ name: &apos;calculate&apos;,
+ description: &apos;Perform a calculation&apos;,
+ inputSchema: {
+ type: &apos;object&apos;,
+ properties: {
+ expression: { type: &apos;string&apos;, description: &apos;Math expression&apos; }
+ },
+ required: [&apos;expression&apos;]
+ }
+ }
+ ]
+ });
+});
+app.post(&apos;/tools/call&apos;, (req, res) =&gt; {
+ const { name, arguments: args } = req.body;
+ 
+ if (name === &apos;get_weather&apos;) {
+ res.json({
+ content: [{
+ type: &apos;text&apos;,
+ text: `The weather in ${args.city} is sunny and 72°F.`
+ }]
+ });
+ } else if (name === &apos;calculate&apos;) {
+ try {
+ const result = eval(args.expression);
+ res.json({
+ content: [{
+ type: &apos;text&apos;,
+ text: `Result: ${result}`
+ }]
+ });
+ } catch (error) {
+ res.status(400).json({ error: { message: &apos;Invalid expression&apos; } });
+ }
+ }
+});
+app.listen(3000, () =&gt; {
+ console.log(&apos;Test MCP server running on http://localhost:3000&apos;);
+});
+npm install express cors
+node test-mcp-server.js
+7.2 Usage Flow
+Start test MCP server: node test-mcp-server.js
+Launch app: npm run tauri dev
+Enter OpenAI API key in Settings panel
+Add server: Name=&apos;Test&apos;, URL=&apos;http://localhost:3000&apos;
+Click &apos;Add Server&apos; - should see &apos;connected&apos; status
+Tools should appear in Tool List panel
+Try: &apos;What&apos;s the weather in San Francisco?&apos;
+8. Next Steps
+After completing the MVP, you can extend it with:
+SSE transport support for streaming tools
+Persistent storage (save servers and API key)
+Better error handling and retry logic
+Tool parameter form UI (instead of just chat)
+Multiple conversation threads
+Export/import server configurations
+Mobile support via Tauri Mobile (iOS/Android)
+— End of Implementation Guide —

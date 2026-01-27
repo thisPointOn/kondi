@@ -1,0 +1,34 @@
+[package]
+name = "konduit"
+version = "0.1.0"
+description = "Konduit - Connect AI to your tools"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "konduit_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+tauri = { version = "2.9.5", features = ["devtools", "image-png"] }
+tauri-plugin-store = "2.2.0"
+reqwest = { version = "0.12.8", default-features = false, features = ["json", "rustls-tls"] }
+tiny_http = "0.12"
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.21"
+webbrowser = "0.8"
+url = "2.4"
+tokio = { version = "1", features = ["sync"] }
+urlencoding = "2.1"
+dirs = "5.0"
