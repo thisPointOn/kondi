@@ -77,18 +77,29 @@ class AnthropicClient {
     if (!this.apiKey) throw new Error('Anthropic client not initialized');
 
     const toolMap = new Map<string, { serverId: string; tool: MCPTool }>();
+
+    // Use short numeric prefixes to stay under API tool name limits
+    const serverIds = Array.from(availableTools.keys());
+    const serverIndexMap = new Map(serverIds.map((id, i) => [id, `s${i}`]));
+
     const tools =
-      Array.from(availableTools.values()).flatMap(({ serverId, tools }) =>
-        tools.map((tool) => {
-          const name = `${serverId}__${tool.name}`;
+      Array.from(availableTools.values()).flatMap(({ serverId, tools }) => {
+        const shortPrefix = serverIndexMap.get(serverId) || 's0';
+        return tools.map((tool) => {
+          // Truncate tool name if needed to fit in 64 chars
+          const maxToolNameLen = 64 - shortPrefix.length - 2;
+          const truncatedName = tool.name.length > maxToolNameLen
+            ? tool.name.slice(0, maxToolNameLen)
+            : tool.name;
+          const name = `${shortPrefix}__${truncatedName}`;
           toolMap.set(name, { serverId, tool });
           return {
             name,
             description: tool.description || '',
             input_schema: tool.inputSchema,
           };
-        })
-      ) || undefined;
+        });
+      }) || undefined;
 
     console.log('[Anthropic] Available tools:', tools);
     console.log('[Anthropic] Tool map keys:', Array.from(toolMap.keys()));

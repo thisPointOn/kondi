@@ -69,9 +69,19 @@ export class OpenAIClient {
     const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [];
     const toolMap = new Map<string, { serverId: string; tool: MCPTool }>();
 
+    // Use short numeric prefixes to stay under OpenAI's 64-char limit
+    const serverIds = Array.from(availableTools.keys());
+    const serverIndexMap = new Map(serverIds.map((id, i) => [id, `s${i}`]));
+
     for (const [serverId, { tools: serverTools }] of availableTools) {
+      const shortPrefix = serverIndexMap.get(serverId) || 's0';
       for (const tool of serverTools) {
-        const prefixedName = `${serverId}__${tool.name}`;
+        // Truncate tool name if needed to fit in 64 chars (prefix + __ + name)
+        const maxToolNameLen = 64 - shortPrefix.length - 2;
+        const truncatedName = tool.name.length > maxToolNameLen
+          ? tool.name.slice(0, maxToolNameLen)
+          : tool.name;
+        const prefixedName = `${shortPrefix}__${truncatedName}`;
         tools.push({
           type: 'function',
           function: {
