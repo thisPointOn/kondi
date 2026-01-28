@@ -1,5 +1,5 @@
-use tauri::Manager;
 use tauri::image::Image;
+use tauri::Manager;
 
 mod commands;
 
@@ -14,9 +14,12 @@ pub fn run() {
             commands::save_server_config,
             commands::get_server_configs,
             commands::delete_server_config,
+            commands::save_chats,
+            commands::load_chats,
             commands::start_oauth,
             commands::mcp_request,
             commands::anthropic_request,
+            commands::probe_server,
         ])
         .setup(|app| {
             // Set window icon for Linux

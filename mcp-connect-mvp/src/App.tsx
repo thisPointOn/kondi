@@ -45,15 +45,20 @@ function App() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [hasLoadedKeys, setHasLoadedKeys] = useState(false);
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    const saved = localStorage.getItem('mcp-theme');
+    return saved === 'light' ? 'light' : 'dark';
+  });
+  const [hasLoadedChats, setHasLoadedChats] = useState(false);
 
-  // Create a default chat if none loaded
+  // Create a default chat if none loaded (only after we've attempted to load)
   useEffect(() => {
-    if (!currentChatId) {
+    if (hasLoadedChats && !currentChatId) {
       const newId = crypto.randomUUID();
       setCurrentChatId(newId);
       setChats({ [newId]: [] });
     }
-  }, [currentChatId]);
+  }, [currentChatId, hasLoadedChats]);
 
   // Load existing server state from the MCP client
   const refreshServers = () => {
@@ -61,7 +66,7 @@ function App() {
     const withTools = all.map((server) => ({
       ...server,
       tools: mcpClient.getTools(server.id),
-      icon: server.icon || '⚡',
+      icon: server.icon || undefined,
     }));
     setServers(withTools);
     // Persist to localStorage for quick restore across restarts
@@ -74,46 +79,117 @@ function App() {
       accessToken,
       clientId,
       clientSecret,
+      authHint: undefined as string | undefined, // transient UI hint, not persisted
     }));
     try {
-      localStorage.setItem('mcp-servers', JSON.stringify(configsToSave));
+      const mapById: Record<string, any> = {};
+      configsToSave.forEach((c) => {
+        mapById[c.id] = c;
+      });
+      localStorage.setItem('mcp-servers', JSON.stringify(mapById));
     } catch (e) {
       console.error('Failed to save servers locally:', e);
     }
   };
 
+  // Set up MCP auth handler for OAuth re-authentication
+  useEffect(() => {
+    const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI_IPC__);
+
+    mcpClient.setAuthHandler(async (server) => {
+      if (!isTauri) {
+        // eslint-disable-next-line no-alert
+        alert('OAuth re-authentication requires the desktop app.');
+        return null;
+      }
+
+      try {
+        console.log('[App] Starting OAuth re-authentication for server:', server.name);
+        const newToken = await invoke<string>('start_oauth', {
+          serverUrl: server.url,
+          clientId: server.clientId || undefined,
+          clientSecret: server.clientSecret || undefined,
+        });
+        console.log('[App] OAuth re-authentication successful');
+        return newToken;
+      } catch (err) {
+        console.error('[App] OAuth re-authentication failed:', err);
+        // eslint-disable-next-line no-alert
+        alert(`OAuth re-authentication failed: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      }
+    });
+  }, []);
+
   // Load servers from localStorage on mount
   useEffect(() => {
-    // Load chats from localStorage (limit MAX_CHATS, newest first)
-    const savedChats = localStorage.getItem(CHAT_STORAGE_KEY);
-    if (savedChats) {
+    // Load chats - try Tauri first, then localStorage
+    (async () => {
+      let loaded = false;
+
+      // Try Tauri file storage first
       try {
-        const parsed: { id: string; messages: Message[]; updatedAt?: number }[] = JSON.parse(savedChats);
-        const sorted = parsed
-          .map((c) => ({
-            id: c.id,
-            messages: c.messages || [],
-            updatedAt: c.updatedAt || (c.messages?.[c.messages.length - 1]?.timestamp
-              ? new Date(c.messages[c.messages.length - 1].timestamp).getTime()
-              : 0),
-          }))
-          .sort((a, b) => b.updatedAt - a.updatedAt)
-          .slice(0, MAX_CHATS);
-        if (sorted.length > 0) {
-          setChats(Object.fromEntries(sorted.map((c) => [c.id, c.messages])));
-          setCurrentChatId(sorted[0].id);
+        const tauriChats = await invoke<string | null>('load_chats');
+        if (tauriChats) {
+          const parsed: { id: string; messages: Message[]; updatedAt?: number }[] = JSON.parse(tauriChats);
+          const sorted = parsed
+            .map((c) => ({
+              id: c.id,
+              messages: c.messages || [],
+              updatedAt: c.updatedAt || (c.messages?.[c.messages.length - 1]?.timestamp
+                ? new Date(c.messages[c.messages.length - 1].timestamp).getTime()
+                : 0),
+            }))
+            .sort((a, b) => b.updatedAt - a.updatedAt)
+            .slice(0, MAX_CHATS);
+          if (sorted.length > 0) {
+            console.log('[App] Loaded', sorted.length, 'chats from Tauri storage');
+            setChats(Object.fromEntries(sorted.map((c) => [c.id, c.messages])));
+            setCurrentChatId(sorted[0].id);
+            loaded = true;
+          }
         }
       } catch (e) {
-        console.error('Failed to load saved chats:', e);
+        console.warn('[App] Failed to load chats from Tauri:', e);
       }
-    }
+
+      // Fall back to localStorage
+      if (!loaded) {
+        const savedChats = localStorage.getItem(CHAT_STORAGE_KEY);
+        if (savedChats) {
+          try {
+            const parsed: { id: string; messages: Message[]; updatedAt?: number }[] = JSON.parse(savedChats);
+            const sorted = parsed
+              .map((c) => ({
+                id: c.id,
+                messages: c.messages || [],
+                updatedAt: c.updatedAt || (c.messages?.[c.messages.length - 1]?.timestamp
+                  ? new Date(c.messages[c.messages.length - 1].timestamp).getTime()
+                  : 0),
+              }))
+              .sort((a, b) => b.updatedAt - a.updatedAt)
+              .slice(0, MAX_CHATS);
+            if (sorted.length > 0) {
+              console.log('[App] Loaded', sorted.length, 'chats from localStorage');
+              setChats(Object.fromEntries(sorted.map((c) => [c.id, c.messages])));
+              setCurrentChatId(sorted[0].id);
+            }
+          } catch (e) {
+            console.error('Failed to load saved chats from localStorage:', e);
+          }
+        }
+      }
+
+      setHasLoadedChats(true);
+    })();
 
     // LocalStorage restore (works in web and Tauri)
     const saved = localStorage.getItem('mcp-servers');
     if (saved) {
       try {
-        const configs = JSON.parse(saved) as MCPServer[];
-        configs.forEach((config) => {
+        const parsed = JSON.parse(saved) as Record<string, MCPServer> | MCPServer[];
+        const configsArray = Array.isArray(parsed) ? parsed : Object.values(parsed);
+        configsArray.forEach((config) => {
           mcpClient.addServer({
             ...config,
             transport: config.transport || 'http',
@@ -190,22 +266,54 @@ function App() {
     refreshServers();
   }, []);
 
-  // Persist chats (keep only last MAX_CHATS by recency)
+  // Persist chats (keep only last MAX_CHATS by recency, only after initial load)
   useEffect(() => {
+    if (!hasLoadedChats) return;
     const entries = Object.entries(chats).map(([id, messages]) => {
+      // Strip file contents from messages to save space
+      const lightMessages = messages.map((m) => {
+        // For user messages with file attachments, strip the file content portion
+        let content = m.content;
+        if (m.attachments && m.attachments.length > 0) {
+          const fileMarker = '\n\n--- File:';
+          const markerIndex = content.indexOf(fileMarker);
+          if (markerIndex > -1) {
+            content = content.slice(0, markerIndex) + '\n\n[File attachments not saved]';
+          }
+        }
+        // Truncate very long messages to prevent storage overflow
+        if (content.length > 10000) {
+          content = content.slice(0, 10000) + '\n\n[Message truncated for storage]';
+        }
+        return { ...m, content };
+      });
       const updatedAt =
         messages.length > 0
           ? new Date(messages[messages.length - 1].timestamp || Date.now()).getTime()
           : 0;
-      return { id, messages, updatedAt };
+      return { id, messages: lightMessages, updatedAt };
     });
     const sorted = entries.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_CHATS);
+    const data = JSON.stringify(sorted);
+
+    // Save to Tauri file storage (primary)
+    invoke('save_chats', { chats: data })
+      .then(() => console.log('[App] Chats saved to Tauri storage'))
+      .catch((e) => console.warn('[App] Failed to save chats to Tauri:', e));
+
+    // Also save to localStorage as backup
     try {
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(sorted));
+      if (data.length > 4 * 1024 * 1024) {
+        console.warn('[App] Chat data too large for localStorage, trimming');
+        const trimmed = sorted.slice(0, Math.max(5, Math.floor(sorted.length / 2)));
+        localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(trimmed));
+      } else {
+        localStorage.setItem(CHAT_STORAGE_KEY, data);
+      }
     } catch (e) {
-      console.error('Failed to save chats locally:', e);
+      console.warn('[App] Failed to save chats to localStorage:', e);
     }
-  }, [chats]);
+  }, [chats, hasLoadedChats]);
 
   // Keep API clients in sync with keys (set regardless of current provider)
   useEffect(() => {
@@ -427,9 +535,10 @@ function App() {
     mcpClient.addServer(server);
     refreshServers();
 
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + 30_000; // 30s timeout for connection attempt
     setConnectDeadlines((prev) => ({ ...prev, [server.id]: deadline }));
     let timeout: NodeJS.Timeout | null = setTimeout(() => {
+      mcpClient.setServerStatus(server.id, 'error', 'Connection timed out');
       setServers((prev) =>
         prev.map((s) =>
           s.id === server.id ? { ...s, status: 'error' as const, error: 'Connection timed out' } : s
@@ -486,9 +595,10 @@ function App() {
       prev.map((s) => (s.id === serverId ? { ...s, status: 'connecting' as const, error: undefined } : s))
     );
 
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + 30_000; // 30s timeout for connection attempt
     setConnectDeadlines((prev) => ({ ...prev, [serverId]: deadline }));
     let timeout: NodeJS.Timeout | null = setTimeout(() => {
+      mcpClient.setServerStatus(serverId, 'error', 'Connection timed out');
       setServers((prev) =>
         prev.map((s) =>
           s.id === serverId ? { ...s, status: 'error' as const, error: 'Connection timed out' } : s
@@ -549,6 +659,13 @@ function App() {
         .slice(0, MAX_CHATS),
     [chats],
   );
+
+  // Apply theme
+  useEffect(() => {
+    document.body.classList.toggle('light-theme', theme === 'light');
+    document.body.classList.toggle('dark-theme', theme !== 'light');
+    localStorage.setItem('mcp-theme', theme);
+  }, [theme]);
 
   return (
     <div className="app-container">
@@ -730,6 +847,26 @@ function App() {
                 </button>
               </div>
             </CollapsibleSection>
+
+            <CollapsibleSection title="Appearance" defaultOpen>
+              <div className="updates-block">
+                <p className="updates-message">Choose your theme</p>
+                <div className="theme-toggle">
+                  <button
+                    className={`pill-btn ${theme === 'dark' ? 'active' : ''}`}
+                    onClick={() => setTheme('dark')}
+                  >
+                    Dark
+                  </button>
+                  <button
+                    className={`pill-btn ${theme === 'light' ? 'active' : ''}`}
+                    onClick={() => setTheme('light')}
+                  >
+                    Light
+                  </button>
+                </div>
+              </div>
+            </CollapsibleSection>
           </div>
         ) : (
           <ChatArea
@@ -741,6 +878,8 @@ function App() {
             pendingToolInsert={pendingToolInsert}
             onToolInsertHandled={() => setPendingToolInsert(null)}
             apiKey={activeApiKey}
+            anthropicKey={anthropicKey}
+            openaiKey={openaiKey}
             provider={provider}
             openaiModel={openaiModel}
             anthropicModel={activeAnthropicModel}

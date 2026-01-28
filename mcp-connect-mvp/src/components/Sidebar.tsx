@@ -38,7 +38,7 @@ const Sidebar: FC<SidebarProps> = ({
   return (
     <aside className={['sidebar', collapsed ? 'collapsed' : '', className].filter(Boolean).join(' ')}>
       <div className="sidebar-header">
-        {!collapsed && <div className="sidebar-logo">Konduit</div>}
+        {!collapsed && <div className="sidebar-logo">Kondi</div>}
         <button
           className="collapse-btn"
           onClick={() => setCollapsed((p) => !p)}

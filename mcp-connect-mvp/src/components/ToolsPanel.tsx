@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, type FC } from 'react';
-import { ChevronRight, Plus, Library, Settings2, Zap, Loader2 } from 'lucide-react';
+import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import type { MCPServer, MCPTool } from '../types/mcp';
+import type { MCPServer, MCPTool, OAuthDiscovery } from '../types/mcp';
 import './ToolsPanel.css';
 
 interface ToolsPanelProps {
@@ -23,6 +23,7 @@ interface ToolsPanelProps {
 }
 
 type AddMode = null | 'options' | 'library' | 'custom';
+type AddPhase = 'url_entry' | 'probing' | 'credentials_required' | 'oauth_pending' | 'connecting';
 
 const ToolsPanel: FC<ToolsPanelProps> = ({
   servers,
@@ -36,66 +37,120 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
 }) => {
   const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI_IPC__);
   const [addMode, setAddMode] = useState<AddMode>(null);
+  const [addPhase, setAddPhase] = useState<AddPhase>('url_entry');
   const [newServerName, setNewServerName] = useState('');
   const [newServerUrl, setNewServerUrl] = useState('');
   const [transport, setTransport] = useState<MCPServer['transport']>('http');
-  const [authMode, setAuthMode] = useState<'none' | 'manual' | 'pkce'>('none');
-  const [accessToken, setAccessToken] = useState('');
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [discovery, setDiscovery] = useState<OAuthDiscovery | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const sortedServers = useMemo(
     () => servers.map((s) => ({ ...s, tools: s.tools || [] })),
     [servers],
   );
 
+  const resetForm = () => {
+    setNewServerName('');
+    setNewServerUrl('');
+    setTransport('http');
+    setClientId('');
+    setClientSecret('');
+    setDiscovery(null);
+    setErrorMessage(null);
+    setAddPhase('url_entry');
+    setAddMode(null);
+  };
+
   const handleAddServer = async () => {
-    if (!newServerName || !newServerUrl || !transport) return;
+    if (!newServerName || !newServerUrl) return;
 
-    setIsConnecting(true);
+    if (!isTauri) {
+      setErrorMessage('OAuth flow requires the desktop app (Tauri).');
+      return;
+    }
+
+    setErrorMessage(null);
+    setAddPhase('probing');
+
     try {
-      let token = accessToken.trim() || undefined;
+      // Step 1: Probe server to detect auth requirements
+      const probeResult = await invoke<OAuthDiscovery>('probe_server', { serverUrl: newServerUrl });
+      setDiscovery(probeResult);
 
-      // If PKCE auth mode, start OAuth flow first
-      if (authMode === 'pkce' && clientId && clientSecret) {
-        if (!isTauri) {
-          alert('OAuth flow requires the desktop app (Tauri). Please run the desktop build or use a manual token.');
-          setIsConnecting(false);
-          return;
-        }
-        try {
-          token = await invoke<string>('start_oauth', {
-            serverUrl: newServerUrl,
-            clientId: clientId,
-            clientSecret: clientSecret,
-          });
-        } catch (err) {
-          // eslint-disable-next-line no-alert
-          alert(`OAuth failed: ${err instanceof Error ? err.message : String(err)}`);
-          setIsConnecting(false);
-          return;
-        }
+      if (!probeResult.requiresAuth) {
+        // No auth required - connect directly
+        setAddPhase('connecting');
+        await onServerConnect(newServerName, newServerUrl, transport);
+        resetForm();
+        return;
       }
 
+      // Auth is required
+      if (probeResult.supportsDynamicRegistration && probeResult.dynamicClientId) {
+        // Dynamic registration succeeded - start OAuth immediately
+        setAddPhase('oauth_pending');
+        const token = await invoke<string>('start_oauth', {
+          serverUrl: newServerUrl,
+          clientId: probeResult.dynamicClientId,
+          clientSecret: probeResult.dynamicClientSecret || undefined,
+        });
+
+        setAddPhase('connecting');
+        await onServerConnect(
+          newServerName,
+          newServerUrl,
+          transport,
+          token,
+          probeResult.dynamicClientId,
+          probeResult.dynamicClientSecret || undefined
+        );
+        resetForm();
+      } else {
+        // Dynamic registration failed - need user credentials
+        setAddPhase('credentials_required');
+      }
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err));
+      setAddPhase('url_entry');
+    }
+  };
+
+  const handleOAuthWithCredentials = async () => {
+    if (!clientId.trim()) {
+      setErrorMessage('Client ID is required');
+      return;
+    }
+
+    if (!isTauri) {
+      setErrorMessage('OAuth flow requires the desktop app (Tauri).');
+      return;
+    }
+
+    setErrorMessage(null);
+    setAddPhase('oauth_pending');
+
+    try {
+      const token = await invoke<string>('start_oauth', {
+        serverUrl: newServerUrl,
+        clientId: clientId.trim(),
+        clientSecret: clientSecret.trim() || undefined,
+      });
+
+      setAddPhase('connecting');
       await onServerConnect(
         newServerName,
         newServerUrl,
         transport,
         token,
-        clientId || undefined,
-        clientSecret || undefined,
+        clientId.trim(),
+        clientSecret.trim() || undefined
       );
-      setNewServerName('');
-      setNewServerUrl('');
-      setTransport('http');
-      setAuthMode('none');
-      setAccessToken('');
-      setClientId('');
-      setClientSecret('');
-      setAddMode(null);
-    } finally {
-      setIsConnecting(false);
+      resetForm();
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err));
+      setAddPhase('credentials_required');
     }
   };
 
@@ -150,109 +205,134 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
           <div className="add-server-form">
             <div className="form-header">
               <span>Custom Server</span>
-              <button className="cancel-btn" onClick={() => setAddMode(null)}>Cancel</button>
+              <button className="cancel-btn" onClick={resetForm}>Cancel</button>
             </div>
-            <input
-              type="text"
-              placeholder="Server name"
-              value={newServerName}
-              onChange={(e) => setNewServerName(e.target.value)}
-            />
-            <input
-              type="text"
-              placeholder="http://localhost:3000"
-              value={newServerUrl}
-              onChange={(e) => setNewServerUrl(e.target.value)}
-            />
-            <div className="transport-label">Transport</div>
-            <div className="transport-options">
-              <button
-                type="button"
-                className={`transport-btn ${transport === 'http' ? 'active' : ''}`}
-                onClick={() => setTransport('http')}
-              >
-                HTTP
-              </button>
-              <button
-                type="button"
-                className={`transport-btn ${transport === 'sse' ? 'active' : ''}`}
-                onClick={() => setTransport('sse')}
-              >
-                SSE
-              </button>
-              <button
-                type="button"
-                className={`transport-btn ${transport === 'stdio' ? 'active' : ''}`}
-                onClick={() => setTransport('stdio')}
-              >
-                STDIO
-              </button>
-            </div>
-            <div className="transport-hint">
-              {transport === 'http' && 'HTTP: typical REST transport for MCP servers.'}
-              {transport === 'sse' && 'SSE: streaming events from the server; ensure MCP supports SSE endpoints.'}
-              {transport === 'stdio' && 'STDIO: local process transport; useful for native MCPs (desktop only).'}
-            </div>
-            <div className="auth-section">
-              <div className="auth-label">Authentication <span className="optional-tag">(optional)</span></div>
-              <div className="auth-options">
-                <button
-                  className={`auth-option-btn ${authMode === 'none' ? 'active' : ''}`}
-                  onClick={() => { setAuthMode('none'); setAccessToken(''); }}
-                >
-                  None
-                </button>
-                <button
-                  className={`auth-option-btn ${authMode === 'manual' ? 'active' : ''}`}
-                  onClick={() => setAuthMode('manual')}
-                >
-                  Manual Token
-                </button>
-                <button
-                  className={`auth-option-btn ${authMode === 'pkce' ? 'active' : ''}`}
-                  onClick={() => setAuthMode('pkce')}
-                >
-                  OAuth (PKCE)
-                </button>
-              </div>
 
-              {authMode === 'manual' && (
+            {errorMessage && (
+              <div className="discovery-error">
+                <AlertCircle size={14} />
+                <span>{errorMessage}</span>
+              </div>
+            )}
+
+            {/* Phase: URL Entry */}
+            {addPhase === 'url_entry' && (
+              <>
                 <input
                   type="text"
-                  placeholder="Bearer token..."
-                  value={accessToken}
-                  onChange={(e) => setAccessToken(e.target.value)}
+                  placeholder="Server name"
+                  value={newServerName}
+                  onChange={(e) => setNewServerName(e.target.value)}
                 />
-              )}
-
-              {authMode === 'pkce' && (
-                <div className="pkce-section">
-                  <input
-                    type="text"
-                    placeholder="Client ID"
-                    value={clientId}
-                    onChange={(e) => setClientId(e.target.value)}
-                  />
-                  <input
-                    type="text"
-                    placeholder="Client Secret"
-                    value={clientSecret}
-                    onChange={(e) => setClientSecret(e.target.value)}
-                  />
-                  <div className="oauth-hint">
-                    OAuth flow will start when you click Add Server
-                  </div>
+                <input
+                  type="text"
+                  placeholder="http://localhost:3001"
+                  value={newServerUrl}
+                  onChange={(e) => setNewServerUrl(e.target.value)}
+                />
+                <div className="transport-label">Transport</div>
+                <select
+                  className="select-field"
+                  value={transport}
+                  onChange={(e) => setTransport(e.target.value as MCPServer['transport'])}
+                >
+                  <option value="http">HTTP</option>
+                  <option value="sse">SSE</option>
+                  <option value="stdio">STDIO</option>
+                </select>
+                <div className="transport-hint">
+                  {transport === 'http' && 'HTTP: typical REST transport for MCP servers.'}
+                  {transport === 'sse' && 'SSE: streaming events from the server; ensure MCP supports SSE endpoints.'}
+                  {transport === 'stdio' && 'STDIO: local process transport; useful for native MCPs (desktop only).'}
                 </div>
-              )}
-            </div>
+                <button
+                  className="submit-btn"
+                  onClick={handleAddServer}
+                  disabled={!newServerName || !newServerUrl}
+                >
+                  Add Server
+                </button>
+              </>
+            )}
 
-            <button
-              className="submit-btn"
-              onClick={handleAddServer}
-              disabled={isConnecting || !newServerName || !newServerUrl}
-            >
-              {isConnecting ? 'Connecting...' : 'Add Server'}
-            </button>
+            {/* Phase: Probing */}
+            {addPhase === 'probing' && (
+              <div className="discovery-status">
+                <Loader2 size={20} className="spin" />
+                <span>Checking server requirements...</span>
+              </div>
+            )}
+
+            {/* Phase: Credentials Required */}
+            {addPhase === 'credentials_required' && (
+              <div className="credentials-form">
+                <div className="discovery-info">
+                  <Lock size={16} />
+                  <span>This server requires OAuth authentication</span>
+                </div>
+                {discovery?.error && (
+                  <div className="discovery-hint">
+                    {discovery.error}
+                  </div>
+                )}
+                {newServerUrl.includes('figma.com') && (
+                  <div className="discovery-hint figma-hint">
+                    Create a Figma app at{' '}
+                    <a href="https://www.figma.com/developers/apps" target="_blank" rel="noopener noreferrer">
+                      figma.com/developers/apps
+                    </a>{' '}
+                    to get your credentials.
+                  </div>
+                )}
+                <input
+                  type="text"
+                  placeholder="Client ID (required)"
+                  value={clientId}
+                  onChange={(e) => setClientId(e.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="Client Secret (optional)"
+                  value={clientSecret}
+                  onChange={(e) => setClientSecret(e.target.value)}
+                />
+                <div className="credentials-actions">
+                  <button
+                    className="back-btn"
+                    onClick={() => {
+                      setAddPhase('url_entry');
+                      setDiscovery(null);
+                      setErrorMessage(null);
+                    }}
+                  >
+                    Back
+                  </button>
+                  <button
+                    className="submit-btn"
+                    onClick={handleOAuthWithCredentials}
+                    disabled={!clientId.trim()}
+                  >
+                    Continue with OAuth
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Phase: OAuth Pending */}
+            {addPhase === 'oauth_pending' && (
+              <div className="discovery-status">
+                <Loader2 size={20} className="spin" />
+                <span>Complete authentication in your browser...</span>
+              </div>
+            )}
+
+            {/* Phase: Connecting */}
+            {addPhase === 'connecting' && (
+              <div className="discovery-status">
+                <Loader2 size={20} className="spin" />
+                <span>Connecting to server...</span>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -337,6 +417,13 @@ const ServerCard: FC<{
   const remainingSeconds = connectDeadline
     ? Math.max(0, Math.ceil((connectDeadline - Date.now()) / 1000))
     : null;
+  const authHint = server.authHint;
+  const [iconError, setIconError] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setIconError(false);
+  }, [server.icon, server.id]);
 
   return (
     <div className={`server-card ${hasError ? 'has-error' : ''}`}>
@@ -346,7 +433,18 @@ const ServerCard: FC<{
           className="chevron"
           style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
         />
-        <span className="server-icon">{server.icon || '⚡'}</span>
+        <span className="server-icon">
+          {server.icon && !iconError ? (
+            <img
+              src={server.icon}
+              alt={server.name}
+              className="server-favicon"
+              onError={() => setIconError(true)}
+            />
+          ) : (
+            '🌐'
+          )}
+        </span>
         <span
           className="server-name clickable"
           onClick={(e) => {
@@ -356,16 +454,42 @@ const ServerCard: FC<{
         >
           {server.name}
         </span>
-        <StatusDot
-          status={server.status}
-          error={server.error}
+        <div
+          className="status-menu-wrapper"
           onClick={(e) => {
             e.stopPropagation();
-            if (!isConnected && !isConnecting) {
-              onConnect();
-            }
+            setMenuOpen((p) => !p);
           }}
-        />
+        >
+          <StatusDot status={server.status} error={server.error} />
+          {menuOpen && (
+            <div className="status-menu">
+              {!isConnected && !isConnecting && (
+                <button className="menu-item" onClick={onConnect}>
+                  Connect
+                </button>
+              )}
+              {isConnecting && (
+                <button className="menu-item" disabled>
+                  {remainingSeconds !== null ? `Connecting... (${remainingSeconds}s)` : 'Connecting...'}
+                </button>
+              )}
+              {isConnected && (
+                <>
+                  <button className="menu-item" onClick={onConnect}>
+                    Refresh
+                  </button>
+                  <button className="menu-item" onClick={onDisconnect}>
+                    Disconnect
+                  </button>
+                </>
+              )}
+              <button className="menu-item danger" onClick={onDelete}>
+                Delete
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {showDetails && (
@@ -459,7 +583,11 @@ const ServerCard: FC<{
             <div className="server-meta-row">
               <span className="meta-label">Auth</span>
               <span className="meta-value">
-                {server.accessToken ? 'Bearer token stored' : 'None'}
+                {authHint === 'oauth'
+                  ? 'OAuth required (auto-detected)'
+                  : server.accessToken
+                    ? 'Bearer token stored'
+                    : 'None'}
               </span>
             </div>
           </div>
@@ -475,32 +603,7 @@ const ServerCard: FC<{
             )}
           </div>
 
-          <div className="server-actions">
-            {!isConnected && !isConnecting && (
-              <button className="server-action-btn connect" onClick={onConnect}>
-                Connect
-              </button>
-            )}
-            {isConnecting && (
-              <button className="server-action-btn" disabled>
-                <Loader2 size={14} className="spin" />{' '}
-                {remainingSeconds !== null ? `Connecting... (${remainingSeconds}s)` : 'Connecting...'}
-              </button>
-            )}
-            {isConnected && (
-              <>
-                <button className="server-action-btn" onClick={onConnect}>
-                  Refresh
-                </button>
-                <button className="server-action-btn" onClick={onDisconnect}>
-                  Disconnect
-                </button>
-              </>
-            )}
-            <button className="server-action-btn danger" onClick={onDelete}>
-              Delete
-            </button>
-          </div>
+          <div className="server-actions" />
         </>
       )}
     </div>

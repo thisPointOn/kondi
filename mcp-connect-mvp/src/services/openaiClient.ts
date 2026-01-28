@@ -2,7 +2,9 @@ import OpenAI from 'openai';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 
-const BASE_SYSTEM_PROMPT = `You are a helpful AI assistant with access to MCP (Model Context Protocol) tools.
+const BASE_SYSTEM_PROMPT = `You are ChatGPT, a helpful general-purpose AI assistant made by OpenAI. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
+
+You also have access to MCP (Model Context Protocol) tools that let you interact with external services. These tools are OPTIONAL - use them when relevant to the user's request, but you are NOT limited to only topics related to these tools. You are a general-purpose assistant first.
 
 IMPORTANT SECURITY RULES:
 - NEVER ask users for passwords, login credentials, API keys, or authentication tokens.
@@ -11,18 +13,33 @@ IMPORTANT SECURITY RULES:
 - If a tool requires authentication that isn't working, inform the user there's a connection issue - do not ask for credentials.
 
 When using tools:
-- Use the available MCP tools to accomplish tasks.
-- If no relevant tool is available, explain what you cannot do and suggest alternatives.
+- Use the available MCP tools when they're relevant to the user's request.
+- If no relevant tool is available, that's fine - help the user with your general knowledge instead.
 - Present tool results clearly and concisely.`;
 
 export class OpenAIClient {
   private client: OpenAI | null = null;
+  private apiKey: string | null = null;
 
   setApiKey(key: string) {
+    this.apiKey = key;
     this.client = new OpenAI({
       apiKey: key,
       dangerouslyAllowBrowser: true,
     });
+  }
+
+  private ensureInitialized() {
+    if (!this.client && this.apiKey) {
+      console.log('[OpenAI] Re-initializing client');
+      this.client = new OpenAI({
+        apiKey: this.apiKey,
+        dangerouslyAllowBrowser: true,
+      });
+    }
+    if (!this.client) {
+      throw new Error('OpenAI client not initialized. Please set your API key in settings.');
+    }
   }
 
   async listModels(key: string): Promise<string[]> {
@@ -35,7 +52,7 @@ export class OpenAIClient {
       if (!res.ok) return [];
       const data = await res.json().catch(() => ({}));
       if (Array.isArray(data.data)) {
-        return data.data.map((m: any) => m.id).filter((id) => typeof id === 'string');
+        return data.data.map((m: any) => m.id).filter((id: string) => typeof id === 'string');
       }
       return [];
     } catch {
@@ -62,9 +79,10 @@ export class OpenAIClient {
   async chat(
     messages: Message[],
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
-    model = 'gpt-4o'
+    model = 'gpt-4o',
+    additionalSystemPrompt?: string
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
-    if (!this.client) throw new Error('OpenAI client not initialized');
+    this.ensureInitialized();
 
     const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [];
     const toolMap = new Map<string, { serverId: string; tool: MCPTool }>();
@@ -94,10 +112,14 @@ export class OpenAIClient {
       }
     }
 
-    console.log('[OpenAI] Available tools:', tools.map(t => t.function.name));
+    console.log('[OpenAI] Available tools:', tools.map(t => (t as any).function?.name));
+
+    const systemPrompt = additionalSystemPrompt
+      ? `${BASE_SYSTEM_PROMPT}\n\n${additionalSystemPrompt}`
+      : BASE_SYSTEM_PROMPT;
 
     const openaiMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-      { role: 'system', content: BASE_SYSTEM_PROMPT },
+      { role: 'system', content: systemPrompt },
       ...messages.map((message) => ({
         role: message.role as 'user' | 'assistant',
         content: message.content,
@@ -105,7 +127,7 @@ export class OpenAIClient {
     ];
 
     // First API call
-    const completion = await this.client.chat.completions.create({
+    const completion = await this.client!.chat.completions.create({
       model: model || 'gpt-4o',
       messages: openaiMessages,
       tools: tools.length > 0 ? tools : undefined,
@@ -190,7 +212,7 @@ export class OpenAIClient {
         ...toolResults,
       ];
 
-      const followUp = await this.client.chat.completions.create({
+      const followUp = await this.client!.chat.completions.create({
         model: model || 'gpt-4o',
         messages: followUpMessages,
         tools: tools.length > 0 ? tools : undefined,

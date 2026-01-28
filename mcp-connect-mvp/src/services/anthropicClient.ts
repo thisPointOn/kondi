@@ -7,7 +7,9 @@ type AnthropicMessage = {
   content: { type: 'text' | 'tool_use' | 'tool_result'; text?: string; id?: string; name?: string; input?: any; tool_use_id?: string }[];
 };
 
-const BASE_SYSTEM_PROMPT = `You are a helpful AI assistant with access to MCP (Model Context Protocol) tools.
+const BASE_SYSTEM_PROMPT = `You are Claude, a helpful general-purpose AI assistant made by Anthropic. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
+
+You also have access to MCP (Model Context Protocol) tools that let you interact with external services. These tools are OPTIONAL - use them when relevant to the user's request, but you are NOT limited to only topics related to these tools. You are a general-purpose assistant first.
 
 IMPORTANT SECURITY RULES:
 - NEVER ask users for passwords, login credentials, API keys, or authentication tokens.
@@ -16,8 +18,8 @@ IMPORTANT SECURITY RULES:
 - If a tool requires authentication that isn't working, inform the user there's a connection issue - do not ask for credentials.
 
 When using tools:
-- Use the available MCP tools to accomplish tasks.
-- If no relevant tool is available, explain what you cannot do and suggest alternatives.
+- Use the available MCP tools when they're relevant to the user's request.
+- If no relevant tool is available, that's fine - help the user with your general knowledge instead.
 - Present tool results clearly and concisely.`;
 
 class AnthropicClient {
@@ -27,14 +29,36 @@ class AnthropicClient {
     this.apiKey = key;
   }
 
+  private ensureInitialized(): string {
+    if (this.apiKey) return this.apiKey;
+
+    // Try to recover from localStorage
+    try {
+      const stored = localStorage.getItem('mcp-api-keys');
+      if (stored) {
+        const keys = JSON.parse(stored);
+        if (keys.anthropic) {
+          console.log('[Anthropic] Re-initializing from stored key');
+          const key = keys.anthropic as string;
+          this.apiKey = key;
+          return key;
+        }
+      }
+    } catch (e) {
+      console.error('[Anthropic] Failed to recover key from storage:', e);
+    }
+
+    throw new Error('Anthropic client not initialized. Please set your API key in settings.');
+  }
+
   private async request(
     path: string,
     method: 'GET' | 'POST',
     body?: Record<string, any>,
     apiKeyOverride?: string
   ): Promise<any> {
-    const apiKey = apiKeyOverride || this.apiKey;
-    if (!apiKey) throw new Error('Anthropic client not initialized');
+    const apiKey = apiKeyOverride || this.ensureInitialized();
+    if (!apiKey) throw new Error('Anthropic client not initialized. Please set your API key in settings.');
     const url = `https://api.anthropic.com${path}`;
     const payload = body ? JSON.stringify(body) : null;
 
@@ -72,7 +96,8 @@ class AnthropicClient {
     messages: Message[],
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
     model = 'claude-3-5-sonnet-latest',
-    serverSummary?: string
+    serverSummary?: string,
+    additionalSystemPrompt?: string
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     if (!this.apiKey) throw new Error('Anthropic client not initialized');
 
@@ -119,7 +144,7 @@ class AnthropicClient {
             .join('\n')}\nWhen you use a tool, pick the best one for the task.`
         : undefined;
 
-    const system = [BASE_SYSTEM_PROMPT, toolSummary, serverSummary]
+    const system = [BASE_SYSTEM_PROMPT, additionalSystemPrompt, toolSummary, serverSummary]
       .filter(Boolean)
       .join('\n\n')
       .trim();
@@ -127,6 +152,22 @@ class AnthropicClient {
     // First turn
     const first = await this.sendMessage(anthropicMessages, tools, model, system || undefined);
     console.log('[Anthropic] First response:', JSON.stringify(first, null, 2));
+
+    // Check for API errors
+    if (first.error) {
+      console.error('[Anthropic] API error:', first.error);
+      throw new Error(first.error.message || JSON.stringify(first.error));
+    }
+
+    // Extract text and tool uses from first response
+    const firstTextParts =
+      Array.isArray(first.content) && first.content.length > 0
+        ? first.content
+            .filter((p: any) => p.type === 'text')
+            .map((p: any) => p.text)
+            .join('\n')
+        : '';
+    console.log('[Anthropic] First response text:', firstTextParts ? firstTextParts.slice(0, 200) + '...' : '(none)');
 
     // Extract tool uses
     const toolUses =
@@ -183,7 +224,9 @@ class AnthropicClient {
       ];
 
       const second = await this.sendMessage(followupMessages, tools, model, system || undefined);
-      const textParts =
+      console.log('[Anthropic] Second response:', JSON.stringify(second, null, 2));
+
+      const secondTextParts =
         Array.isArray(second.content) && second.content.length > 0
           ? second.content
               .filter((p: any) => p.type === 'text')
@@ -191,11 +234,14 @@ class AnthropicClient {
               .join('\n')
           : '';
 
+      // Combine any text from first response with second response
+      const combinedText = [firstTextParts, secondTextParts].filter(Boolean).join('\n\n');
+
       return {
         message: {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: textParts || '[No content returned]',
+          content: combinedText || '[No content returned after tool use]',
           timestamp: new Date(),
         },
         toolCalls,
@@ -203,19 +249,24 @@ class AnthropicClient {
     }
 
     // No tool use, just return first response
-    const textParts =
-      Array.isArray(first.content) && first.content.length > 0
-        ? first.content
-            .filter((p: any) => p.type === 'text')
-            .map((p: any) => p.text)
-            .join('\n')
-        : '';
+    // Use the already extracted firstTextParts
+    let content = firstTextParts;
+
+    // If no text content, provide more helpful message
+    if (!content) {
+      console.warn('[Anthropic] No text content in response. Full response:', first);
+      if (first.stop_reason) {
+        content = `[Response ended with reason: ${first.stop_reason}]`;
+      } else {
+        content = '[No content returned - check console for details]';
+      }
+    }
 
     return {
       message: {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: textParts || '[No content returned]',
+        content,
         timestamp: new Date(),
       },
       toolCalls,

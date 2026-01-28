@@ -11,6 +11,7 @@ export interface MCPServer {
   clientId?: string;
   clientSecret?: string;
   sessionId?: string;
+  authHint?: 'none' | 'oauth' | 'token';
 }
 
 export interface MCPTool {
@@ -33,10 +34,31 @@ export interface ToolCall {
   error?: string;
 }
 
+export interface MessageAttachment {
+  name: string;
+  type: string;
+  size: number;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   toolCalls?: ToolCall[];
   timestamp: Date;
+  provider?: 'claude' | 'chatgpt';
+  attachments?: MessageAttachment[];
+}
+
+export type CollaborationMode = 'single' | 'collaborate' | 'debate';
+
+export interface OAuthDiscovery {
+  requiresAuth: boolean;
+  authorizationEndpoint?: string;
+  tokenEndpoint?: string;
+  registrationEndpoint?: string;
+  supportsDynamicRegistration: boolean;
+  dynamicClientId?: string;
+  dynamicClientSecret?: string;
+  error?: string;
 }
