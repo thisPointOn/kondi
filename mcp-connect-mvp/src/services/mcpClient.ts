@@ -171,64 +171,9 @@ export class MCPClient {
       this.servers.set(server.id, server);
 
       if (server.transport === 'http') {
-        const fetchTools = async (useSession: boolean) => {
-          const toolsRaw = await invoke<any>('mcp_request', {
-            url: server.url,
-            method: 'POST',
-            body: JSON.stringify({
-              jsonrpc: '2.0',
-              id: this.nextRequestId(),
-              method: 'tools/list',
-              params: {},
-            }),
-            accessToken: server.accessToken || null,
-            sessionId: useSession ? server.sessionId || null : null,
-          });
-          const toolsResult = normalizeInvokeResult(toolsRaw);
-          console.log('[MCP] tools/list response:', toolsResult.body);
-          const jsonBody = parseResponseBody(toolsResult.body);
-          console.log('[MCP] Parsed JSON:', jsonBody);
-          const responseData = JSON.parse(jsonBody);
-          const toolsData = responseData.result || responseData;
-          console.log('[MCP] Loaded tools:', toolsData.tools);
-          this.tools.set(server.id, toolsData.tools || []);
-          server.authHint = 'none';
-          this.servers.set(server.id, server);
-        };
-
-        // First attempt tools/list (no session) to detect auth early
-        try {
-          await fetchTools(false);
-        } catch (toolsErr) {
-          const errMsg = toolsErr instanceof Error ? toolsErr.message : String(toolsErr);
-          const unauthorized =
-            errMsg.includes('401') ||
-            errMsg.includes('403') ||
-            errMsg.toLowerCase().includes('forbidden') ||
-            errMsg.toLowerCase().includes('unauthorized') ||
-            errMsg.toLowerCase().includes('expired');
-          if (!isRetry && unauthorized && this.onAuthRequired) {
-            server.authHint = 'oauth';
-            this.servers.set(server.id, server);
-            console.log('[MCP] tools/list unauthorized, triggering OAuth re-authentication...');
-            const newToken = await this.onAuthRequired(server);
-            if (newToken) {
-              server.accessToken = newToken;
-              this.servers.set(server.id, server);
-              void this.persistServer(server);
-              await fetchTools(false); // retry once
-            } else {
-              throw toolsErr;
-            }
-          } else {
-            console.warn('[MCP] tools/list failed, falling back to initialize flow:', toolsErr);
-          }
-        }
-
-        // Step 2: Send initialize request (establish session for later tools/call)
-        let initRaw: any;
-        try {
-          initRaw = await invoke<any>('mcp_request', {
+        // Step 1: Initialize to establish session (many servers require this before tools)
+        const doInitialize = async () => {
+          return await invoke<any>('mcp_request', {
             url: server.url,
             method: 'POST',
             body: JSON.stringify({
@@ -244,8 +189,42 @@ export class MCPClient {
             accessToken: server.accessToken || null,
             sessionId: null,
           });
+        };
+
+        const fetchTools = async () => {
+          const toolsRaw = await invoke<any>('mcp_request', {
+            url: server.url,
+            method: 'POST',
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: this.nextRequestId(),
+              method: 'tools/list',
+              params: {},
+            }),
+            accessToken: server.accessToken || null,
+            sessionId: server.sessionId || null,
+          });
+          const toolsResult = normalizeInvokeResult(toolsRaw);
+          console.log('[MCP] tools/list response:', toolsResult.body);
+          const jsonBody = parseResponseBody(toolsResult.body);
+          const responseData = JSON.parse(jsonBody);
+          const toolsData = responseData.result || responseData;
+          console.log('[MCP] Loaded tools:', toolsData.tools);
+          this.tools.set(server.id, toolsData.tools || []);
+          server.authHint = 'none';
+          this.servers.set(server.id, server);
+        };
+
+        // Initialize with auth handling
+        try {
+          const initRaw = await doInitialize();
+          const initResult = normalizeInvokeResult(initRaw);
+          console.log('[MCP] initialize response:', initResult.body);
+          if (initResult.session_id) {
+            server.sessionId = initResult.session_id;
+            this.servers.set(server.id, server);
+          }
         } catch (initError) {
-          // Check if this is an auth error (401) and we can re-authenticate
           const errorMsg = initError instanceof Error ? initError.message : String(initError);
           const unauthorized =
             errorMsg.includes('401') ||
@@ -261,42 +240,129 @@ export class MCPClient {
               server.accessToken = newToken;
               this.servers.set(server.id, server);
               void this.persistServer(server);
-              // Retry connection with new token
               return this.connectServer(server, true);
             }
           }
           throw initError;
         }
 
-        const initResult = normalizeInvokeResult(initRaw);
-
-        console.log('[MCP] initialize response:', initResult.body);
-        console.log('[MCP] session_id:', initResult.session_id);
-
-        // Store session ID for subsequent requests
-        if (initResult.session_id) {
-          server.sessionId = initResult.session_id;
-          this.servers.set(server.id, server);
-        }
-
-        // Step 3: Re-fetch tools using session (if not already populated)
-        if (!this.tools.has(server.id) || (this.tools.get(server.id) || []).length === 0) {
-          try {
-            await fetchTools(true);
-          } catch (err) {
-            console.error('[MCP] tools/list with session failed:', err);
-            this.tools.set(server.id, []);
+        // Step 2: tools/list with session; if unauthorized, retry once with OAuth
+        try {
+          await fetchTools();
+        } catch (toolsErr) {
+          const errMsg = toolsErr instanceof Error ? toolsErr.message : String(toolsErr);
+          const unauthorized =
+            errMsg.includes('401') ||
+            errMsg.includes('403') ||
+            errMsg.toLowerCase().includes('forbidden') ||
+            errMsg.toLowerCase().includes('unauthorized') ||
+            errMsg.toLowerCase().includes('expired');
+          if (!isRetry && unauthorized && this.onAuthRequired) {
+            console.log('[MCP] tools/list unauthorized, triggering OAuth re-authentication...');
+            const newToken = await this.onAuthRequired(server);
+            if (newToken) {
+              server.accessToken = newToken;
+              this.servers.set(server.id, server);
+              void this.persistServer(server);
+              return this.connectServer(server, true);
+            }
           }
+          throw toolsErr;
         }
       } else if (server.transport === 'sse') {
-        // SSE transport - similar to HTTP but uses SSE endpoint
-        // Many MCP SSE servers accept POST requests and return JSON or SSE events
+        // SSE transport - MCP protocol over Server-Sent Events
+        // SSE servers typically expose:
+        // - GET /sse - establishes SSE connection for receiving events
+        // - POST /message (or similar) - sends JSON-RPC commands
+        // Some servers (like Linear) accept POST directly to /sse endpoint
         console.log('[MCP SSE] Connecting to:', server.url, 'with token:', server.accessToken ? 'present' : 'none');
 
-        const fetchToolsSSE = async () => {
-          console.log('[MCP SSE] Fetching tools from:', server.url);
+        // Determine the message endpoint - try common patterns
+        const sseUrl = new URL(server.url);
+        const baseUrl = `${sseUrl.protocol}//${sseUrl.host}`;
+        const possibleMessageEndpoints = [
+          server.url, // Try the SSE URL directly first (some servers accept POST here)
+          `${baseUrl}/message`,
+          `${baseUrl}/mcp/message`,
+          server.url.replace(/\/sse$/, '/message'),
+          server.url.replace(/\/sse$/, ''), // Base path
+        ];
+
+        let messageEndpoint = server.url;
+        let initSucceeded = false;
+
+        // Try each possible endpoint until one works
+        for (const endpoint of possibleMessageEndpoints) {
+          console.log('[MCP SSE] Trying message endpoint:', endpoint);
+          try {
+            const initRaw = await invoke<any>('mcp_request', {
+              url: endpoint,
+              method: 'POST',
+              body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: this.nextRequestId(),
+                method: 'initialize',
+                params: {
+                  protocolVersion: '2024-11-05',
+                  capabilities: { tools: {} },
+                  clientInfo: { name: 'kondi', version: '1.0.0' },
+                },
+              }),
+              accessToken: server.accessToken || null,
+              sessionId: null,
+            });
+            const initResult = normalizeInvokeResult(initRaw);
+            console.log('[MCP SSE] initialize response from', endpoint, ':', initResult.body);
+
+            // Check if we got a valid JSON-RPC response
+            const jsonBody = parseResponseBody(initResult.body);
+            const responseData = JSON.parse(jsonBody);
+            if (responseData.result || responseData.id) {
+              messageEndpoint = endpoint;
+              initSucceeded = true;
+              if (initResult.session_id) {
+                server.sessionId = initResult.session_id;
+              }
+              // Store the working message endpoint for future calls
+              server.messageEndpoint = endpoint;
+              this.servers.set(server.id, server);
+              console.log('[MCP SSE] Found working message endpoint:', endpoint);
+              break;
+            }
+          } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            console.log('[MCP SSE] Endpoint', endpoint, 'failed:', errorMsg);
+
+            // Check for auth errors
+            const unauthorized =
+              errorMsg.includes('401') ||
+              errorMsg.includes('403') ||
+              errorMsg.toLowerCase().includes('forbidden') ||
+              errorMsg.toLowerCase().includes('unauthorized');
+
+            if (!isRetry && unauthorized && this.onAuthRequired) {
+              console.log('[MCP SSE] Auth error, triggering OAuth...');
+              const newToken = await this.onAuthRequired(server);
+              if (newToken) {
+                server.accessToken = newToken;
+                this.servers.set(server.id, server);
+                void this.persistServer(server);
+                return this.connectServer(server, true);
+              }
+            }
+            // Continue to next endpoint
+          }
+        }
+
+        if (!initSucceeded) {
+          throw new Error('Could not find a working message endpoint for this SSE server. Tried: ' + possibleMessageEndpoints.join(', '));
+        }
+
+        // Fetch tools using the working endpoint
+        try {
+          console.log('[MCP SSE] Fetching tools from:', messageEndpoint);
           const toolsRaw = await invoke<any>('mcp_request', {
-            url: server.url,
+            url: messageEndpoint,
             method: 'POST',
             body: JSON.stringify({
               jsonrpc: '2.0',
@@ -314,65 +380,6 @@ export class MCPClient {
           const toolsData = responseData.result || responseData;
           console.log('[MCP SSE] Loaded tools:', toolsData.tools);
           this.tools.set(server.id, toolsData.tools || []);
-        };
-
-        // Step 1: Initialize the connection
-        try {
-          console.log('[MCP SSE] Sending initialize to:', server.url);
-          const initRaw = await invoke<any>('mcp_request', {
-            url: server.url,
-            method: 'POST',
-            body: JSON.stringify({
-              jsonrpc: '2.0',
-              id: this.nextRequestId(),
-              method: 'initialize',
-              params: {
-                protocolVersion: '2024-11-05',
-                capabilities: { tools: {} },
-                clientInfo: { name: 'kondi', version: '1.0.0' },
-              },
-            }),
-            accessToken: server.accessToken || null,
-            sessionId: null,
-          });
-          const initResult = normalizeInvokeResult(initRaw);
-          console.log('[MCP SSE] initialize response:', initResult.body);
-
-          if (initResult.session_id) {
-            server.sessionId = initResult.session_id;
-            this.servers.set(server.id, server);
-          }
-        } catch (initError) {
-          const errorMsg = initError instanceof Error ? initError.message : String(initError);
-          // Fallback: some repos list /sse but require HTTP /mcp; if we see 404, try HTTP on /mcp once.
-          if (!isRetry && errorMsg.includes('404') && server.url.includes('/sse')) {
-            const fallbackUrl = server.url.replace(/\/sse$/, '/mcp');
-            console.warn('[MCP SSE] 404 from SSE endpoint, retrying as HTTP at', fallbackUrl);
-            const fallbackServer = { ...server, url: fallbackUrl, transport: 'http' as const };
-            return this.connectServer(fallbackServer, true);
-          }
-          const unauthorized =
-            errorMsg.includes('401') ||
-            errorMsg.includes('403') ||
-            errorMsg.toLowerCase().includes('forbidden') ||
-            errorMsg.toLowerCase().includes('unauthorized');
-
-          if (!isRetry && unauthorized && this.onAuthRequired) {
-            console.log('[MCP SSE] Auth error, triggering OAuth...');
-            const newToken = await this.onAuthRequired(server);
-            if (newToken) {
-              server.accessToken = newToken;
-              this.servers.set(server.id, server);
-              void this.persistServer(server);
-              return this.connectServer(server, true);
-            }
-          }
-          throw initError;
-        }
-
-        // Step 2: Fetch tools
-        try {
-          await fetchToolsSSE();
         } catch (err) {
           console.error('[MCP SSE] tools/list failed:', err);
           this.tools.set(server.id, []);
@@ -410,6 +417,12 @@ export class MCPClient {
     if (!server) throw new Error('Server not found');
     if (server.status !== 'connected') throw new Error('Server not connected');
 
+    // Use messageEndpoint for SSE transport, otherwise use the main URL
+    const endpoint = server.transport === 'sse' && server.messageEndpoint
+      ? server.messageEndpoint
+      : server.url;
+    console.log('[MCP] Using endpoint:', endpoint, '(transport:', server.transport, ')');
+
     const requestBody = {
       jsonrpc: '2.0',
       id: this.nextRequestId(),
@@ -424,7 +437,7 @@ export class MCPClient {
     let rawResult: any;
     try {
       rawResult = await invoke<any>('mcp_request', {
-        url: server.url,
+        url: endpoint,
         method: 'POST',
         body: JSON.stringify(requestBody),
         accessToken: server.accessToken || null,
@@ -447,7 +460,7 @@ export class MCPClient {
           this.servers.set(server.id, server);
           void this.persistServer(server);
           rawResult = await invoke<any>('mcp_request', {
-            url: server.url,
+            url: endpoint,
             method: 'POST',
             body: JSON.stringify(requestBody),
             accessToken: server.accessToken || null,
@@ -490,6 +503,20 @@ export class MCPClient {
     this.tools.delete(serverId);
   }
 
+  updateServer(server: MCPServer): void {
+    const existing = this.servers.get(server.id);
+    const base = existing || server;
+    const updated = {
+      ...base,
+      ...server,
+      tools: existing?.tools ?? server.tools,
+      status: existing?.status ?? server.status ?? 'disconnected',
+      sessionId: existing?.sessionId ?? server.sessionId,
+    };
+    this.servers.set(server.id, updated);
+    void this.persistServer(updated);
+  }
+
   remove(serverId: string): void {
     console.log('[MCP] Removing server:', serverId);
     console.log('[MCP] Servers before remove:', Array.from(this.servers.keys()));
@@ -510,6 +537,7 @@ export class MCPClient {
           access_token: server.accessToken || null,
           client_id: server.clientId || null,
           client_secret: server.clientSecret || null,
+          message_endpoint: server.messageEndpoint || null,
         },
       });
     } catch (_e) {

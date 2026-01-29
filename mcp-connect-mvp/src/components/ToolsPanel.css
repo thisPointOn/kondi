@@ -382,7 +382,7 @@
   background: #1a1a1a;
   border-radius: 8px;
   border: 1px solid #2a2a2a;
-  overflow: hidden;
+  overflow: visible;
   transition: border-color 0.2s;
 }
 
@@ -393,11 +393,18 @@
 .server-header {
   display: flex;
   align-items: center;
-  gap: 10px;
   padding: 14px;
-  cursor: pointer;
+  gap: 10px;
   user-select: none;
   transition: background 0.15s;
+}
+
+.server-header-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
 }
 
 .server-header:hover {
@@ -407,10 +414,12 @@
 .chevron {
   transition: transform 0.2s;
   color: #666;
+  flex-shrink: 0;
 }
 
 .server-icon {
   font-size: 20px;
+  flex-shrink: 0;
 }
 
 .server-favicon {
@@ -422,8 +431,19 @@
 
 .server-name {
   flex: 1;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 500;
+  min-width: 0;
+}
+
+.server-error-inline {
+  color: #ef4444;
+  font-size: 11px;
+  margin-left: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
 }
 
 .server-transport {
@@ -447,11 +467,7 @@
 
 .status-menu-wrapper {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px;
-  cursor: pointer;
+  flex-shrink: 0;
 }
 
 .status-menu {
@@ -554,6 +570,11 @@
   color: #e8e8e8;
   word-break: break-all;
   text-align: right;
+}
+
+.meta-value.token-value {
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  font-size: 11px;
 }
 
 .server-error {
@@ -1046,4 +1067,133 @@
   font-size: 11px;
   color: #666;
   font-weight: normal;
+}
+
+/* Local Tools Card */
+.local-tools-card {
+  border-left: 3px solid #4a9eff;
+}
+
+.working-dir-display {
+  padding: 8px 12px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-top: 4px;
+  font-size: 12px;
+  transition: border-color 0.2s;
+}
+
+.working-dir-display:hover {
+  border-color: #4a9eff;
+}
+
+.working-dir-path {
+  color: #e8e8e8;
+  word-break: break-all;
+}
+
+.working-dir-placeholder {
+  color: #666;
+  font-style: italic;
+}
+
+.working-dir-edit {
+  margin-top: 4px;
+}
+
+.working-dir-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: #1a1a1a;
+  border: 1px solid #4a9eff;
+  border-radius: 6px;
+  color: #e8e8e8;
+  font-size: 12px;
+  outline: none;
+}
+
+.working-dir-input::placeholder {
+  color: #666;
+}
+
+.working-dir-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.save-dir-btn,
+.cancel-dir-btn {
+  flex: 1;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  border: none;
+}
+
+.save-dir-btn {
+  background: #4a9eff;
+  color: white;
+}
+
+.save-dir-btn:hover {
+  background: #3a8eef;
+}
+
+.cancel-dir-btn {
+  background: #2a2a2a;
+  color: #999;
+}
+
+.cancel-dir-btn:hover {
+  background: #3a3a3a;
+}
+
+/* Light theme */
+.light-theme .working-dir-display {
+  background: #f5f5f5;
+  border-color: #e0e0e0;
+}
+
+.light-theme .working-dir-display:hover {
+  border-color: #2563eb;
+}
+
+.light-theme .working-dir-path {
+  color: #111;
+}
+
+.light-theme .working-dir-input {
+  background: #f5f5f5;
+  border-color: #2563eb;
+  color: #111;
+}
+
+.light-theme .cancel-dir-btn {
+  background: #e0e0e0;
+  color: #666;
+}
+
+.light-theme .cancel-dir-btn:hover {
+  background: #d0d0d0;
+}
+
+.local-tools-card .server-icon {
+  color: #4a9eff;
+}
+
+.local-tools-card .server-name {
+  color: #4a9eff;
+}
+
+.light-theme .local-tools-card {
+  border-left-color: #2563eb;
+}
+
+.light-theme .local-tools-card .server-icon,
+.light-theme .local-tools-card .server-name {
+  color: #2563eb;
 }

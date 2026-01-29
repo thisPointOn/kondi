@@ -6,6 +6,7 @@ import ToolsPanel from './components/ToolsPanel';
 import { mcpClient } from './services/mcpClient';
 import { openaiClient } from './services/openaiClient';
 import { anthropicClient } from './services/anthropicClient';
+import { LOCAL_SERVER_ID, LOCAL_TOOLS, localToolsService } from './services/localTools';
 import type { MCPServer, MCPTool, Message } from './types/mcp';
 import './App.css';
 import { invoke } from '@tauri-apps/api/core';
@@ -103,12 +104,17 @@ function App() {
         return null;
       }
 
+      console.log('[App] Starting OAuth re-authentication for server:', server.name);
+      console.log('[App] Stored credentials - clientId:', server.clientId ? 'present' : 'none');
+
+      // Always try fresh dynamic registration for re-auth
+      // Stored credentials are often stale (server restarts, etc.)
       try {
-        console.log('[App] Starting OAuth re-authentication for server:', server.name);
+        console.log('[App] Attempting OAuth with fresh dynamic registration...');
         const newToken = await invoke<string>('start_oauth', {
           serverUrl: server.url,
-          clientId: server.clientId || undefined,
-          clientSecret: server.clientSecret || undefined,
+          clientId: undefined,
+          clientSecret: undefined,
         });
         console.log('[App] OAuth re-authentication successful');
         return newToken;
@@ -118,6 +124,12 @@ function App() {
         alert(`OAuth re-authentication failed: ${err instanceof Error ? err.message : String(err)}`);
         return null;
       }
+    });
+
+    // Set up permission callback for local tools out-of-scope operations
+    localToolsService.setPermissionCallback(async (message: string) => {
+      // eslint-disable-next-line no-alert
+      return window.confirm(message);
     });
   }, []);
 
@@ -222,7 +234,7 @@ function App() {
       // Load server configs
       try {
         const configs = await invoke<
-          { id: string; name: string; url: string; transport: string; access_token?: string; client_id?: string; client_secret?: string }[]
+          { id: string; name: string; url: string; transport: string; access_token?: string; client_id?: string; client_secret?: string; message_endpoint?: string }[]
         >('get_server_configs');
         configs.forEach((config: any) => {
           mcpClient.addServer({
@@ -234,6 +246,7 @@ function App() {
             accessToken: config.access_token || undefined,
             clientId: config.client_id || undefined,
             clientSecret: config.client_secret || undefined,
+            messageEndpoint: config.message_endpoint || undefined,
           });
         });
         refreshServers();
@@ -387,6 +400,11 @@ function App() {
 
   const availableTools = useMemo(() => {
     const map = new Map<string, { serverId: string; tools: MCPTool[] }>();
+
+    // Add local file system tools (always available)
+    map.set(LOCAL_SERVER_ID, { serverId: LOCAL_SERVER_ID, tools: LOCAL_TOOLS });
+
+    // Add MCP server tools
     servers
       .filter((s) => s.status === 'connected')
       .forEach((server) => {
@@ -562,6 +580,7 @@ function App() {
       });
       refreshServers();
     } catch (error) {
+      console.error('[App] Connect server failed:', error);
       // eslint-disable-next-line no-alert
       alert(`Failed to connect: ${error instanceof Error ? error.message : 'Unknown error'}`);
       refreshServers();
@@ -583,6 +602,11 @@ function App() {
 
   const handleDeleteServer = (serverId: string) => {
     mcpClient.remove(serverId);
+    refreshServers();
+  };
+
+  const handleUpdateServer = (server: MCPServer) => {
+    mcpClient.updateServer(server);
     refreshServers();
   };
 
@@ -622,6 +646,7 @@ function App() {
       });
       refreshServers();
     } catch (error) {
+      console.error('[App] Reconnect failed:', error);
       // Update with error status
       setServers((prev) =>
         prev.map((s) =>
@@ -895,6 +920,7 @@ function App() {
           onServerReconnect={handleReconnectServer}
           onServerDisconnect={handleDisconnectServer}
           onServerDelete={handleDeleteServer}
+          onServerUpdate={handleUpdateServer}
           connectDeadlines={connectDeadlines}
           onToolClick={(toolName) => {
             setPendingToolInsert(toolName);

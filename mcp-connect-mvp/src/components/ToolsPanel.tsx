@@ -1,7 +1,8 @@
 import { useMemo, useState, useEffect, type FC } from 'react';
-import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock } from 'lucide-react';
+import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import type { MCPServer, MCPTool, OAuthDiscovery } from '../types/mcp';
+import { LOCAL_TOOLS, localToolsService } from '../services/localTools';
 import './ToolsPanel.css';
 
 interface ToolsPanelProps {
@@ -17,6 +18,7 @@ interface ToolsPanelProps {
   onServerReconnect: (serverId: string) => Promise<void> | void;
   onServerDisconnect: (serverId: string) => void;
   onServerDelete: (serverId: string) => void;
+  onServerUpdate: (server: MCPServer) => void;
   onToolClick: (toolName: string) => void;
   connectDeadlines: Record<string, number>;
   className?: string;
@@ -25,12 +27,109 @@ interface ToolsPanelProps {
 type AddMode = null | 'options' | 'library' | 'custom';
 type AddPhase = 'url_entry' | 'probing' | 'credentials_required' | 'oauth_pending' | 'connecting';
 
+// Helper components defined first so they can be used by main component
+const ToolItem: FC<{ tool: MCPTool; onClick: () => void }> = ({ tool, onClick }) => (
+  <div className="tool-item" onClick={onClick} title={tool.description}>
+    <Zap size={14} className="tool-icon" />
+    <span>{tool.name}</span>
+  </div>
+);
+
+const LocalToolsCard: FC<{ onToolClick: (toolName: string) => void }> = ({ onToolClick }) => {
+  const [expanded, setExpanded] = useState(true);
+  const [workingDir, setWorkingDir] = useState(() => localToolsService.getWorkingDirectory() || '');
+  const [editingDir, setEditingDir] = useState(false);
+  const [tempDir, setTempDir] = useState('');
+
+  const handleSaveDir = () => {
+    const dir = tempDir.trim();
+    localToolsService.setWorkingDirectory(dir || null);
+    setWorkingDir(dir);
+    setEditingDir(false);
+  };
+
+  const handleEditDir = () => {
+    setTempDir(workingDir);
+    setEditingDir(true);
+  };
+
+  return (
+    <div className="server-card local-tools-card">
+      <div className="server-header">
+        <div
+          className="server-header-main"
+          onClick={() => setExpanded((p) => !p)}
+        >
+          <ChevronRight
+            size={16}
+            className="chevron"
+            style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
+          />
+          <span className="server-icon">
+            <FolderOpen size={16} />
+          </span>
+          <span className="server-name">Local Tools</span>
+        </div>
+      </div>
+
+      {expanded && (
+        <>
+          <div className="server-meta">
+            <div className="server-meta-row">
+              <span className="meta-label">Working Directory</span>
+            </div>
+            {editingDir ? (
+              <div className="working-dir-edit">
+                <input
+                  type="text"
+                  value={tempDir}
+                  onChange={(e) => setTempDir(e.target.value)}
+                  placeholder="/path/to/project"
+                  className="working-dir-input"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSaveDir();
+                    if (e.key === 'Escape') setEditingDir(false);
+                  }}
+                />
+                <div className="working-dir-actions">
+                  <button className="save-dir-btn" onClick={handleSaveDir}>Save</button>
+                  <button className="cancel-dir-btn" onClick={() => setEditingDir(false)}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <div className="working-dir-display" onClick={handleEditDir}>
+                {workingDir ? (
+                  <span className="working-dir-path">{workingDir}</span>
+                ) : (
+                  <span className="working-dir-placeholder">Click to set working directory...</span>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="tools-list">
+            {LOCAL_TOOLS.map((tool) => (
+              <ToolItem
+                key={tool.name}
+                tool={tool}
+                onClick={() => onToolClick(tool.name)}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 const ToolsPanel: FC<ToolsPanelProps> = ({
   servers,
   onServerConnect,
   onServerReconnect,
   onServerDisconnect,
   onServerDelete,
+  onServerUpdate,
   onToolClick,
   connectDeadlines,
   className,
@@ -338,6 +437,9 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
       </div>
 
       <div className="servers-list">
+        {/* Local Tools - always available */}
+        <LocalToolsCard onToolClick={onToolClick} />
+
         {sortedServers.map((server) => (
           <ServerCard
             key={server.id}
@@ -346,6 +448,7 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
             onConnect={() => onServerReconnect(server.id)}
             onDisconnect={() => onServerDisconnect(server.id)}
             onDelete={() => onServerDelete(server.id)}
+            onUpdateServer={onServerUpdate}
             connectDeadline={connectDeadlines[server.id]}
           />
         ))}
@@ -423,37 +526,48 @@ const ServerCard: FC<{
 
   useEffect(() => {
     setIconError(false);
+    setMenuOpen(false);
   }, [server.icon, server.id]);
 
   return (
     <div className={`server-card ${hasError ? 'has-error' : ''}`}>
-      <div className="server-header" onClick={() => setExpanded((p) => !p)}>
-        <ChevronRight
-          size={16}
-          className="chevron"
-          style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
-        />
-        <span className="server-icon">
-          {server.icon && !iconError ? (
-            <img
-              src={server.icon}
-              alt={server.name}
-              className="server-favicon"
-              onError={() => setIconError(true)}
-            />
-          ) : (
-            '🌐'
-          )}
-        </span>
-        <span
-          className="server-name clickable"
-          onClick={(e) => {
-            e.stopPropagation();
-            setShowDetails((p) => !p);
-          }}
+      <div className="server-header">
+        <div
+          className="server-header-main"
+          onClick={() => setExpanded((p) => !p)}
         >
-          {server.name}
-        </span>
+          <ChevronRight
+            size={16}
+            className="chevron"
+            style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
+          />
+          <span className="server-icon">
+            {server.icon && !iconError ? (
+              <img
+                src={server.icon}
+                alt={server.name}
+                className="server-favicon"
+                onError={() => setIconError(true)}
+              />
+            ) : (
+              '🌐'
+            )}
+          </span>
+          <span
+            className="server-name clickable"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowDetails((p) => !p);
+            }}
+          >
+            {server.name}
+          </span>
+          {hasError && server.error && (
+            <span className="server-error-inline" title={server.error}>
+              {server.error}
+            </span>
+          )}
+        </div>
         <div
           className="status-menu-wrapper"
           onClick={(e) => {
@@ -511,29 +625,15 @@ const ServerCard: FC<{
             onChange={(e) => setEditUrl(e.target.value)}
           />
           <div className="transport-label">Transport</div>
-          <div className="transport-options">
-            <button
-              type="button"
-              className={`transport-btn ${editTransport === 'http' ? 'active' : ''}`}
-              onClick={() => setEditTransport('http')}
-            >
-              HTTP
-            </button>
-            <button
-              type="button"
-              className={`transport-btn ${editTransport === 'sse' ? 'active' : ''}`}
-              onClick={() => setEditTransport('sse')}
-            >
-              SSE
-            </button>
-            <button
-              type="button"
-              className={`transport-btn ${editTransport === 'stdio' ? 'active' : ''}`}
-              onClick={() => setEditTransport('stdio')}
-            >
-              STDIO
-            </button>
-          </div>
+          <select
+            className="select-field"
+            value={editTransport}
+            onChange={(e) => setEditTransport(e.target.value as MCPServer['transport'])}
+          >
+            <option value="http">HTTP</option>
+            <option value="sse">SSE</option>
+            <option value="stdio">STDIO</option>
+          </select>
           <div className="auth-section">
             <div className="auth-label">Access Token <span className="optional-tag">(optional)</span></div>
             <input
@@ -590,6 +690,12 @@ const ServerCard: FC<{
                     : 'None'}
               </span>
             </div>
+            <div className="server-meta-row">
+              <span className="meta-label">Token</span>
+              <span className="meta-value token-value">
+                {server.accessToken ? server.accessToken : 'None'}
+              </span>
+            </div>
           </div>
 
           <div className="tools-list">
@@ -609,13 +715,6 @@ const ServerCard: FC<{
     </div>
   );
 };
-
-const ToolItem: FC<{ tool: MCPTool; onClick: () => void }> = ({ tool, onClick }) => (
-  <div className="tool-item" onClick={onClick} title={tool.description}>
-    <Zap size={14} className="tool-icon" />
-    <span>{tool.name}</span>
-  </div>
-);
 
 const StatusDot: FC<{
   status: MCPServer['status'];

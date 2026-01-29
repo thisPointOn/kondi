@@ -6,6 +6,7 @@ import { Paperclip, X } from 'lucide-react';
 import type { MCPServer, MCPTool, Message, ToolCall, CollaborationMode } from '../types/mcp';
 import { openaiClient } from '../services/openaiClient';
 import { anthropicClient } from '../services/anthropicClient';
+import { LOCAL_TOOLS, LOCAL_SERVER_ID } from '../services/localTools';
 import './ChatArea.css';
 
 interface AttachedFile {
@@ -606,7 +607,10 @@ const MessageRow: FC<{ message: Message; servers: MCPServer[] }> = ({ message, s
   const isUser = message.role === 'user';
   const provider = message.provider;
   const serverById = useMemo(
-    () => Object.fromEntries(servers.map((s) => [s.id, s.name])),
+    () => ({
+      [LOCAL_SERVER_ID]: 'Local',
+      ...Object.fromEntries(servers.map((s) => [s.id, s.name])),
+    }),
     [servers],
   );
 
@@ -704,9 +708,12 @@ const ToolAutocomplete: FC<{
   onSelect: (tool: MCPTool & { server: string }) => void;
   onClose: () => void;
 }> = ({ servers, onSelect }) => {
-  const allTools = servers
+  // Include local tools first, then MCP server tools
+  const localTools = LOCAL_TOOLS.map((t) => ({ ...t, server: 'Local' }));
+  const serverTools = servers
     .filter((s) => s.status === 'connected')
     .flatMap((s) => (s.tools || []).map((t) => ({ ...t, server: s.name })));
+  const allTools = [...localTools, ...serverTools];
 
   return (
     <div className="tool-autocomplete">

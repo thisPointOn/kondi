@@ -12,6 +12,7 @@ export interface MCPServer {
   clientSecret?: string;
   sessionId?: string;
   authHint?: 'none' | 'oauth' | 'token';
+  messageEndpoint?: string; // For SSE transport - the endpoint to POST JSON-RPC commands to
 }
 
 export interface MCPTool {

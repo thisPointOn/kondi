@@ -20,6 +20,13 @@ pub fn run() {
             commands::mcp_request,
             commands::anthropic_request,
             commands::probe_server,
+            // Local file system tools
+            commands::read_local_file,
+            commands::write_local_file,
+            commands::list_directory,
+            commands::get_home_directory,
+            commands::is_path_in_scope,
+            commands::run_command,
         ])
         .setup(|app| {
             // Set window icon for Linux

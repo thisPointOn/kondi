@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
+import { LOCAL_SERVER_ID, localToolsService } from './localTools';
 
 const BASE_SYSTEM_PROMPT = `You are ChatGPT, a helpful general-purpose AI assistant made by OpenAI. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
 
@@ -171,12 +172,20 @@ export class OpenAIClient {
 
         try {
           toolCall.status = 'running';
-          console.log('[OpenAI] Calling MCP tool:', toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);
-          const result = await mcpClient.callTool(
-            toolInfo.serverId,
-            toolInfo.tool.name,
-            toolCall.arguments
-          );
+          console.log('[OpenAI] Calling tool:', toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);
+
+          // Route to local tools service or MCP client
+          let result;
+          if (toolInfo.serverId === LOCAL_SERVER_ID) {
+            result = await localToolsService.callTool(toolInfo.tool.name, toolCall.arguments);
+          } else {
+            result = await mcpClient.callTool(
+              toolInfo.serverId,
+              toolInfo.tool.name,
+              toolCall.arguments
+            );
+          }
+
           console.log('[OpenAI] Tool result:', result);
           toolCall.result = result;
           toolCall.status = 'completed';

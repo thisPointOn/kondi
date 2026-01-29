@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
+import { LOCAL_SERVER_ID, localToolsService } from './localTools';
 
 type AnthropicMessage = {
   role: 'user' | 'assistant';
@@ -194,8 +195,16 @@ class AnthropicClient {
         };
         try {
           call.status = 'running';
-          console.log('[Anthropic] Calling MCP tool:', call.serverId, call.toolName, call.arguments);
-          const result = await mcpClient.callTool(call.serverId, call.toolName, call.arguments);
+          console.log('[Anthropic] Calling tool:', call.serverId, call.toolName, call.arguments);
+
+          // Route to local tools service or MCP client
+          let result;
+          if (call.serverId === LOCAL_SERVER_ID) {
+            result = await localToolsService.callTool(call.toolName, call.arguments);
+          } else {
+            result = await mcpClient.callTool(call.serverId, call.toolName, call.arguments);
+          }
+
           console.log('[Anthropic] Tool result:', result);
           call.result = result;
           call.status = 'completed';
