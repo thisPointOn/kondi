@@ -170,6 +170,36 @@
   background: #2a2a2a;
 }
 
+.chat-context-menu {
+  position: fixed;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 9999;
+  min-width: 140px;
+  padding: 4px 0;
+}
+
+.chat-menu-item {
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: #e8e8e8;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.chat-menu-item:hover {
+  background: #252525;
+}
+
+.chat-menu-item.danger {
+  color: #ef4444;
+}
+
 .light-theme .sidebar {
   background: #f0f0f0;
   border-right: 1px solid #d8d8d8;

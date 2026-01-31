@@ -13,6 +13,8 @@ export interface MCPServer {
   sessionId?: string;
   authHint?: 'none' | 'oauth' | 'token';
   messageEndpoint?: string; // For SSE transport - the endpoint to POST JSON-RPC commands to
+  type?: 'remote' | 'github_mcp_local';
+  metadata?: Record<string, any>;
 }
 
 export interface MCPTool {
@@ -62,4 +64,45 @@ export interface OAuthDiscovery {
   dynamicClientId?: string;
   dynamicClientSecret?: string;
   error?: string;
+}
+
+export interface GithubInstallResult {
+  serverPath: string;
+  entrypoint: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface CommandOutput {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  success: boolean;
+}
+
+export interface McpManifest {
+  name?: string;
+  version?: string;
+  description?: string;
+  entrypoint?: string;
+  runtime?: 'node' | 'python' | 'binary';
+  package?: {
+    name?: string;
+    version?: string;
+    manager?: 'npm' | 'pip' | 'uv' | 'none';
+    module_probe?: string;
+  };
+  // Run configuration - allows full customization
+  run?: {
+    command?: string;           // The command to execute (e.g., "python", "node", "npx")
+    args?: string[];            // Arguments to pass
+    env?: Record<string, string>; // Environment variables
+    workingDir?: string;        // Working directory relative to server path
+    shell?: boolean;            // Run via shell (for complex commands)
+  };
+  // Install configuration
+  install?: {
+    command?: string;           // Custom install command (overrides package.manager)
+    args?: string[];            // Arguments for install command
+  };
 }

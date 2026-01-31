@@ -1,8 +1,10 @@
 import { useMemo, useState, useEffect, type FC } from 'react';
-import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen } from 'lucide-react';
+import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import type { MCPServer, MCPTool, OAuthDiscovery } from '../types/mcp';
 import { LOCAL_TOOLS, localToolsService } from '../services/localTools';
+import { fetchGithubManifest, fetchGithubReadme } from '../services/githubManifestFetcher';
+import { mcpClient } from '../services/mcpClient';
 import './ToolsPanel.css';
 
 interface ToolsPanelProps {
@@ -19,13 +21,17 @@ interface ToolsPanelProps {
   onServerDisconnect: (serverId: string) => void;
   onServerDelete: (serverId: string) => void;
   onServerUpdate: (server: MCPServer) => void;
+  onServerAddLocal?: (server: MCPServer) => void;
+  onGithubCheck?: (params: { repoUrl: string; manifestRaw: string; readmeText: string }) => Promise<void>;
   onToolClick: (toolName: string) => void;
   connectDeadlines: Record<string, number>;
   className?: string;
 }
 
-type AddMode = null | 'options' | 'library' | 'custom';
+type AddMode = null | 'options' | 'library' | 'custom' | 'github';
 type AddPhase = 'url_entry' | 'probing' | 'credentials_required' | 'oauth_pending' | 'connecting';
+type AuthMethod = 'auto' | 'bearer' | 'none';
+type GithubPhase = 'form' | 'confirm' | 'downloading' | 'installing' | 'ready';
 
 // Helper components defined first so they can be used by main component
 const ToolItem: FC<{ tool: MCPTool; onClick: () => void }> = ({ tool, onClick }) => (
@@ -130,6 +136,8 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
   onServerDisconnect,
   onServerDelete,
   onServerUpdate,
+  onServerAddLocal,
+  onGithubCheck,
   onToolClick,
   connectDeadlines,
   className,
@@ -140,10 +148,20 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
   const [newServerName, setNewServerName] = useState('');
   const [newServerUrl, setNewServerUrl] = useState('');
   const [transport, setTransport] = useState<MCPServer['transport']>('http');
+  const [authMethod, setAuthMethod] = useState<AuthMethod>('auto');
+  const [bearerToken, setBearerToken] = useState('');
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [discovery, setDiscovery] = useState<OAuthDiscovery | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [githubRepoUrl, setGithubRepoUrl] = useState('');
+  const [githubRef, setGithubRef] = useState('');
+  const [githubManifestPath, setGithubManifestPath] = useState('kondi-mcp.json');
+  const [githubManifest, setGithubManifest] = useState<any | null>(null);
+  const [githubManifestRaw, setGithubManifestRaw] = useState<string>('');
+  const [githubWarning, setGithubWarning] = useState<string | null>(null);
+  const [githubReadme, setGithubReadme] = useState<string>('');
+  const [githubPhase, setGithubPhase] = useState<GithubPhase>('form');
 
   const sortedServers = useMemo(
     () => servers.map((s) => ({ ...s, tools: s.tools || [] })),
@@ -154,23 +172,68 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
     setNewServerName('');
     setNewServerUrl('');
     setTransport('http');
+    setAuthMethod('auto');
+    setBearerToken('');
     setClientId('');
     setClientSecret('');
     setDiscovery(null);
     setErrorMessage(null);
     setAddPhase('url_entry');
     setAddMode(null);
+    setGithubRepoUrl('');
+    setGithubRef('');
+    setGithubManifestPath('kondi-mcp.json');
+    setGithubManifest(null);
+    setGithubManifestRaw('');
+    setGithubWarning(null);
+    setGithubReadme('');
+    setGithubPhase('form');
   };
 
   const handleAddServer = async () => {
     if (!newServerName || !newServerUrl) return;
 
-    if (!isTauri) {
-      setErrorMessage('OAuth flow requires the desktop app (Tauri).');
+    setErrorMessage(null);
+
+    // Handle different auth methods
+    if (authMethod === 'bearer') {
+      // Bearer token auth - skip probing, connect directly with token
+      if (!bearerToken.trim()) {
+        setErrorMessage('Bearer token is required');
+        return;
+      }
+      setAddPhase('connecting');
+      try {
+        // Pass empty strings for clientId/clientSecret to signal manual token auth
+        // The 'token' authHint will be set in App.tsx
+        await onServerConnect(newServerName, newServerUrl, transport, bearerToken.trim(), '__bearer__', '');
+        resetForm();
+      } catch (err) {
+        setErrorMessage(err instanceof Error ? err.message : String(err));
+        setAddPhase('url_entry');
+      }
       return;
     }
 
-    setErrorMessage(null);
+    if (authMethod === 'none') {
+      // No auth - skip probing, connect directly without token
+      setAddPhase('connecting');
+      try {
+        await onServerConnect(newServerName, newServerUrl, transport);
+        resetForm();
+      } catch (err) {
+        setErrorMessage(err instanceof Error ? err.message : String(err));
+        setAddPhase('url_entry');
+      }
+      return;
+    }
+
+    // Auto-detect auth (existing OAuth discovery flow)
+    if (!isTauri) {
+      setErrorMessage('OAuth auto-detection requires the desktop app (Tauri).');
+      return;
+    }
+
     setAddPhase('probing');
 
     try {
@@ -285,6 +348,248 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
               <Settings2 size={16} />
               <span>Custom</span>
             </button>
+            <button className="add-option" onClick={() => setAddMode('github')}>
+              <Settings2 size={16} />
+              <span>GitHub MCP Server (Local)</span>
+            </button>
+          </div>
+        )}
+
+        {addMode === 'github' && (
+          <div className="add-server-form">
+            <div className="form-header">
+              <span>GitHub MCP Server (Local)</span>
+              <button className="cancel-btn" onClick={resetForm}>Cancel</button>
+            </div>
+
+            {githubWarning && (
+              <div className="discovery-warning">
+                <AlertCircle size={14} />
+                <span>{githubWarning}</span>
+              </div>
+            )}
+            {errorMessage && (
+              <div className="discovery-error">
+                <AlertCircle size={14} />
+                <span>{errorMessage}</span>
+              </div>
+            )}
+
+            {/* Phase: Form */}
+            {githubPhase === 'form' && (
+              <>
+                <input
+                  type="text"
+                  placeholder="Display name (e.g., Figma MCP)"
+                  value={newServerName}
+                  onChange={(e) => setNewServerName(e.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="GitHub repo URL (https://github.com/owner/repo)"
+                  value={githubRepoUrl}
+                  onChange={(e) => setGithubRepoUrl(e.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="Ref (tag/branch/commit, optional)"
+                  value={githubRef}
+                  onChange={(e) => setGithubRef(e.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="Manifest path (default kondi-mcp.json)"
+                  value={githubManifestPath}
+                  onChange={(e) => setGithubManifestPath(e.target.value)}
+                />
+                <div className="add-actions">
+                  <button
+                    className="submit-btn"
+                    onClick={async () => {
+                      try {
+                        setErrorMessage(null);
+                        setGithubWarning(null);
+                        setGithubReadme('');
+                        const { manifest: manifestObj, raw } = await fetchGithubManifest({
+                          repoUrl: githubRepoUrl.trim(),
+                          reference: githubRef.trim() || undefined,
+                          manifestPath: githubManifestPath.trim() || undefined,
+                        });
+                        setGithubManifest(manifestObj);
+                        setGithubManifestRaw(raw);
+                        if (
+                          !manifestObj?.package?.version ||
+                          /latest|\*|\^|~/.test(manifestObj?.package?.version)
+                        ) {
+                          setGithubWarning('Manifest is missing a pinned version; please verify before installing.');
+                        }
+                        try {
+                          const readme = await fetchGithubReadme(githubRepoUrl.trim(), githubRef.trim() || undefined);
+                          setGithubReadme(readme);
+                        } catch (e) {
+                          console.warn('[GitHub] README fetch failed:', e);
+                        }
+                      } catch (err) {
+                        setErrorMessage(err instanceof Error ? err.message : String(err));
+                      }
+                    }}
+                  >
+                    Fetch manifest
+                  </button>
+                </div>
+
+                {githubManifest && (
+                  <div className="github-manifest-preview">
+                    <div className="section-label">Manifest</div>
+                    <pre className="manifest-preview">
+                      {JSON.stringify(githubManifest, null, 2)}
+                    </pre>
+                  </div>
+                )}
+
+                {githubManifest && (
+                  <div className="add-actions">
+                    <button
+                      className="submit-btn"
+                      disabled={!newServerName || !githubRepoUrl || !githubManifest}
+                      onClick={() => setGithubPhase('confirm')}
+                    >
+                      Install & Add Server
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Phase: Downloading */}
+            {githubPhase === 'confirm' && (
+              <div className="discovery-info">
+                <AlertCircle size={14} />
+                <div style={{ width: '100%' }}>
+                  <div style={{ marginBottom: 8 }}>
+                    Review before install. This will download the repo to app data, install the pinned package, and add a local stdio MCP server.
+                  </div>
+                  <div className="github-manifest-preview" style={{ marginBottom: 8 }}>
+                    <div className="section-label">Planned install</div>
+                    <div style={{ fontSize: 12, lineHeight: 1.5 }}>
+                      <div><strong>Repo:</strong> {githubRepoUrl}</div>
+                      <div><strong>Ref:</strong> {githubRef || 'main (default)'}</div>
+                      <div><strong>Manifest path:</strong> {githubManifestPath}</div>
+                      <div><strong>Package:</strong> {githubManifest?.package?.name || 'unknown'}@{githubManifest?.package?.version || 'missing'}</div>
+                      <div><strong>Entrypoint:</strong> {Array.isArray(githubManifest?.mcp?.entrypoint) ? githubManifest.mcp.entrypoint.join(' ') : 'unknown'}</div>
+                      <div><strong>Env vars:</strong> {(githubManifest?.mcp?.env || []).map((e: any) => e.name).join(', ') || 'none'}</div>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                    <button
+                      className="submit-btn"
+                      onClick={async () => {
+                        if (!githubManifest) return;
+
+                        const serverId = crypto.randomUUID();
+                        setErrorMessage(null);
+
+                        try {
+                          // Phase 1: Download repository
+                          setGithubPhase('downloading');
+                          const downloadResult = await mcpClient.downloadGithubRepo(
+                            githubRepoUrl.trim(),
+                            githubRef.trim() || undefined,
+                            serverId
+                          );
+
+                          if (!downloadResult.success) {
+                            throw new Error(downloadResult.error || 'Failed to download repository');
+                          }
+
+                          // Phase 2: Install dependencies
+                          setGithubPhase('installing');
+                          const packageManager =
+                            (githubManifest as any)?.package?.manager ||
+                            ((githubManifest as any)?.runtime === 'python' ||
+                            (Array.isArray((githubManifest as any)?.mcp?.entrypoint) &&
+                              ((githubManifest as any).mcp.entrypoint as string[]).some((e: string) =>
+                                e.toLowerCase().includes('python') || e.toLowerCase().includes('py')
+                              ))
+                              ? 'pip'
+                              : 'npm');
+                          const installResult = await mcpClient.installMcpDependencies(downloadResult.serverPath, packageManager);
+
+                          if (!installResult.success && installResult.stderr) {
+                            console.warn('[GitHub] install warnings:', installResult.stderr);
+                          }
+
+                          // Phase 3: Create and add server
+                          setGithubPhase('ready');
+                          const server: MCPServer = {
+                            id: serverId,
+                            name: newServerName,
+                            url: githubRepoUrl.trim(),
+                            transport: 'stdio',
+                            status: 'disconnected',
+                            icon: '🌐',
+                            tools: [],
+                            type: 'github_mcp_local',
+                            metadata: {
+                              manifest: githubManifest,
+                              ref: githubRef.trim() || undefined,
+                              manifestPath: githubManifestPath.trim() || undefined,
+                              serverPath: downloadResult.serverPath,
+                            },
+                          };
+
+                          if (onServerAddLocal) {
+                            onServerAddLocal(server);
+                          } else {
+                            mcpClient.addServer(server);
+                          }
+
+                          if (onGithubCheck && githubManifestRaw) {
+                            onGithubCheck({
+                              repoUrl: githubRepoUrl.trim(),
+                              manifestRaw: githubManifestRaw,
+                              readmeText: githubReadme || '',
+                            }).catch((e) => console.warn('[GitHub] LLM check failed:', e));
+                          }
+
+                          resetForm();
+                        } catch (err) {
+                          setErrorMessage(err instanceof Error ? err.message : String(err));
+                          setGithubPhase('form');
+                        }
+                      }}
+                    >
+                      Confirm & Install
+                    </button>
+                    <button className="cancel-btn" onClick={() => setGithubPhase('form')}>Cancel</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Phase: Downloading */}
+            {githubPhase === 'downloading' && (
+              <div className="discovery-status">
+                <Loader2 size={20} className="spin" />
+                <span>Downloading repository...</span>
+              </div>
+            )}
+
+            {/* Phase: Installing */}
+            {githubPhase === 'installing' && (
+              <div className="discovery-status">
+                <Loader2 size={20} className="spin" />
+                <span>Installing dependencies (npm install)...</span>
+              </div>
+            )}
+
+            {/* Phase: Ready */}
+            {githubPhase === 'ready' && (
+              <div className="discovery-status">
+                <Loader2 size={20} className="spin" />
+                <span>Setting up server...</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -344,10 +649,37 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
                   {transport === 'sse' && 'SSE: streaming events from the server; ensure MCP supports SSE endpoints.'}
                   {transport === 'stdio' && 'STDIO: local process transport; useful for native MCPs (desktop only).'}
                 </div>
+
+                <div className="transport-label">Authentication</div>
+                <select
+                  className="select-field"
+                  value={authMethod}
+                  onChange={(e) => setAuthMethod(e.target.value as AuthMethod)}
+                >
+                  <option value="auto">Auto-detect (OAuth)</option>
+                  <option value="bearer">Bearer Token</option>
+                  <option value="none">None</option>
+                </select>
+                <div className="transport-hint">
+                  {authMethod === 'auto' && 'Auto-detect: Probes server and uses OAuth if required.'}
+                  {authMethod === 'bearer' && 'Bearer Token: Use a pre-configured API key or token.'}
+                  {authMethod === 'none' && 'None: Connect without authentication.'}
+                </div>
+
+                {authMethod === 'bearer' && (
+                  <input
+                    type="password"
+                    placeholder="Bearer token (e.g., your API key)"
+                    value={bearerToken}
+                    onChange={(e) => setBearerToken(e.target.value)}
+                    className="bearer-token-input"
+                  />
+                )}
+
                 <button
                   className="submit-btn"
                   onClick={handleAddServer}
-                  disabled={!newServerName || !newServerUrl}
+                  disabled={!newServerName || !newServerUrl || (authMethod === 'bearer' && !bearerToken.trim())}
                 >
                   Add Server
                 </button>
@@ -521,13 +853,11 @@ const ServerCard: FC<{
     ? Math.max(0, Math.ceil((connectDeadline - Date.now()) / 1000))
     : null;
   const authHint = server.authHint;
-  const [iconError, setIconError] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
-    setIconError(false);
     setMenuOpen(false);
-  }, [server.icon, server.id]);
+  }, [server.id]);
 
   return (
     <div className={`server-card ${hasError ? 'has-error' : ''}`}>
@@ -542,15 +872,10 @@ const ServerCard: FC<{
             style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
           />
           <span className="server-icon">
-            {server.icon && !iconError ? (
-              <img
-                src={server.icon}
-                alt={server.name}
-                className="server-favicon"
-                onError={() => setIconError(true)}
-              />
+            {server.type === 'github_mcp_local' ? (
+              <Terminal size={16} className="server-icon-svg local" />
             ) : (
-              '🌐'
+              <Globe size={16} className="server-icon-svg remote" />
             )}
           </span>
           <span

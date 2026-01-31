@@ -29,7 +29,11 @@ sha2 = "0.10"
 base64 = "0.21"
 webbrowser = "0.8"
 url = "2.4"
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "process", "io-util", "time"] }
 urlencoding = "2.1"
 dirs = "5.0"
 chrono = "0.4"
+zip = "0.6"
+flate2 = "1.0"
+tar = "0.4"
+uuid = { version = "1.0", features = ["v4"] }

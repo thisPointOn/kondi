@@ -607,7 +607,7 @@ const MessageRow: FC<{ message: Message; servers: MCPServer[] }> = ({ message, s
   const isUser = message.role === 'user';
   const provider = message.provider;
   const serverById = useMemo(
-    () => ({
+    (): Record<string, string> => ({
       [LOCAL_SERVER_ID]: 'Local',
       ...Object.fromEntries(servers.map((s) => [s.id, s.name])),
     }),

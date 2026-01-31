@@ -234,9 +234,14 @@ function App() {
       // Load server configs
       try {
         const configs = await invoke<
-          { id: string; name: string; url: string; transport: string; access_token?: string; client_id?: string; client_secret?: string; message_endpoint?: string }[]
+          { id: string; name: string; url: string; transport: string; access_token?: string; client_id?: string; client_secret?: string; message_endpoint?: string; type?: string; metadata?: Record<string, any> }[]
         >('get_server_configs');
         configs.forEach((config: any) => {
+          // Infer type from transport if not set (for backwards compatibility)
+          let serverType = config.type as MCPServer['type'] | undefined;
+          if (!serverType && config.transport === 'stdio') {
+            serverType = 'github_mcp_local';
+          }
           mcpClient.addServer({
             id: config.id,
             name: config.name,
@@ -247,6 +252,8 @@ function App() {
             clientId: config.client_id || undefined,
             clientSecret: config.client_secret || undefined,
             messageEndpoint: config.message_endpoint || undefined,
+            type: serverType,
+            metadata: config.metadata || undefined,
           });
         });
         refreshServers();
@@ -442,6 +449,18 @@ function App() {
     });
   };
 
+  const handleDeleteChat = (chatId: string) => {
+    setChats((prev) => {
+      const next = { ...prev };
+      delete next[chatId];
+      return next;
+    });
+    if (currentChatId === chatId) {
+      const remainingIds = Object.keys(chats).filter((id) => id !== chatId);
+      setCurrentChatId(remainingIds[0] || null);
+    }
+  };
+
   const chatMessages = currentChatId ? chats[currentChatId] || [] : [];
   const activeApiKey = provider === 'chatgpt' ? openaiKey : anthropicKey;
   const activeAnthropicModel = anthropicModel;
@@ -529,6 +548,55 @@ function App() {
     }
   };
 
+  // Run LLM check comparing manifest vs README and post result to a new chat
+  const handleGithubCheck = async (params: { repoUrl: string; manifestRaw: string; readmeText: string }) => {
+    const { repoUrl, manifestRaw, readmeText } = params;
+    const trimmedReadme = readmeText ? readmeText.slice(0, 6000) : 'README not available.';
+    const trimmedManifest = manifestRaw ? manifestRaw.slice(0, 6000) : '{}';
+
+    const prompt = `You are auditing an MCP server manifest against its README to spot risks and missing pieces.\n\nRepo: ${repoUrl}\n\nManifest (JSON):\n${trimmedManifest}\n\nREADME excerpt:\n${trimmedReadme}\n\nCheck:\n- Is the package name/version pinned and safe?\n- Does entrypoint look reasonable for MCP stdio?\n- Required env vars present/clear?\n- Any mismatches or missing info?\nReturn a concise bullet summary (3-6 bullets) with risks/warnings first.`;
+
+    const userMessage = {
+      id: crypto.randomUUID(),
+      role: 'user' as const,
+      content: prompt,
+      timestamp: new Date(),
+    };
+
+    const available = new Map<string, { serverId: string; tools: MCPTool[] }>();
+
+    try {
+      let assistantMessage;
+      if (provider === 'chatgpt' && openaiKey) {
+        openaiClient.setApiKey(openaiKey);
+        const res = await openaiClient.chat([userMessage], available, openaiModel);
+        assistantMessage = { ...res.message, timestamp: new Date() };
+      } else if (anthropicKey) {
+        anthropicClient.setApiKey(anthropicKey);
+        const res = await anthropicClient.chat([userMessage], available, anthropicModel);
+        assistantMessage = { ...res.message, timestamp: new Date() };
+      } else if (openaiKey) {
+        openaiClient.setApiKey(openaiKey);
+        const res = await openaiClient.chat([userMessage], available, openaiModel);
+        assistantMessage = { ...res.message, timestamp: new Date() };
+      } else {
+        throw new Error('No LLM API key configured.');
+      }
+
+      const chatId = crypto.randomUUID();
+      setChats((prev) => ({
+        ...prev,
+        [chatId]: [userMessage, assistantMessage],
+      }));
+      setCurrentChatId(chatId);
+      setCurrentView('chat');
+    } catch (err) {
+      console.error('[GitHub LLM check] failed:', err);
+      // eslint-disable-next-line no-alert
+      alert(`LLM check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
   const handleConnectServer = async (
     name: string,
     url: string,
@@ -537,6 +605,9 @@ function App() {
     clientId?: string,
     clientSecret?: string
   ) => {
+    // Check if this is manual bearer token auth (signaled by '__bearer__' clientId)
+    const isBearerAuth = clientId === '__bearer__';
+
     const server: MCPServer = {
       id: crypto.randomUUID(),
       name,
@@ -545,8 +616,9 @@ function App() {
       status: 'disconnected',
       icon: '🌐',
       accessToken,
-      clientId,
-      clientSecret,
+      clientId: isBearerAuth ? undefined : clientId,
+      clientSecret: isBearerAuth ? undefined : clientSecret,
+      authHint: isBearerAuth ? 'token' : undefined,
     };
 
     // Persist the server immediately so it remains visible even if validation fails.
@@ -701,6 +773,7 @@ function App() {
         currentChatId={currentChatId}
         onChatSelect={setCurrentChatId}
         onNewChat={handleNewChat}
+        onChatDelete={handleDeleteChat}
         chats={sidebarChats}
         showToolsPanel={showToolsPanel}
         onToggleToolsPanel={() => setShowToolsPanel((p) => !p)}
@@ -921,6 +994,11 @@ function App() {
           onServerDisconnect={handleDisconnectServer}
           onServerDelete={handleDeleteServer}
           onServerUpdate={handleUpdateServer}
+          onServerAddLocal={(server) => {
+            mcpClient.addServer(server);
+            refreshServers();
+          }}
+          onGithubCheck={handleGithubCheck}
           connectDeadlines={connectDeadlines}
           onToolClick={(toolName) => {
             setPendingToolInsert(toolName);

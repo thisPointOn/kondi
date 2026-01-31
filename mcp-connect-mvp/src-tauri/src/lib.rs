@@ -16,6 +16,9 @@ pub fn run() {
             commands::delete_server_config,
             commands::save_chats,
             commands::load_chats,
+            commands::fetch_github_manifest,
+            commands::fetch_github_readme,
+            commands::install_manifest_package,
             commands::start_oauth,
             commands::mcp_request,
             commands::anthropic_request,
@@ -27,6 +30,16 @@ pub fn run() {
             commands::get_home_directory,
             commands::is_path_in_scope,
             commands::run_command,
+            // GitHub sidecar / subprocess management
+            commands::download_github_repo,
+            commands::install_mcp_dependencies,
+            commands::start_mcp_process,
+            commands::send_mcp_message,
+            commands::read_mcp_response,
+            commands::stop_mcp_process,
+            commands::is_mcp_process_running,
+            commands::get_mcp_servers_dir,
+            commands::detect_python_command,
         ])
         .setup(|app| {
             // Set window icon for Linux

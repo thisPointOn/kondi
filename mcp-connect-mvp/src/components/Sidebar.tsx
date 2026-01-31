@@ -1,5 +1,5 @@
 import { Plus, Settings, ChevronDown, Check, Zap, MessageSquare, PanelLeftClose, PanelLeft } from 'lucide-react';
-import { useState, type FC } from 'react';
+import { useEffect, useState, type FC } from 'react';
 import './Sidebar.css';
 
 type SidebarChat = {
@@ -14,6 +14,7 @@ interface SidebarProps {
   currentChatId: string | null;
   onChatSelect: (id: string) => void;
   onNewChat: () => void;
+  onChatDelete: (id: string) => void;
   chats: SidebarChat[];
   showToolsPanel: boolean;
   onToggleToolsPanel: () => void;
@@ -26,6 +27,7 @@ const Sidebar: FC<SidebarProps> = ({
   currentChatId,
   onChatSelect,
   onNewChat,
+  onChatDelete,
   chats,
   showToolsPanel,
   onToggleToolsPanel,
@@ -34,6 +36,13 @@ const Sidebar: FC<SidebarProps> = ({
   const [collapsed, setCollapsed] = useState(false);
   const [chatsExpanded, setChatsExpanded] = useState(true);
   const [showChatsPopover, setShowChatsPopover] = useState(false);
+  const [chatMenu, setChatMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const handleGlobalClick = () => setChatMenu(null);
+    window.addEventListener('click', handleGlobalClick);
+    return () => window.removeEventListener('click', handleGlobalClick);
+  }, []);
 
   return (
     <aside className={['sidebar', collapsed ? 'collapsed' : '', className].filter(Boolean).join(' ')}>
@@ -87,10 +96,14 @@ const Sidebar: FC<SidebarProps> = ({
                       onViewChange('chat');
                       setShowChatsPopover(false);
                     }}
-                  >
-                    <span className="popover-item-title">{chat.title}</span>
-                    <span className="popover-item-time">{chat.timestamp}</span>
-                  </div>
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setChatMenu({ id: chat.id, x: e.clientX, y: e.clientY });
+                  }}
+                >
+                  <span className="popover-item-title">{chat.title}</span>
+                  <span className="popover-item-time">{chat.timestamp}</span>
+                </div>
                 ))}
                 {chats.length === 0 && (
                   <div className="popover-item empty">No chats yet</div>
@@ -127,6 +140,10 @@ const Sidebar: FC<SidebarProps> = ({
                     onChatSelect(chat.id);
                     onViewChange('chat');
                   }}
+                  onDelete={(e) => {
+                    e.preventDefault();
+                    setChatMenu({ id: chat.id, x: e.clientX, y: e.clientY });
+                  }}
                 />
               ))}
               {chats.length === 0 && (
@@ -147,16 +164,41 @@ const Sidebar: FC<SidebarProps> = ({
         <Settings size={18} />
         {!collapsed && <span>Settings</span>}
       </button>
+
+      {chatMenu && (
+        <div
+          className="chat-context-menu"
+          style={{ top: chatMenu.y, left: chatMenu.x }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="chat-menu-item danger"
+            onClick={() => {
+              onChatDelete(chatMenu.id);
+              setChatMenu(null);
+            }}
+          >
+            Delete chat
+          </button>
+        </div>
+      )}
     </aside>
   );
 };
 
-const ChatItem: FC<{ chat: SidebarChat; active?: boolean; onClick: () => void }> = ({
+const ChatItem: FC<{ chat: SidebarChat; active?: boolean; onClick: () => void; onDelete: (e: React.MouseEvent) => void }> = ({
   chat,
   active,
   onClick,
+  onDelete,
 }) => (
-  <div className={`chat-item ${active ? 'active' : ''}`} onClick={onClick}>
+  <div
+    className={`chat-item ${active ? 'active' : ''}`}
+    onClick={onClick}
+    onContextMenu={(e) => {
+      onDelete(e);
+    }}
+  >
     <span className="chat-title">{chat.title}</span>
     <span className="chat-time">{chat.timestamp}</span>
   </div>
