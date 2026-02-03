@@ -1,12 +1,13 @@
 use tauri::image::Image;
-use tauri::Manager;
+use tauri::{Manager, RunEvent};
 
 mod commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(commands::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::save_api_keys,
@@ -40,6 +41,53 @@ pub fn run() {
             commands::is_mcp_process_running,
             commands::get_mcp_servers_dir,
             commands::detect_python_command,
+            // CLI OAuth credentials
+            commands::check_cli_credentials,
+            commands::get_cli_token,
+            commands::run_cli_login,
+            // LLM Provider OAuth
+            commands::start_anthropic_oauth,
+            commands::exchange_anthropic_code,
+            commands::refresh_anthropic_token,
+            commands::start_openai_oauth,
+            commands::refresh_openai_token,
+            // Claude Code CLI Wrapper
+            commands::run_claude_command,
+            commands::run_claude_streaming,
+            commands::run_claude_login,
+            // Codex CLI Wrapper (OpenAI)
+            commands::run_codex_command,
+            commands::run_codex_streaming,
+            commands::login_codex_cli,
+            commands::is_codex_logged_in,
+            // Codex Config Management
+            commands::update_codex_config,
+            commands::remove_codex_mcp_server,
+            commands::run_mcp_remote_auth,
+            // MCP Proxy Management
+            commands::list_proxy_configs,
+            commands::get_proxy_config,
+            commands::save_proxy_config,
+            commands::delete_proxy_config,
+            commands::create_proxy_from_server,
+            commands::start_proxy,
+            commands::stop_proxy,
+            commands::is_proxy_running,
+            commands::get_proxy_health,
+            commands::trigger_proxy_auth,
+            commands::reload_proxy,
+            commands::reauthenticate_proxy,
+            commands::get_all_proxy_statuses,
+            // Proxy Logs
+            commands::get_proxy_logs,
+            commands::clear_proxy_logs,
+            commands::get_all_proxy_logs,
+            // LLM Config Sync
+            commands::sync_proxy_to_claude_config,
+            commands::remove_proxy_from_claude_config,
+            commands::sync_proxy_to_codex_config,
+            commands::remove_proxy_from_codex_config,
+            commands::sync_all_proxies_to_llm_configs,
         ])
         .setup(|app| {
             // Set window icon for Linux
@@ -57,6 +105,17 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // Run with event handler for cleanup
+    app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
+            println!("[App] Cleaning up proxy processes...");
+            // Get the AppState and stop all proxies
+            if let Some(state) = app_handle.try_state::<commands::AppState>() {
+                commands::stop_all_proxies(&state);
+            }
+        }
+    });
 }

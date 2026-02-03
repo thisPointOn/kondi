@@ -1,12 +1,24 @@
 import { useEffect, useMemo, useState, type FC, type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
-import Sidebar from './components/Sidebar';
+import Sidebar, { type AppView } from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import ToolsPanel from './components/ToolsPanel';
+import WorkflowLibrary from './components/WorkflowLibrary';
+import PlannerChat from './components/PlannerChat';
+import ExecutionMonitor from './components/ExecutionMonitor';
+import ProviderSettings from './components/ProviderSettings';
+import { CouncilLibrary, CouncilView } from './components/council';
+import { createOrchestrator, type Council } from './council';
+import { llmAdapter } from './council/llm-adapter';
 import { mcpClient } from './services/mcpClient';
 import { openaiClient } from './services/openaiClient';
 import { anthropicClient } from './services/anthropicClient';
+import { oauthService } from './services/oauthService';
 import { LOCAL_SERVER_ID, LOCAL_TOOLS, localToolsService } from './services/localTools';
+import { mcpCliSync } from './services/mcpCliSync';
+import { startupValidator, type StartupValidationReport } from './services/startupValidator';
+import * as proxyService from './services/proxyService';
+import { loginCodexCli } from './services/cliCredentials';
 import type { MCPServer, MCPTool, Message } from './types/mcp';
 import './App.css';
 import { invoke } from '@tauri-apps/api/core';
@@ -19,16 +31,40 @@ type SubscriptionPlan = 'free' | 'pro' | 'lifetime';
 const APP_VERSION = (pkg?.version as string) || '0.0.0';
 const MAX_CHATS = 20;
 const CHAT_STORAGE_KEY = 'mcp-chats';
+const WORKFLOW_STORAGE_KEY = 'mcp-workflows';
+
+// Workflow types
+interface WorkflowStep {
+  id: string;
+  name: string;
+  type: string;
+  description?: string;
+}
+
+interface WorkflowSpec {
+  id: string;
+  name: string;
+  description?: string;
+  status: 'draft' | 'ready';
+  steps: WorkflowStep[];
+  inputs?: Array<{ name: string; type: string; required?: boolean }>;
+  outputs?: Array<{ name: string; type: string }>;
+  createdAt: string;
+  updatedAt: string;
+}
 
 function App() {
-  const [currentView, setCurrentView] = useState<'chat' | 'settings'>('chat');
+  const [currentView, setCurrentView] = useState<AppView>('chat');
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [chats, setChats] = useState<ChatRecord>({});
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [pendingToolInsert, setPendingToolInsert] = useState<string | null>(null);
   const [openaiKey, setOpenaiKey] = useState('');
   const [anthropicKey, setAnthropicKey] = useState('');
-  const [provider, setProvider] = useState<'claude' | 'chatgpt'>('claude');
+  const [provider, setProvider] = useState<'claude' | 'chatgpt'>(() => {
+    const saved = localStorage.getItem('kondi-provider');
+    return (saved === 'chatgpt' ? 'chatgpt' : 'claude') as 'claude' | 'chatgpt';
+  });
   const [showToolsPanel, setShowToolsPanel] = useState(true);
   const [messageCountToday, setMessageCountToday] = useState(0);
   const [currentPlan, setCurrentPlan] = useState<SubscriptionPlan>('free');
@@ -37,9 +73,13 @@ function App() {
   const [anthropicKeyStatus, setAnthropicKeyStatus] = useState<'idle' | 'ok' | 'error' | 'checking'>('idle');
   const [openaiKeyError, setOpenaiKeyError] = useState<string | null>(null);
   const [anthropicKeyError, setAnthropicKeyError] = useState<string | null>(null);
-  const [openaiModel, setOpenaiModel] = useState('gpt-4o');
+  const [openaiModel, setOpenaiModel] = useState(() => {
+    return localStorage.getItem('kondi-openai-model') || 'gpt-4o';
+  });
   const [openaiModels, setOpenaiModels] = useState<string[]>([]);
-  const [anthropicModel, setAnthropicModel] = useState('claude-3-5-sonnet-latest');
+  const [anthropicModel, setAnthropicModel] = useState(() => {
+    return localStorage.getItem('kondi-anthropic-model') || 'claude-3-5-sonnet-latest';
+  });
   const [anthropicModels, setAnthropicModels] = useState<string[]>([]);
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
   const [updateMessage, setUpdateMessage] = useState<string>('Not checked yet.');
@@ -51,6 +91,258 @@ function App() {
     return saved === 'light' ? 'light' : 'dark';
   });
   const [hasLoadedChats, setHasLoadedChats] = useState(false);
+  const [currentExecutionId, setCurrentExecutionId] = useState<string | null>(null);
+
+  // Workflow state
+  const [workflows, setWorkflows] = useState<WorkflowSpec[]>([]);
+  const [hasLoadedWorkflows, setHasLoadedWorkflows] = useState(false);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [editingWorkflowId, setEditingWorkflowId] = useState<string | null>(null);
+
+  // Council state
+  const [currentCouncilId, setCurrentCouncilId] = useState<string | null>(null);
+
+  // CLI OAuth credentials state
+  const [cliCredentials, setCLICredentials] = useState<{
+    codex: { available: boolean; expiresAt?: number };
+    claude: { available: boolean; expiresAt?: number };
+    gemini: { available: boolean; expiresAt?: number };
+    qwen: { available: boolean; expiresAt?: number };
+    minimax: { available: boolean; expiresAt?: number };
+  }>({
+    codex: { available: false },
+    claude: { available: false },
+    gemini: { available: false },
+    qwen: { available: false },
+    minimax: { available: false },
+  });
+
+  // Auth method preference: 'oauth' prefers CLI tokens, 'api_key' uses manual API keys
+  const [anthropicAuthMethod, setAnthropicAuthMethod] = useState<'oauth' | 'api_key'>(() => {
+    const saved = localStorage.getItem('anthropic-auth-method');
+    return (saved === 'api_key' ? 'api_key' : 'oauth') as 'oauth' | 'api_key';
+  });
+  const [openaiAuthMethod, setOpenaiAuthMethod] = useState<'oauth' | 'api_key'>(() => {
+    const saved = localStorage.getItem('openai-auth-method');
+    return (saved === 'api_key' ? 'api_key' : 'oauth') as 'oauth' | 'api_key';
+  });
+  const [geminiAuthMethod, setGeminiAuthMethod] = useState<'oauth' | 'api_key'>(() => {
+    const saved = localStorage.getItem('gemini-auth-method');
+    return (saved === 'api_key' ? 'api_key' : 'oauth') as 'oauth' | 'api_key';
+  });
+  const [qwenAuthMethod, setQwenAuthMethod] = useState<'oauth' | 'api_key'>(() => {
+    const saved = localStorage.getItem('qwen-auth-method');
+    return (saved === 'api_key' ? 'api_key' : 'oauth') as 'oauth' | 'api_key';
+  });
+  const [minimaxAuthMethod, setMinimaxAuthMethod] = useState<'oauth' | 'api_key'>(() => {
+    const saved = localStorage.getItem('minimax-auth-method');
+    return (saved === 'api_key' ? 'api_key' : 'oauth') as 'oauth' | 'api_key';
+  });
+
+  // Startup validation state
+  const [validationReport, setValidationReport] = useState<StartupValidationReport | null>(null);
+  const [isValidating, setIsValidating] = useState(false);
+  const [isCodexLoggingIn, setIsCodexLoggingIn] = useState(false);
+
+  // Check CLI credentials on mount and load OAuth token if available
+  useEffect(() => {
+    const checkCLICredentials = async () => {
+      try {
+        const creds = await invoke<{
+          codex?: { available: boolean; expires_at?: number };
+          claude?: { available: boolean; expires_at?: number };
+          gemini?: { available: boolean; expires_at?: number };
+          qwen?: { available: boolean; expires_at?: number };
+          minimax?: { available: boolean; expires_at?: number };
+        }>('check_cli_credentials');
+
+        // Check for OAuth tokens stored in oauthService first (our proper OAuth implementation)
+        const anthropicOAuth = oauthService.getConnectionStatus('anthropic');
+        const openaiOAuth = oauthService.getConnectionStatus('openai');
+
+        // Update CLI credentials state, preferring oauthService tokens
+        setCLICredentials({
+          codex: {
+            available: openaiOAuth.connected || creds.codex?.available || false,
+            expiresAt: openaiOAuth.expiresAt || creds.codex?.expires_at
+          },
+          claude: {
+            available: anthropicOAuth.connected || creds.claude?.available || false,
+            expiresAt: anthropicOAuth.expiresAt || creds.claude?.expires_at
+          },
+          gemini: { available: creds.gemini?.available || false, expiresAt: creds.gemini?.expires_at },
+          qwen: { available: creds.qwen?.available || false, expiresAt: creds.qwen?.expires_at },
+          minimax: { available: creds.minimax?.available || false, expiresAt: creds.minimax?.expires_at },
+        });
+        console.log('[App] Credentials loaded - OAuth service:', { anthropicOAuth, openaiOAuth }, 'CLI:', creds);
+
+        // Load Anthropic auth: check for CLI wrapper mode first, then other methods
+        const savedAnthropicAuth = localStorage.getItem('anthropic-auth-method');
+        const useCliWrapper = localStorage.getItem('anthropic-use-cli-wrapper') === 'true';
+
+        if (useCliWrapper && savedAnthropicAuth === 'oauth') {
+          // CLI wrapper mode - verify Claude Code is still available
+          const cliStatus = await anthropicClient.checkCliAvailable();
+          if (cliStatus.installed && cliStatus.authenticated) {
+            anthropicClient.setUseCliWrapper(true);
+            setCLICredentials(prev => ({ ...prev, claude: { available: true } }));
+            console.log('[App] Claude CLI wrapper mode restored, version:', cliStatus.version);
+          } else {
+            console.warn('[App] Claude CLI no longer available, disabling wrapper mode');
+            localStorage.removeItem('anthropic-use-cli-wrapper');
+          }
+        } else if (savedAnthropicAuth === 'oauth') {
+          // Fallback to other auth methods
+          if (anthropicOAuth.connected) {
+            anthropicClient.setUseOAuth(true);
+            console.log('[App] Anthropic OAuth enabled via oauthService');
+          } else if (creds.claude?.available) {
+            // Fallback to CLI tokens
+            try {
+              const token = await invoke<string | null>('get_cli_token', { cliTool: 'claude' });
+              if (token) {
+                anthropicClient.setOAuthToken(token);
+                anthropicClient.setUseOAuth(true);
+                console.log('[App] Claude OAuth token loaded from CLI (fallback)');
+              }
+            } catch (err) {
+              console.warn('[App] Failed to get Claude OAuth token:', err);
+            }
+          }
+        }
+
+        // Load OpenAI auth: check for CLI wrapper mode first, then other methods
+        const savedOpenAIAuth = localStorage.getItem('openai-auth-method');
+        const useOpenAICliWrapper = localStorage.getItem('openai-use-cli-wrapper') === 'true';
+
+        if (useOpenAICliWrapper && savedOpenAIAuth === 'oauth') {
+          // CLI wrapper mode - verify Codex CLI is still available
+          const cliStatus = await openaiClient.checkCliAvailable();
+          if (cliStatus.installed && cliStatus.authenticated) {
+            openaiClient.setUseCliWrapper(true);
+            setCLICredentials(prev => ({ ...prev, codex: { available: true } }));
+            console.log('[App] Codex CLI wrapper mode restored, version:', cliStatus.version);
+          } else {
+            console.warn('[App] Codex CLI no longer available, disabling wrapper mode');
+            localStorage.removeItem('openai-use-cli-wrapper');
+          }
+        } else if (savedOpenAIAuth === 'oauth') {
+          // Fallback to other auth methods
+          if (openaiOAuth.connected) {
+            // Use oauthService tokens (proper OAuth implementation)
+            openaiClient.setUseOAuth(true);
+            console.log('[App] OpenAI OAuth enabled via oauthService');
+          } else if (creds.codex?.available) {
+            // Fallback to CLI tokens
+            try {
+              const token = await invoke<string | null>('get_cli_token', { cliTool: 'codex' });
+              if (token) {
+                openaiClient.setOAuthToken(token);
+                openaiClient.setUseOAuth(true);
+                console.log('[App] Codex OAuth token loaded from CLI (fallback)');
+              }
+            } catch (err) {
+              console.warn('[App] Failed to get Codex OAuth token:', err);
+            }
+          }
+        }
+
+        // Load Gemini OAuth token if available
+        if (creds.gemini?.available) {
+          try {
+            const token = await invoke<string | null>('get_cli_token', { cliTool: 'gemini' });
+            if (token) {
+              // TODO: geminiClient.setOAuthToken(token) when client is implemented
+              console.log('[App] Gemini OAuth token loaded from CLI');
+            }
+          } catch (err) {
+            console.warn('[App] Failed to get Gemini OAuth token:', err);
+          }
+        }
+
+        // Load Qwen OAuth token if available
+        if (creds.qwen?.available) {
+          try {
+            const token = await invoke<string | null>('get_cli_token', { cliTool: 'qwen' });
+            if (token) {
+              // TODO: qwenClient.setOAuthToken(token) when client is implemented
+              console.log('[App] Qwen OAuth token loaded from CLI');
+            }
+          } catch (err) {
+            console.warn('[App] Failed to get Qwen OAuth token:', err);
+          }
+        }
+
+        // Load MiniMax OAuth token if available
+        if (creds.minimax?.available) {
+          try {
+            const token = await invoke<string | null>('get_cli_token', { cliTool: 'minimax' });
+            if (token) {
+              // TODO: minimaxClient.setOAuthToken(token) when client is implemented
+              console.log('[App] MiniMax OAuth token loaded from CLI');
+            }
+          } catch (err) {
+            console.warn('[App] Failed to get MiniMax OAuth token:', err);
+          }
+        }
+      } catch (err) {
+        console.warn('[App] Failed to check CLI credentials:', err);
+      }
+    };
+
+    checkCLICredentials();
+  }, []);
+
+  // Run startup validation after keys are loaded
+  useEffect(() => {
+    if (!hasLoadedKeys) return;
+
+    // Small delay to let CLI credentials settle
+    const timer = setTimeout(async () => {
+      setIsValidating(true);
+
+      try {
+        const report = await startupValidator.validate({
+          onProgress: (msg) => console.log('[StartupValidator]', msg),
+          onProviderValidated: (result) => {
+            console.log('[StartupValidator] Provider validated:', result);
+          },
+          onServerValidated: (serverId, result) => {
+            console.log('[StartupValidator] Server validated:', serverId, result);
+            // If server validation failed, update the server status
+            if (result.status === 'error') {
+              setServers((prev) =>
+                prev.map((s) =>
+                  s.name === result.provider
+                    ? { ...s, status: 'error' as const, error: result.message }
+                    : s
+                )
+              );
+            }
+          },
+        });
+
+        setValidationReport(report);
+        console.log('[StartupValidator] Validation complete:', report.summary);
+
+        // If there are issues, log them clearly
+        if (report.overallStatus !== 'healthy') {
+          console.warn(
+            '[StartupValidator] Issues found:',
+            [...report.llmProviders, ...report.mcpServers]
+              .filter((r) => r.status === 'error')
+              .map((r) => `${r.provider}: ${r.message}`)
+          );
+        }
+      } catch (err) {
+        console.error('[StartupValidator] Validation failed:', err);
+      } finally {
+        setIsValidating(false);
+      }
+    }, 1000); // 1 second delay to let things settle
+
+    return () => clearTimeout(timer);
+  }, [hasLoadedKeys]);
 
   // Create a default chat if none loaded (only after we've attempted to load)
   useEffect(() => {
@@ -60,6 +352,48 @@ function App() {
       setChats({ [newId]: [] });
     }
   }, [currentChatId, hasLoadedChats]);
+
+  // Persist provider and model selections
+  useEffect(() => {
+    localStorage.setItem('kondi-provider', provider);
+  }, [provider]);
+
+  useEffect(() => {
+    localStorage.setItem('kondi-openai-model', openaiModel);
+  }, [openaiModel]);
+
+  useEffect(() => {
+    localStorage.setItem('kondi-anthropic-model', anthropicModel);
+  }, [anthropicModel]);
+
+  // Load workflows from storage on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        // Try localStorage first
+        const saved = localStorage.getItem(WORKFLOW_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved) as WorkflowSpec[];
+          console.log('[App] Loaded', parsed.length, 'workflows from storage');
+          setWorkflows(parsed);
+        }
+      } catch (e) {
+        console.warn('[App] Failed to load workflows:', e);
+      }
+      setHasLoadedWorkflows(true);
+    })();
+  }, []);
+
+  // Persist workflows when they change
+  useEffect(() => {
+    if (!hasLoadedWorkflows) return;
+    try {
+      localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(workflows));
+      console.log('[App] Saved', workflows.length, 'workflows to storage');
+    } catch (e) {
+      console.warn('[App] Failed to save workflows:', e);
+    }
+  }, [workflows, hasLoadedWorkflows]);
 
   // Load existing server state from the MCP client
   const refreshServers = () => {
@@ -196,23 +530,53 @@ function App() {
     })();
 
     // LocalStorage restore (works in web and Tauri)
+    // Also track which servers were connected so we can auto-reconnect
     const saved = localStorage.getItem('mcp-servers');
+    const serversToAutoConnect: MCPServer[] = [];
     if (saved) {
       try {
         const parsed = JSON.parse(saved) as Record<string, MCPServer> | MCPServer[];
         const configsArray = Array.isArray(parsed) ? parsed : Object.values(parsed);
         configsArray.forEach((config) => {
-          mcpClient.addServer({
+          const server: MCPServer = {
             ...config,
             transport: config.transport || 'http',
             status: 'disconnected',
             clientId: config.clientId,
             clientSecret: config.clientSecret,
-          });
+          };
+          mcpClient.addServer(server);
+          // If the server was previously connected (check localStorage flag), add to auto-connect list
+          const wasConnected = localStorage.getItem(`mcp-server-connected-${config.id}`);
+          if (wasConnected === 'true') {
+            serversToAutoConnect.push(server);
+          }
         });
       } catch (e) {
         console.error('Failed to load saved servers:', e);
       }
+    }
+
+    // Auto-reconnect previously connected servers
+    if (serversToAutoConnect.length > 0) {
+      console.log('[App] Auto-reconnecting', serversToAutoConnect.length, 'previously connected servers');
+      // Run reconnections asynchronously to not block app startup
+      (async () => {
+        for (const server of serversToAutoConnect) {
+          try {
+            console.log('[App] Auto-reconnecting server:', server.name);
+            await mcpClient.connectServer(server);
+            refreshServers();
+          } catch (err) {
+            console.warn('[App] Failed to auto-reconnect server:', server.name, err);
+            // Mark as error so user sees it
+            mcpClient.setServerStatus(server.id, 'error', 'Auto-reconnect failed');
+            refreshServers();
+          }
+        }
+        console.log('[App] Auto-reconnection complete');
+        // Note: Validation will run separately via the hasLoadedKeys useEffect
+      })();
     }
 
     // Tauri store restore (best effort)
@@ -348,6 +712,41 @@ function App() {
       anthropicClient.setApiKey(anthropicKey);
     }
   }, [anthropicKey]);
+
+  // Sync Anthropic auth method preference
+  useEffect(() => {
+    anthropicClient.setUseOAuth(anthropicAuthMethod === 'oauth');
+    localStorage.setItem('anthropic-auth-method', anthropicAuthMethod);
+    console.log('[App] Anthropic auth method:', anthropicAuthMethod);
+  }, [anthropicAuthMethod]);
+
+  // Sync OpenAI auth method preference
+  useEffect(() => {
+    openaiClient.setUseOAuth(openaiAuthMethod === 'oauth');
+    localStorage.setItem('openai-auth-method', openaiAuthMethod);
+    console.log('[App] OpenAI auth method:', openaiAuthMethod);
+  }, [openaiAuthMethod]);
+
+  // Sync Gemini auth method preference
+  useEffect(() => {
+    localStorage.setItem('gemini-auth-method', geminiAuthMethod);
+    console.log('[App] Gemini auth method:', geminiAuthMethod);
+    // TODO: geminiClient.setUseOAuth when client is implemented
+  }, [geminiAuthMethod]);
+
+  // Sync Qwen auth method preference
+  useEffect(() => {
+    localStorage.setItem('qwen-auth-method', qwenAuthMethod);
+    console.log('[App] Qwen auth method:', qwenAuthMethod);
+    // TODO: qwenClient.setUseOAuth when client is implemented
+  }, [qwenAuthMethod]);
+
+  // Sync MiniMax auth method preference
+  useEffect(() => {
+    localStorage.setItem('minimax-auth-method', minimaxAuthMethod);
+    console.log('[App] MiniMax auth method:', minimaxAuthMethod);
+    // TODO: minimaxClient.setUseOAuth when client is implemented
+  }, [minimaxAuthMethod]);
 
   // Persist API keys and Anthropic model (only after initial load to avoid overwriting)
   useEffect(() => {
@@ -650,6 +1049,15 @@ function App() {
         const { [server.id]: _, ...rest } = prev;
         return rest;
       });
+
+      // Sync to CLI tools (Claude Code, Codex) so they can call the tools directly
+      mcpCliSync.syncServer(server).catch(err => {
+        console.warn('[App] Failed to sync server to CLI tools:', err);
+      });
+
+      // Track that this server was connected for auto-reconnect on next startup
+      localStorage.setItem(`mcp-server-connected-${server.id}`, 'true');
+
       refreshServers();
     } catch (error) {
       console.error('[App] Connect server failed:', error);
@@ -669,17 +1077,86 @@ function App() {
 
   const handleDisconnectServer = (serverId: string) => {
     mcpClient.disconnect(serverId);
+    // Clear auto-reconnect flag when manually disconnecting
+    localStorage.removeItem(`mcp-server-connected-${serverId}`);
     refreshServers();
   };
 
   const handleDeleteServer = (serverId: string) => {
+    // Find server before removing to unsync from CLI tools
+    const server = servers.find(s => s.id === serverId);
+    if (server) {
+      mcpCliSync.unsyncServer(server).catch(err => {
+        console.warn('[App] Failed to unsync server from CLI tools:', err);
+      });
+    }
     mcpClient.remove(serverId);
+    // Clear auto-reconnect flag
+    localStorage.removeItem(`mcp-server-connected-${serverId}`);
     refreshServers();
   };
 
   const handleUpdateServer = (server: MCPServer) => {
     mcpClient.updateServer(server);
     refreshServers();
+  };
+
+  const handleReauthenticateServer = async (server: MCPServer) => {
+    console.log('[App] Re-authenticating server:', server.name);
+
+    // Update status to show we're working on it
+    setServers((prev) =>
+      prev.map((s) => (s.id === server.id ? { ...s, status: 'connecting' as const, error: undefined } : s))
+    );
+
+    try {
+      // Use the new reauthenticate_proxy command which handles:
+      // 1. Stopping the proxy
+      // 2. Re-probing the server for OAuth endpoints
+      // 3. Dynamic client registration to get fresh credentials
+      // 4. OAuth flow in browser
+      // 5. Updating proxy config with new credentials
+      // 6. Restarting the proxy
+      const result = await proxyService.reauthenticateProxy(server.id);
+      console.log('[App] Re-authentication result:', result);
+
+      // Build the local proxy URL from the returned port
+      const proxyUrl = `http://127.0.0.1:${result.port}/mcp`;
+      console.log('[App] Setting messageEndpoint to proxy URL:', proxyUrl);
+
+      // Update server with new token AND the proxy messageEndpoint
+      // The messageEndpoint is critical - it's what mcpClient uses for all requests
+      const updatedServer: MCPServer = {
+        ...server,
+        accessToken: result.access_token,
+        messageEndpoint: proxyUrl,
+        status: 'connected' as const,
+        error: undefined,
+      };
+      mcpClient.updateServer(updatedServer);
+
+      // Reconnect to refresh tools - this will use the messageEndpoint we just set
+      await mcpClient.connectServer(updatedServer);
+
+      // Sync to CLI tools so they also have the new proxy endpoint
+      mcpCliSync.syncServer(updatedServer).catch(err => {
+        console.warn('[App] Failed to sync re-authenticated server to CLI tools:', err);
+      });
+
+      refreshServers();
+      console.log('[App] Re-authentication complete, UI refreshed');
+
+    } catch (err) {
+      console.error('[App] Re-authentication failed:', err);
+      setServers((prev) =>
+        prev.map((s) =>
+          s.id === server.id
+            ? { ...s, status: 'error' as const, error: err instanceof Error ? err.message : 'Re-authentication failed' }
+            : s
+        )
+      );
+      throw err;
+    }
   };
 
   const handleReconnectServer = async (serverId: string) => {
@@ -716,6 +1193,8 @@ function App() {
         const { [serverId]: _, ...rest } = prev;
         return rest;
       });
+      // Track that this server is connected for auto-reconnect on next startup
+      localStorage.setItem(`mcp-server-connected-${serverId}`, 'true');
       refreshServers();
     } catch (error) {
       console.error('[App] Reconnect failed:', error);
@@ -777,118 +1256,756 @@ function App() {
         chats={sidebarChats}
         showToolsPanel={showToolsPanel}
         onToggleToolsPanel={() => setShowToolsPanel((p) => !p)}
+        providerErrorCount={validationReport?.llmProviders.filter(r => r.status === 'error').length || 0}
       />
 
       <div className="main-column">
-        {currentView === 'settings' ? (
+        {/* Validation errors now shown in Provider Settings instead of banner */}
+        {currentView === 'workflows' ? (
+          <WorkflowLibrary
+            workflows={workflows.map((w) => ({
+              id: w.id,
+              name: w.name,
+              description: w.description,
+              status: w.status,
+              stepCount: w.steps?.length || 0,
+              createdAt: w.createdAt,
+              updatedAt: w.updatedAt,
+            }))}
+            selectedWorkflowId={selectedWorkflowId}
+            onWorkflowSelect={(id) => {
+              setSelectedWorkflowId(id);
+            }}
+            onWorkflowCreate={() => {
+              setEditingWorkflowId(null);
+              setCurrentView('planner');
+            }}
+            onWorkflowDelete={(id) => {
+              setWorkflows((prev) => prev.filter((w) => w.id !== id));
+              if (selectedWorkflowId === id) setSelectedWorkflowId(null);
+            }}
+            onWorkflowDuplicate={(id) => {
+              const workflow = workflows.find((w) => w.id === id);
+              if (workflow) {
+                const newId = crypto.randomUUID();
+                const duplicate: WorkflowSpec = {
+                  ...workflow,
+                  id: newId,
+                  name: `${workflow.name} (Copy)`,
+                  status: 'draft',
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                };
+                setWorkflows((prev) => [duplicate, ...prev]);
+                setSelectedWorkflowId(newId);
+              }
+            }}
+            onWorkflowEdit={(id) => {
+              setEditingWorkflowId(id);
+              setCurrentView('planner');
+            }}
+            onWorkflowRun={(id) => {
+              setCurrentExecutionId(id);
+              setCurrentView('executions');
+            }}
+            onStartPlanning={() => {
+              setEditingWorkflowId(null);
+              setCurrentView('planner');
+            }}
+          />
+        ) : currentView === 'executions' ? (
+          <ExecutionMonitor
+            execution={null}
+            onRetry={() => {
+              console.log('Retry execution');
+            }}
+            onApprove={(stepId, approved) => {
+              console.log('Approve step:', stepId, approved);
+            }}
+            onAbort={() => {
+              console.log('Abort execution');
+              setCurrentView('workflows');
+            }}
+          />
+        ) : currentView === 'planner' ? (
+          <PlannerChat
+            provider={provider === 'claude' ? 'anthropic' : 'openai'}
+            model={provider === 'claude' ? anthropicModel : openaiModel}
+            onComplete={(spec) => {
+              const now = new Date().toISOString();
+              if (editingWorkflowId) {
+                // Update existing workflow
+                setWorkflows((prev) =>
+                  prev.map((w) =>
+                    w.id === editingWorkflowId
+                      ? {
+                          ...w,
+                          name: spec.name || w.name,
+                          description: spec.description,
+                          steps: spec.steps || [],
+                          inputs: spec.inputs,
+                          outputs: spec.outputs,
+                          status: (spec as any).status || 'draft',
+                          updatedAt: now,
+                        }
+                      : w
+                  )
+                );
+                setSelectedWorkflowId(editingWorkflowId);
+              } else {
+                // Create new workflow
+                const newWorkflow: WorkflowSpec = {
+                  id: crypto.randomUUID(),
+                  name: spec.name || 'Untitled Workflow',
+                  description: spec.description,
+                  status: (spec as any).status || 'draft',
+                  steps: spec.steps || [],
+                  inputs: spec.inputs,
+                  outputs: spec.outputs,
+                  createdAt: now,
+                  updatedAt: now,
+                };
+                setWorkflows((prev) => [newWorkflow, ...prev]);
+                setSelectedWorkflowId(newWorkflow.id);
+              }
+              setEditingWorkflowId(null);
+              setCurrentView('workflows');
+            }}
+            onCancel={() => {
+              setEditingWorkflowId(null);
+              setCurrentView('workflows');
+            }}
+          />
+        ) : currentView === 'council' ? (
+          currentCouncilId ? (
+            <CouncilView
+              councilId={currentCouncilId}
+              onBack={() => setCurrentCouncilId(null)}
+              onGenerateTurn={async (council, personaId, instruction) => {
+                const orchestrator = createOrchestrator({
+                  llmProvider: llmAdapter,
+                  onEvent: (event) => console.log('[Council Event]', event),
+                });
+                if (personaId) {
+                  await orchestrator.askPersona(council, personaId, instruction || '');
+                } else {
+                  await orchestrator.generateNextTurn(council, instruction);
+                }
+              }}
+              onGenerateRound={async (council) => {
+                const orchestrator = createOrchestrator({
+                  llmProvider: llmAdapter,
+                  onEvent: (event) => console.log('[Council Event]', event),
+                });
+                await orchestrator.generateRound(council);
+              }}
+              onGenerateSynthesis={async (council) => {
+                const orchestrator = createOrchestrator({
+                  llmProvider: llmAdapter,
+                  onEvent: (event) => console.log('[Council Event]', event),
+                });
+                await orchestrator.generateSynthesis(council);
+              }}
+              onResolve={async (council) => {
+                const orchestrator = createOrchestrator({
+                  llmProvider: llmAdapter,
+                  onEvent: (event) => console.log('[Council Event]', event),
+                });
+                await orchestrator.resolve(council);
+              }}
+            />
+          ) : (
+            <CouncilLibrary
+              onCouncilSelect={(id) => setCurrentCouncilId(id)}
+              onCouncilCreate={(council) => setCurrentCouncilId(council.id)}
+            />
+          )
+        ) : currentView === 'providers' ? (
+          <ProviderSettings
+            providers={[
+              // Primary Providers (API Key + OAuth)
+              {
+                id: 'anthropic',
+                name: 'Anthropic',
+                description: 'Claude models with advanced reasoning',
+                status: (() => {
+                  // Check validation result first - it's the source of truth
+                  const result = validationReport?.llmProviders.find(r => r.provider.includes('Anthropic'));
+                  if (result?.status === 'error') return 'error';
+                  if (result?.status === 'ok') return 'active';
+                  // No validation result yet - check if credentials exist
+                  return (anthropicKey || cliCredentials.claude.available) ? 'inactive' : 'inactive';
+                })(),
+                cliTool: 'claude',
+                oauthAvailable: cliCredentials.claude.available,
+                activeAuthMethod: anthropicAuthMethod,
+                validationError: (() => {
+                  const err = validationReport?.llmProviders.find(
+                    (r) => r.provider.includes('Anthropic') && r.status === 'error'
+                  );
+                  return err ? { message: err.message, details: err.details, action: err.action } : undefined;
+                })(),
+                config: {
+                  apiKey: anthropicKey,
+                  expiresAt: cliCredentials.claude.expiresAt,
+                },
+                models: [
+                  { id: 'claude-3-5-sonnet-latest', name: 'Claude 3.5 Sonnet', contextWindow: 200000, capabilities: ['text', 'vision', 'code'] },
+                  { id: 'claude-3-5-haiku-latest', name: 'Claude 3.5 Haiku', contextWindow: 200000, capabilities: ['text', 'code'] },
+                  { id: 'claude-3-opus-latest', name: 'Claude 3 Opus', contextWindow: 200000, capabilities: ['text', 'vision', 'code', 'reasoning'] },
+                ],
+              },
+              {
+                id: 'openai',
+                name: 'OpenAI',
+                description: 'GPT-4 and o1 models via API key or Codex CLI',
+                status: (() => {
+                  // Check validation result first - it's the source of truth
+                  const result = validationReport?.llmProviders.find(r => r.provider.includes('OpenAI'));
+                  if (result?.status === 'error') return 'error';
+                  if (result?.status === 'ok') return 'active';
+                  // No validation result yet - check if credentials exist
+                  return (openaiKey || cliCredentials.codex.available) ? 'inactive' : 'inactive';
+                })(),
+                cliTool: 'codex',
+                oauthAvailable: cliCredentials.codex.available,
+                activeAuthMethod: openaiAuthMethod,
+                validationError: (() => {
+                  const err = validationReport?.llmProviders.find(
+                    (r) => r.provider.includes('OpenAI') && r.status === 'error'
+                  );
+                  return err ? { message: err.message, details: err.details, action: err.action } : undefined;
+                })(),
+                config: {
+                  apiKey: openaiKey,
+                  expiresAt: cliCredentials.codex.expiresAt,
+                },
+                models: [
+                  // API models
+                  { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000, capabilities: ['text', 'vision', 'code'] },
+                  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', contextWindow: 128000, capabilities: ['text', 'code'] },
+                  { id: 'o1-preview', name: 'o1 Preview', contextWindow: 128000, capabilities: ['text', 'code', 'reasoning'] },
+                  // Codex CLI models (ChatGPT subscription)
+                  { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex (Latest)', contextWindow: 192000, capabilities: ['text', 'code', 'reasoning'] },
+                  { id: 'gpt-5.1-codex-max', name: 'GPT-5.1 Codex Max', contextWindow: 192000, capabilities: ['text', 'code', 'reasoning'] },
+                  { id: 'gpt-5.1-codex-mini', name: 'GPT-5.1 Codex Mini (4x usage)', contextWindow: 128000, capabilities: ['text', 'code'] },
+                  { id: 'gpt-5-codex-mini', name: 'GPT-5 Codex Mini', contextWindow: 128000, capabilities: ['text', 'code'] },
+                ],
+              },
+              {
+                id: 'gemini',
+                name: 'Google Gemini',
+                description: 'Gemini models with API key or OAuth',
+                status: cliCredentials.gemini.available ? 'active' : 'inactive',
+                cliTool: 'gemini',
+                oauthAvailable: cliCredentials.gemini.available,
+                activeAuthMethod: geminiAuthMethod,
+                config: {
+                  expiresAt: cliCredentials.gemini.expiresAt,
+                },
+                models: [
+                  { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash', contextWindow: 1048576, capabilities: ['text', 'vision', 'code'] },
+                  { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', contextWindow: 2097152, capabilities: ['text', 'vision', 'code'] },
+                  { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', contextWindow: 1048576, capabilities: ['text', 'vision', 'code'] },
+                ],
+              },
+              // OAuth Providers
+              {
+                id: 'copilot',
+                name: 'GitHub Copilot',
+                description: 'GitHub Copilot via device code login',
+                status: 'inactive',
+                config: {},
+                models: [
+                  { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000, capabilities: ['text', 'vision', 'code'] },
+                  { id: 'claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', contextWindow: 200000, capabilities: ['text', 'vision', 'code'] },
+                ],
+              },
+              // OpenAI-Compatible Providers
+              {
+                id: 'openrouter',
+                name: 'OpenRouter',
+                description: 'Access 100+ models via single API',
+                status: 'inactive',
+                config: {},
+                models: [
+                  { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', contextWindow: 200000, capabilities: ['text', 'vision', 'code'] },
+                  { id: 'openai/gpt-4o', name: 'GPT-4o', contextWindow: 128000, capabilities: ['text', 'vision', 'code'] },
+                  { id: 'google/gemini-pro-1.5', name: 'Gemini 1.5 Pro', contextWindow: 2097152, capabilities: ['text', 'vision'] },
+                ],
+              },
+              {
+                id: 'groq',
+                name: 'Groq',
+                description: 'Ultra-fast inference on Groq hardware',
+                status: 'inactive',
+                config: {},
+                models: [
+                  { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B', contextWindow: 128000, capabilities: ['text', 'code'] },
+                  { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B', contextWindow: 128000, capabilities: ['text'] },
+                  { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B', contextWindow: 32768, capabilities: ['text', 'code'] },
+                ],
+              },
+              {
+                id: 'together',
+                name: 'Together AI',
+                description: 'Open-source models at scale',
+                status: 'inactive',
+                config: {},
+                models: [
+                  { id: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', name: 'Llama 3.3 70B Turbo', contextWindow: 128000, capabilities: ['text', 'code'] },
+                  { id: 'mistralai/Mixtral-8x22B-Instruct-v0.1', name: 'Mixtral 8x22B', contextWindow: 65536, capabilities: ['text', 'code'] },
+                ],
+              },
+              {
+                id: 'deepseek',
+                name: 'DeepSeek',
+                description: 'DeepSeek Chat and Coder models',
+                status: 'inactive',
+                config: {},
+                models: [
+                  { id: 'deepseek-chat', name: 'DeepSeek Chat', contextWindow: 64000, capabilities: ['text'] },
+                  { id: 'deepseek-coder', name: 'DeepSeek Coder', contextWindow: 64000, capabilities: ['text', 'code'] },
+                  { id: 'deepseek-reasoner', name: 'DeepSeek R1', contextWindow: 64000, capabilities: ['text', 'reasoning'] },
+                ],
+              },
+              {
+                id: 'qwen',
+                name: 'Qwen',
+                description: 'Alibaba Qwen models via API key or Portal CLI',
+                status: cliCredentials.qwen.available ? 'active' : 'inactive',
+                cliTool: 'qwen',
+                oauthAvailable: cliCredentials.qwen.available,
+                activeAuthMethod: qwenAuthMethod,
+                config: {
+                  expiresAt: cliCredentials.qwen.expiresAt,
+                },
+                models: [
+                  { id: 'qwen-max', name: 'Qwen Max', contextWindow: 32000, capabilities: ['text', 'code'] },
+                  { id: 'qwen-plus', name: 'Qwen Plus', contextWindow: 131072, capabilities: ['text', 'code'] },
+                  { id: 'qwen-turbo', name: 'Qwen Turbo', contextWindow: 131072, capabilities: ['text'] },
+                  { id: 'qwen-coder-plus', name: 'Qwen Coder Plus', contextWindow: 131072, capabilities: ['text', 'code'] },
+                ],
+              },
+              {
+                id: 'minimax',
+                name: 'MiniMax',
+                description: 'MiniMax models via API key or Portal CLI',
+                status: cliCredentials.minimax.available ? 'active' : 'inactive',
+                cliTool: 'minimax',
+                oauthAvailable: cliCredentials.minimax.available,
+                activeAuthMethod: minimaxAuthMethod,
+                config: {
+                  expiresAt: cliCredentials.minimax.expiresAt,
+                },
+                models: [
+                  { id: 'abab6.5s-chat', name: 'ABAB 6.5s Chat', contextWindow: 245760, capabilities: ['text'] },
+                  { id: 'abab6.5g-chat', name: 'ABAB 6.5g Chat', contextWindow: 8192, capabilities: ['text'] },
+                  { id: 'abab5.5-chat', name: 'ABAB 5.5 Chat', contextWindow: 16384, capabilities: ['text'] },
+                ],
+              },
+              {
+                id: 'moonshot',
+                name: 'Moonshot/Kimi',
+                description: 'Long-context Chinese AI models',
+                status: 'inactive',
+                config: {},
+                models: [
+                  { id: 'moonshot-v1-128k', name: 'Moonshot v1 128K', contextWindow: 128000, capabilities: ['text'] },
+                  { id: 'moonshot-v1-32k', name: 'Moonshot v1 32K', contextWindow: 32000, capabilities: ['text'] },
+                ],
+              },
+              {
+                id: 'venice',
+                name: 'Venice AI',
+                description: 'Privacy-focused AI inference',
+                status: 'inactive',
+                config: {},
+                models: [
+                  { id: 'llama-3.3-70b', name: 'Llama 3.3 70B', contextWindow: 128000, capabilities: ['text', 'code'] },
+                ],
+              },
+              // Local Providers
+              {
+                id: 'ollama',
+                name: 'Ollama',
+                description: 'Local LLM inference',
+                status: 'inactive',
+                config: { baseUrl: 'http://127.0.0.1:11434' },
+                models: [
+                  { id: 'llama3.2', name: 'Llama 3.2', contextWindow: 128000, capabilities: ['text'] },
+                  { id: 'mistral', name: 'Mistral', contextWindow: 32000, capabilities: ['text'] },
+                  { id: 'codellama', name: 'Code Llama', contextWindow: 16000, capabilities: ['text', 'code'] },
+                ],
+              },
+              // Cloud Providers
+              {
+                id: 'bedrock',
+                name: 'AWS Bedrock',
+                description: 'AWS Bedrock multi-model access',
+                status: 'inactive',
+                config: {},
+                models: [
+                  { id: 'anthropic.claude-3-5-sonnet-20241022-v2:0', name: 'Claude 3.5 Sonnet v2', contextWindow: 200000, capabilities: ['text', 'vision', 'code'] },
+                  { id: 'anthropic.claude-3-5-haiku-20241022-v1:0', name: 'Claude 3.5 Haiku', contextWindow: 200000, capabilities: ['text', 'code'] },
+                  { id: 'amazon.titan-text-express-v1', name: 'Titan Text Express', contextWindow: 8000, capabilities: ['text'] },
+                  { id: 'meta.llama3-1-70b-instruct-v1:0', name: 'Llama 3.1 70B', contextWindow: 128000, capabilities: ['text', 'code'] },
+                ],
+              },
+            ]}
+            defaultProvider={provider === 'claude' ? 'anthropic' : 'openai'}
+            defaultModel={provider === 'claude' ? anthropicModel : openaiModel}
+            onProviderUpdate={(providerId, config) => {
+              if (providerId === 'anthropic' && config.apiKey !== undefined) {
+                setAnthropicKey(config.apiKey || '');
+              } else if (providerId === 'openai' && config.apiKey !== undefined) {
+                setOpenaiKey(config.apiKey || '');
+              }
+              // TODO: Store other provider keys
+              console.log('Provider update:', providerId, config);
+            }}
+            onDefaultChange={(providerId, modelId) => {
+              if (providerId === 'anthropic') {
+                setProvider('claude');
+                setAnthropicModel(modelId);
+              } else if (providerId === 'openai') {
+                setProvider('chatgpt');
+                setOpenaiModel(modelId);
+              }
+              // Note: MCP servers are connected through the app's mcpClient
+              // Tool execution is handled by the app, not by CLI-native MCP
+              console.log('Default change:', providerId, modelId);
+            }}
+            onValidateCredentials={async (providerId) => {
+              if (providerId === 'anthropic') {
+                const { ok } = await anthropicClient.validateKey(anthropicKey);
+                return ok;
+              } else if (providerId === 'openai') {
+                const { ok } = await openaiClient.validateKey(openaiKey);
+                return ok;
+              }
+              // TODO: Validate other providers
+              return false;
+            }}
+            onRefreshStatus={async () => {
+              // Re-check CLI credentials
+              try {
+                const creds = await invoke<{
+                  codex?: { available: boolean; expires_at?: number };
+                  claude?: { available: boolean; expires_at?: number };
+                  gemini?: { available: boolean; expires_at?: number };
+                  qwen?: { available: boolean; expires_at?: number };
+                  minimax?: { available: boolean; expires_at?: number };
+                }>('check_cli_credentials');
+
+                setCLICredentials({
+                  codex: { available: creds.codex?.available || false, expiresAt: creds.codex?.expires_at },
+                  claude: { available: creds.claude?.available || false, expiresAt: creds.claude?.expires_at },
+                  gemini: { available: creds.gemini?.available || false, expiresAt: creds.gemini?.expires_at },
+                  qwen: { available: creds.qwen?.available || false, expiresAt: creds.qwen?.expires_at },
+                  minimax: { available: creds.minimax?.available || false, expiresAt: creds.minimax?.expires_at },
+                });
+                console.log('[App] CLI credentials refreshed:', creds);
+
+                // Also reload OAuth tokens into clients if credentials are available
+                if (creds.claude?.available && anthropicAuthMethod === 'oauth') {
+                  const token = await invoke<string | null>('get_cli_token', { cliTool: 'claude' });
+                  if (token) {
+                    anthropicClient.setOAuthToken(token);
+                    anthropicClient.setUseOAuth(true);
+                    console.log('[App] Claude OAuth token refreshed');
+                  }
+                }
+                if (creds.codex?.available && openaiAuthMethod === 'oauth') {
+                  const token = await invoke<string | null>('get_cli_token', { cliTool: 'codex' });
+                  if (token) {
+                    openaiClient.setOAuthToken(token);
+                    openaiClient.setUseOAuth(true);
+                    console.log('[App] Codex OAuth token refreshed');
+                  }
+                }
+
+                // Re-run validation to update error states
+                console.log('[App] Re-running validation after credential refresh...');
+                const report = await startupValidator.validate({
+                  onProgress: (msg) => console.log('[StartupValidator]', msg),
+                  onProviderValidated: (result) => {
+                    console.log('[StartupValidator] Provider validated:', result);
+                  },
+                });
+                setValidationReport(report);
+                console.log('[App] Validation complete after refresh:', report.summary);
+
+              } catch (err) {
+                console.warn('[App] Failed to refresh CLI credentials:', err);
+              }
+            }}
+            onAuthMethodChange={(providerId, method) => {
+              if (providerId === 'anthropic') {
+                setAnthropicAuthMethod(method);
+              } else if (providerId === 'openai') {
+                setOpenaiAuthMethod(method);
+              } else if (providerId === 'gemini') {
+                setGeminiAuthMethod(method);
+              } else if (providerId === 'qwen') {
+                setQwenAuthMethod(method);
+              } else if (providerId === 'minimax') {
+                setMinimaxAuthMethod(method);
+              }
+              console.log('[App] Auth method changed:', providerId, method);
+            }}
+            onDisconnectOAuth={async (providerId) => {
+              console.log('[App] Disconnecting OAuth for:', providerId);
+
+              // Clear OAuth token and CLI wrapper mode from the appropriate client
+              if (providerId === 'anthropic') {
+                anthropicClient.setOAuthToken(null);
+                anthropicClient.setUseOAuth(false);
+                anthropicClient.setUseCliWrapper(false);
+                setAnthropicAuthMethod('api_key');
+                localStorage.removeItem('anthropic-use-cli-wrapper');
+                localStorage.setItem('anthropic-auth-method', 'api_key');
+                setCLICredentials(prev => ({
+                  ...prev,
+                  claude: { available: false, expiresAt: undefined }
+                }));
+              } else if (providerId === 'openai') {
+                openaiClient.setOAuthToken(null);
+                openaiClient.setUseOAuth(false);
+                openaiClient.setUseCliWrapper(false);
+                setOpenaiAuthMethod('api_key');
+                localStorage.removeItem('openai-use-cli-wrapper');
+                localStorage.setItem('openai-auth-method', 'api_key');
+                setCLICredentials(prev => ({
+                  ...prev,
+                  codex: { available: false, expiresAt: undefined }
+                }));
+              } else if (providerId === 'gemini') {
+                setGeminiAuthMethod('api_key');
+                setCLICredentials(prev => ({
+                  ...prev,
+                  gemini: { available: false, expiresAt: undefined }
+                }));
+              } else if (providerId === 'qwen') {
+                setQwenAuthMethod('api_key');
+                setCLICredentials(prev => ({
+                  ...prev,
+                  qwen: { available: false, expiresAt: undefined }
+                }));
+              } else if (providerId === 'minimax') {
+                setMinimaxAuthMethod('api_key');
+                setCLICredentials(prev => ({
+                  ...prev,
+                  minimax: { available: false, expiresAt: undefined }
+                }));
+              }
+
+              // Also disconnect from oauthService
+              if (providerId === 'anthropic') {
+                oauthService.disconnect('anthropic');
+              } else if (providerId === 'openai') {
+                oauthService.disconnect('openai');
+              }
+
+              // Re-run validation to update status
+              console.log('[App] Running validation after disconnect...');
+              const report = await startupValidator.validate({
+                onProgress: (msg) => console.log('[StartupValidator]', msg),
+                onProviderValidated: (result) => {
+                  console.log('[StartupValidator] Provider validated:', result);
+                },
+              });
+              setValidationReport(report);
+              console.log('[App] Validation after disconnect complete:', report.summary);
+            }}
+            onStartOAuthLogin={async (providerId) => {
+              console.log('[App] Starting OAuth login for:', providerId);
+              try {
+                if (providerId === 'anthropic') {
+                  // Use Claude Code CLI wrapper approach
+                  // Check if Claude Code is installed and authenticated
+                  const cliStatus = await anthropicClient.checkCliAvailable();
+
+                  if (!cliStatus.installed) {
+                    alert(
+                      'Claude Code CLI is required to use your Claude subscription.\n\n' +
+                      'Install it with:\n' +
+                      'npm install -g @anthropic-ai/claude-code\n\n' +
+                      'Then run "claude" to log in with your Claude account.'
+                    );
+                    return false;
+                  }
+
+                  if (!cliStatus.authenticated) {
+                    alert(
+                      'Claude Code CLI is installed but not logged in.\n\n' +
+                      'Run "claude" in your terminal to log in with your Claude account, ' +
+                      'then try connecting again.'
+                    );
+                    return false;
+                  }
+
+                  // Claude Code is ready - enable CLI wrapper mode
+                  anthropicClient.setUseCliWrapper(true);
+                  setAnthropicAuthMethod('oauth');
+
+                  // Store preference
+                  localStorage.setItem('anthropic-use-cli-wrapper', 'true');
+                  localStorage.setItem('anthropic-auth-method', 'oauth');
+
+                  setCLICredentials(prev => ({
+                    ...prev,
+                    claude: { available: true }
+                  }));
+                  console.log('[App] Claude CLI wrapper enabled, version:', cliStatus.version);
+
+                  // Re-run validation to update status
+                  console.log('[App] Running validation after connect...');
+                  const report = await startupValidator.validate({
+                    onProgress: (msg) => console.log('[StartupValidator]', msg),
+                    onProviderValidated: (result) => {
+                      console.log('[StartupValidator] Provider validated:', result);
+                    },
+                  });
+                  setValidationReport(report);
+
+                  if (report.llmProviders.find(r => r.provider.includes('Anthropic'))?.status === 'ok') {
+                    alert('Claude subscription connected and verified!');
+                  } else {
+                    alert('Claude subscription connected but validation failed. Check the status for details.');
+                  }
+                  return true;
+                } else if (providerId === 'openai') {
+                  // Use Codex CLI wrapper approach
+                  // Check if Codex is installed and authenticated
+                  const cliStatus = await openaiClient.checkCliAvailable();
+
+                  if (!cliStatus.installed) {
+                    alert(
+                      'Codex CLI is required to use your ChatGPT subscription.\n\n' +
+                      'Install it with:\n' +
+                      'npm install -g @openai/codex\n\n' +
+                      'Then run "codex login" to log in with your OpenAI account.'
+                    );
+                    return false;
+                  }
+
+                  if (!cliStatus.authenticated) {
+                    alert(
+                      'Codex CLI is installed but not logged in.\n\n' +
+                      'Run "codex login" in your terminal to log in with your OpenAI account, ' +
+                      'then try connecting again.'
+                    );
+                    return false;
+                  }
+
+                  // Codex is ready - enable CLI wrapper mode
+                  openaiClient.setUseCliWrapper(true);
+                  setOpenaiAuthMethod('oauth');
+
+                  // Store preferences
+                  localStorage.setItem('openai-use-cli-wrapper', 'true');
+                  localStorage.setItem('openai-auth-method', 'oauth');
+
+                  setCLICredentials(prev => ({
+                    ...prev,
+                    codex: { available: true }
+                  }));
+                  console.log('[App] Codex CLI wrapper enabled, version:', cliStatus.version);
+
+                  // Re-run validation to update status
+                  console.log('[App] Running validation after connect...');
+                  const report = await startupValidator.validate({
+                    onProgress: (msg) => console.log('[StartupValidator]', msg),
+                    onProviderValidated: (result) => {
+                      console.log('[StartupValidator] Provider validated:', result);
+                    },
+                  });
+                  setValidationReport(report);
+
+                  if (report.llmProviders.find(r => r.provider.includes('OpenAI'))?.status === 'ok') {
+                    alert('ChatGPT subscription connected and verified!');
+                  } else {
+                    alert('ChatGPT subscription connected but validation failed. Check the status for details.');
+                  }
+                  return true;
+                }
+                return false;
+              } catch (err) {
+                console.error('[App] OAuth login failed:', err);
+                alert(`OAuth login failed: ${err instanceof Error ? err.message : String(err)}`);
+                return false;
+              }
+            }}
+            onCodexLogin={async () => {
+              console.log('[App] Starting automated Codex CLI login...');
+              setIsCodexLoggingIn(true);
+              try {
+                // Run the automated OAuth flow and write to ~/.codex/auth.json
+                const result = await loginCodexCli();
+                console.log('[App] Codex CLI login result:', result);
+
+                // Enable CLI wrapper mode now that we have credentials
+                openaiClient.setUseCliWrapper(true);
+                setOpenaiAuthMethod('oauth');
+                localStorage.setItem('openai-use-cli-wrapper', 'true');
+                localStorage.setItem('openai-auth-method', 'oauth');
+
+                setCLICredentials(prev => ({
+                  ...prev,
+                  codex: { available: true }
+                }));
+
+                // Re-run validation to update status
+                console.log('[App] Running validation after Codex login...');
+                const report = await startupValidator.validate({
+                  onProgress: (msg) => console.log('[StartupValidator]', msg),
+                  onProviderValidated: (result) => {
+                    console.log('[StartupValidator] Provider validated:', result);
+                  },
+                });
+                setValidationReport(report);
+
+                if (report.llmProviders.find(r => r.provider.includes('OpenAI'))?.status === 'ok') {
+                  alert('Codex CLI login successful! ChatGPT subscription connected and verified.');
+                } else {
+                  alert('Codex CLI logged in but validation failed. Check the status for details.');
+                }
+              } catch (err) {
+                console.error('[App] Codex CLI login failed:', err);
+                alert(`Codex CLI login failed: ${err instanceof Error ? err.message : String(err)}`);
+              } finally {
+                setIsCodexLoggingIn(false);
+              }
+            }}
+            isCodexLoggingIn={isCodexLoggingIn}
+          />
+        ) : currentView === 'settings' ? (
           <div className="settings-pane">
             <h2>Settings</h2>
 
             <CollapsibleSection title="AI Provider" defaultOpen>
-              <div className="provider-options">
-                <button
-                  className={`provider-btn ${provider === 'claude' ? 'active' : ''}`}
-                  onClick={() => setProvider('claude')}
-                >
-                  Claude
-                </button>
-                <button
-                  className={`provider-btn ${provider === 'chatgpt' ? 'active' : ''}`}
-                  onClick={() => setProvider('chatgpt')}
-                >
-                  ChatGPT
-                </button>
+              <div className="provider-quick-status">
+                <div className="current-provider">
+                  <span className="provider-label">Current:</span>
+                  <span className="provider-value">
+                    {provider === 'claude' ? 'Anthropic Claude' : 'OpenAI ChatGPT'}
+                  </span>
+                  <span className={`status-dot ${(provider === 'claude' ? anthropicKey : openaiKey) ? 'active' : ''}`} />
+                </div>
+                <div className="current-model">
+                  <span className="model-label">Model:</span>
+                  <span className="model-value">
+                    {provider === 'claude' ? anthropicModel : openaiModel}
+                  </span>
+                </div>
               </div>
-
-              {provider === 'chatgpt' ? (
-                <label className="input-label">
-                  <div className="input-label-row">
-                    <span>OpenAI API Key</span>
-                    <div className="input-actions"></div>
-                  </div>
-                  <input
-                    type="text"
-                    value={openaiKey}
-                    onChange={(e) => setOpenaiKey(e.target.value.trim())}
-                    placeholder="sk-..."
-                  />
-                  <div className="input-actions under-input">
-                    <button className="pill-btn" onClick={handleValidateOpenAI}>
-                      {openaiKeyStatus === 'checking' ? 'Verifying…' : 'Verify connection'}
-                    </button>
-                    {openaiKeyStatus === 'ok' && <span className="status success">✓</span>}
-                    {openaiKeyStatus === 'error' && (
-                      <span className="status error" title={openaiKeyError || undefined}>✕</span>
-                    )}
-                  </div>
-                  {openaiKeyError && <div className="field-error">{openaiKeyError}</div>}
-                  {openaiModels.length > 0 && (
-                    <div className="input-label">
-                      <div className="input-label-row">
-                        <span>Model</span>
-                        <button className="pill-btn" onClick={handleValidateOpenAI}>
-                          Refresh models
-                        </button>
-                      </div>
-                      <select
-                        className="select-field"
-                        value={openaiModel}
-                        onChange={(e) => setOpenaiModel(e.target.value)}
-                      >
-                        {openaiModels.map((m) => (
-                          <option key={m} value={m}>
-                            {m}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                </label>
-              ) : (
-                <label className="input-label">
-                  <div className="input-label-row">
-                    <span>Anthropic API Key</span>
-                    <div className="input-actions"></div>
-                  </div>
-                  <input
-                    type="text"
-                    value={anthropicKey}
-                    onChange={(e) => setAnthropicKey(e.target.value.trim())}
-                    placeholder="sk-ant-..."
-                  />
-                  <div className="input-actions under-input">
-                    <button className="pill-btn" onClick={handleValidateAnthropic}>
-                      {anthropicKeyStatus === 'checking' ? 'Verifying…' : 'Verify connection'}
-                    </button>
-                    {anthropicKeyStatus === 'ok' && <span className="status success">✓</span>}
-                    {anthropicKeyStatus === 'error' && (
-                      <span className="status error" title={anthropicKeyError || undefined}>✕</span>
-                    )}
-                  </div>
-                  {anthropicKeyError && <div className="field-error">{anthropicKeyError}</div>}
-                  {anthropicModels.length > 0 && (
-                    <div className="input-label">
-                      <div className="input-label-row">
-                        <span>Model</span>
-                        <button className="pill-btn" onClick={() => handleValidateAnthropic()}>
-                          Refresh models
-                        </button>
-                      </div>
-                      <select
-                        className="select-field"
-                        value={anthropicModel}
-                        onChange={(e) => setAnthropicModel(e.target.value)}
-                      >
-                        {anthropicModels.map((m) => (
-                          <option key={m} value={m}>
-                            {m}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                </label>
-              )}
+              <button
+                className="pill-btn full-width"
+                onClick={() => setCurrentView('providers')}
+              >
+                Configure LLM Providers (12 available)
+              </button>
             </CollapsibleSection>
 
             <CollapsibleSection title="Usage" defaultOpen>
@@ -994,6 +2111,7 @@ function App() {
           onServerDisconnect={handleDisconnectServer}
           onServerDelete={handleDeleteServer}
           onServerUpdate={handleUpdateServer}
+          onServerReauthenticate={handleReauthenticateServer}
           onServerAddLocal={(server) => {
             mcpClient.addServer(server);
             refreshServers();

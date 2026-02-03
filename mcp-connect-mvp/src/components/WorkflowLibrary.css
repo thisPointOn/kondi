@@ -1,0 +1,471 @@
+/* ============================================================================
+   WorkflowLibrary Component Styles
+   ============================================================================ */
+
+.workflow-library {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: var(--bg-primary, #0f0f1a);
+  overflow: hidden;
+}
+
+/* ============================================================================
+   Header
+   ============================================================================ */
+
+.wf-library-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-color, #2d2d44);
+}
+
+.wf-library-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary, #e4e4e7);
+  margin: 0;
+}
+
+.wf-library-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ============================================================================
+   Buttons
+   ============================================================================ */
+
+.wf-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.wf-btn-primary {
+  background: var(--accent-color, #6366f1);
+  color: white;
+}
+
+.wf-btn-primary:hover {
+  background: var(--accent-hover, #4f46e5);
+}
+
+.wf-btn-secondary {
+  background: var(--bg-tertiary, #252540);
+  color: var(--text-secondary, #a1a1aa);
+}
+
+.wf-btn-secondary:hover {
+  background: var(--bg-hover, #2d2d4a);
+  color: var(--text-primary, #e4e4e7);
+}
+
+.wf-btn-link {
+  background: transparent;
+  color: var(--accent-color, #6366f1);
+  padding: 4px 8px;
+}
+
+.wf-btn-link:hover {
+  text-decoration: underline;
+}
+
+/* ============================================================================
+   Search
+   ============================================================================ */
+
+.wf-search {
+  padding: 16px 24px;
+  max-width: 400px;
+}
+
+.wf-search-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-tertiary, #252540);
+  border: 1px solid var(--border-color, #2d2d44);
+  border-radius: 6px;
+  color: var(--text-primary, #e4e4e7);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.wf-search-input::placeholder {
+  color: var(--text-muted, #71717a);
+}
+
+.wf-search-input:focus {
+  border-color: var(--accent-color, #6366f1);
+}
+
+/* ============================================================================
+   Loading State
+   ============================================================================ */
+
+.wf-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 20px;
+  color: var(--text-muted, #71717a);
+  font-size: 13px;
+}
+
+.wf-loading-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--border-color, #2d2d44);
+  border-top-color: var(--accent-color, #6366f1);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================================================
+   Sections
+   ============================================================================ */
+
+.wf-sections {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px;
+  padding-bottom: 40px;
+}
+
+.wf-section {
+  margin-bottom: 4px;
+}
+
+.wf-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  padding: 10px 0;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #a1a1aa);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.wf-section-header:hover {
+  color: var(--text-primary, #e4e4e7);
+}
+
+.wf-chevron {
+  transition: transform 0.2s ease;
+}
+
+.wf-section-icon {
+  display: flex;
+  align-items: center;
+}
+
+.wf-section-title {
+  flex: 1;
+  text-align: left;
+}
+
+.wf-section-count {
+  background: var(--bg-tertiary, #252540);
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+}
+
+.wf-section-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.wf-section-empty {
+  grid-column: 1 / -1;
+  padding: 20px;
+  color: var(--text-muted, #71717a);
+  font-size: 13px;
+  font-style: italic;
+  text-align: center;
+  background: var(--bg-secondary, #1a1a2e);
+  border: 1px dashed var(--border-color, #2d2d44);
+  border-radius: 10px;
+}
+
+/* ============================================================================
+   Workflow Item
+   ============================================================================ */
+
+.wf-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background: var(--bg-secondary, #1a1a2e);
+  border: 1px solid var(--border-color, #2d2d44);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.wf-item:hover {
+  background: var(--bg-hover, #252540);
+  border-color: var(--border-hover, #3d3d54);
+}
+
+.wf-item.selected {
+  background: var(--accent-color, #6366f1);
+  border-color: var(--accent-color, #6366f1);
+}
+
+.wf-item.selected .wf-item-name {
+  color: white;
+}
+
+.wf-item.selected .wf-item-meta {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.wf-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.wf-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #e4e4e7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wf-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted, #71717a);
+}
+
+.wf-item-steps {
+  display: flex;
+  align-items: center;
+}
+
+.wf-item-lastrun {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.wf-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.wf-item:hover .wf-item-actions,
+.wf-item.selected .wf-item-actions {
+  opacity: 1;
+}
+
+.wf-item-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: var(--bg-tertiary, #252540);
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary, #a1a1aa);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.wf-item-btn:hover {
+  background: var(--bg-hover, #2d2d4a);
+  color: var(--text-primary, #e4e4e7);
+}
+
+.wf-item-btn.run:hover {
+  background: var(--success-color, #22c55e);
+  color: white;
+}
+
+.wf-item-btn.stop:hover {
+  background: var(--warning-color, #f59e0b);
+  color: white;
+}
+
+.wf-item.selected .wf-item-btn {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.wf-item.selected .wf-item-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* ============================================================================
+   Execution Badge
+   ============================================================================ */
+
+.wf-exec-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+
+.wf-exec-badge.running {
+  color: var(--accent-color, #6366f1);
+}
+
+.wf-exec-badge.completed {
+  color: var(--success-color, #22c55e);
+}
+
+.wf-exec-badge.failed {
+  color: var(--error-color, #ef4444);
+}
+
+.wf-exec-badge.paused {
+  color: var(--warning-color, #f59e0b);
+}
+
+.wf-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* ============================================================================
+   Context Menu
+   ============================================================================ */
+
+.wf-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 160px;
+  background: var(--bg-secondary, #1a1a2e);
+  border: 1px solid var(--border-color, #2d2d44);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  padding: 4px;
+  animation: fadeIn 0.1s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.wf-context-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-primary, #e4e4e7);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.wf-context-item:hover {
+  background: var(--bg-hover, #252540);
+}
+
+.wf-context-item.danger {
+  color: var(--error-color, #ef4444);
+}
+
+.wf-context-item.danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.wf-context-divider {
+  height: 1px;
+  background: var(--border-color, #2d2d44);
+  margin: 4px 8px;
+}
+
+/* ============================================================================
+   Empty State
+   ============================================================================ */
+
+.wf-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 80px 40px;
+  text-align: center;
+  background: var(--bg-secondary, #1a1a2e);
+  border: 1px dashed var(--border-color, #2d2d44);
+  border-radius: 12px;
+  margin-top: 20px;
+}
+
+.wf-empty p {
+  margin: 0;
+  color: var(--text-muted, #71717a);
+  font-size: 15px;
+}
+
+/* ============================================================================
+   Scrollbar
+   ============================================================================ */
+
+.wf-sections::-webkit-scrollbar {
+  width: 6px;
+}
+
+.wf-sections::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.wf-sections::-webkit-scrollbar-thumb {
+  background: var(--border-color, #2d2d44);
+  border-radius: 3px;
+}
+
+.wf-sections::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted, #71717a);
+}

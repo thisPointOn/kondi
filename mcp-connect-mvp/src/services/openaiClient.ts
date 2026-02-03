@@ -2,6 +2,9 @@ import OpenAI from 'openai';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 import { LOCAL_SERVER_ID, localToolsService } from './localTools';
+import { codexWrapper } from './codexWrapper';
+import { codexSessionManager } from './codexSessionManager';
+import { conversationSummary } from './conversationSummary';
 
 const BASE_SYSTEM_PROMPT = `You are ChatGPT, a helpful general-purpose AI assistant made by OpenAI. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
 
@@ -20,26 +23,317 @@ When using tools:
 
 export class OpenAIClient {
   private client: OpenAI | null = null;
+  private clientKey: string | null = null;  // Track what key the client was created with
   private apiKey: string | null = null;
+  private oauthToken: string | null = null;
+  private useOAuth: boolean = false;
+  private useCliWrapper: boolean = false;  // Use Codex CLI instead of direct API
+  private currentConversationId: string | null = null;
+  private workingDir: string | null = null;
 
   setApiKey(key: string) {
     this.apiKey = key;
-    this.client = new OpenAI({
-      apiKey: key,
-      dangerouslyAllowBrowser: true,
-    });
-  }
-
-  private ensureInitialized() {
-    if (!this.client && this.apiKey) {
-      console.log('[OpenAI] Re-initializing client');
+    if (!this.useOAuth && !this.useCliWrapper) {
       this.client = new OpenAI({
-        apiKey: this.apiKey,
+        apiKey: key,
         dangerouslyAllowBrowser: true,
       });
+      this.clientKey = key;
     }
-    if (!this.client) {
-      throw new Error('OpenAI client not initialized. Please set your API key in settings.');
+  }
+
+  setOAuthToken(token: string | null) {
+    this.oauthToken = token;
+    console.log('[OpenAI] OAuth token', token ? 'set' : 'cleared');
+    if (this.useOAuth && token && !this.useCliWrapper) {
+      this.client = new OpenAI({
+        apiKey: token,
+        dangerouslyAllowBrowser: true,
+      });
+      this.clientKey = token;
+    }
+  }
+
+  setUseOAuth(use: boolean) {
+    this.useOAuth = use;
+    console.log('[OpenAI] Using', use ? 'OAuth' : 'API key');
+    if (!this.useCliWrapper) {
+      // Reinitialize client with appropriate credentials
+      const key = use ? this.oauthToken : this.apiKey;
+      if (key) {
+        this.client = new OpenAI({
+          apiKey: key,
+          dangerouslyAllowBrowser: true,
+        });
+        this.clientKey = key;
+      }
+    }
+  }
+
+  /**
+   * Enable CLI wrapper mode - routes all requests through `codex exec`
+   * This is required for subscription-based auth since direct OAuth is blocked
+   */
+  setUseCliWrapper(use: boolean) {
+    this.useCliWrapper = use;
+    console.log('[OpenAI] CLI wrapper mode:', use ? 'enabled' : 'disabled');
+  }
+
+  setCurrentConversationId(id: string | null) {
+    this.currentConversationId = id;
+  }
+
+  setWorkingDir(dir: string | null) {
+    this.workingDir = dir;
+    console.log('[OpenAI] Working directory set to:', dir);
+  }
+
+  getAuthMethod(): 'oauth' | 'api_key' | 'cli' | 'none' {
+    // CLI wrapper mode takes precedence - this is the most reliable for subscription auth
+    if (this.useCliWrapper) return 'cli';
+
+    // Check for OAuth - only return 'oauth' if we have actual functional OAuth credentials
+    // The useOAuth flag alone isn't enough - we need actual tokens
+    if (this.useOAuth) {
+      // Direct token is required for OpenAI OAuth
+      if (this.oauthToken) return 'oauth';
+      // If useOAuth is true but no actual token, fall through to API key
+      console.log('[OpenAI] useOAuth is true but no OAuth token available, falling back');
+    }
+
+    // API key mode
+    if (this.apiKey) return 'api_key';
+
+    return 'none';
+  }
+
+  /**
+   * Check if Codex CLI is available and authenticated
+   */
+  async checkCliAvailable(): Promise<{ installed: boolean; authenticated: boolean; version?: string }> {
+    const installCheck = await codexWrapper.checkInstalled();
+    if (!installCheck.installed) {
+      return { installed: false, authenticated: false };
+    }
+    const authCheck = await codexWrapper.checkAuthenticated();
+    return {
+      installed: true,
+      authenticated: authCheck,
+      version: installCheck.version,
+    };
+  }
+
+  clearCliSession() {
+    if (this.currentConversationId) {
+      codexSessionManager.clearSession(this.currentConversationId);
+    }
+  }
+
+  /**
+   * Build a description of available MCP tools for the system prompt
+   */
+  private buildToolDescription(availableTools: Map<string, { serverId: string; tools: MCPTool[] }>): string {
+    if (availableTools.size === 0) return '';
+
+    const parts: string[] = ['## Available MCP Tools (ALREADY CONNECTED)\n'];
+    parts.push('The following tools are ALREADY authenticated and connected through local proxies. You can USE these tools directly - do NOT ask users to set them up or provide credentials.\n');
+
+    for (const [serverId, { tools }] of availableTools) {
+      if (tools.length === 0) continue;
+      // Show a friendlier name - extract server name from ID if it looks like a UUID
+      const displayName = serverId.includes('-') && serverId.length > 30 ? `MCP Server` : serverId;
+      parts.push(`### ${displayName} (${tools.length} tools)`);
+      for (const tool of tools) {
+        parts.push(`- **${tool.name}**: ${tool.description || 'No description'}`);
+        if (tool.inputSchema?.properties) {
+          const params = Object.entries(tool.inputSchema.properties)
+            .map(([name, schema]: [string, any]) => `  - ${name}: ${schema.description || schema.type || 'any'}`)
+            .join('\n');
+          if (params) parts.push(params);
+        }
+      }
+    }
+    return parts.join('\n');
+  }
+
+  /**
+   * Chat via Codex CLI wrapper instead of direct API
+   * This is used for subscription-based auth (ChatGPT Plus/Pro)
+   */
+  private async chatViaCli(
+    messages: Message[],
+    availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
+    model: string,
+    systemPrompt?: string
+  ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
+    // Get the last user message
+    const userMessages = messages.filter(m => m.role === 'user');
+    const lastUserMessage = userMessages[userMessages.length - 1];
+    if (!lastUserMessage) {
+      throw new Error('No user message found');
+    }
+
+    // Map model names for Codex CLI with ChatGPT subscription
+    // ChatGPT accounts don't support direct model names like 'gpt-4o'
+    // Let Codex use its default model for subscription users
+    const codexModel = this.mapModelForCodex(model);
+
+    // Check for existing session
+    const conversationId = this.currentConversationId || 'default';
+    let sessionId: string | null = null;
+    if (this.currentConversationId) {
+      sessionId = codexSessionManager.getCodexThreadId(this.currentConversationId);
+    }
+
+    // Build context: summary + last 2 messages
+    let messageWithContext = lastUserMessage.content;
+    const summaryContext = conversationSummary.buildContext(conversationId);
+
+    // Get last 2 messages (excluding current) for immediate context
+    const recentMessages = messages.slice(0, -1).slice(-2);
+    let recentContext = '';
+    if (recentMessages.length > 0) {
+      recentContext = recentMessages
+        .map(m => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 300)}${m.content.length > 300 ? '...' : ''}`)
+        .join('\n');
+    }
+
+    // Combine summary + recent + current message
+    if (summaryContext || recentContext) {
+      messageWithContext = '';
+      if (summaryContext) {
+        messageWithContext += summaryContext + '\n\n';
+      }
+      if (recentContext) {
+        messageWithContext += `<recent_messages>\n${recentContext}\n</recent_messages>\n\n`;
+      }
+      messageWithContext += lastUserMessage.content;
+    }
+
+    // Build tool description for the system prompt
+    const toolDescription = this.buildToolDescription(availableTools);
+    let fullSystemPrompt = systemPrompt || BASE_SYSTEM_PROMPT;
+    if (toolDescription) {
+      fullSystemPrompt += '\n\n' + toolDescription;
+      fullSystemPrompt += '\n\nThese MCP tools are connected and available for you to use. When the user asks about data or functionality these tools can provide, USE the tools to get real information rather than just describing what you would do.';
+    }
+
+    console.log('[OpenAI] Calling Codex CLI:', {
+      model: codexModel,
+      sessionId,
+      conversationId,
+      messageLength: messageWithContext.length,
+      hasSummary: !!summaryContext,
+      toolCount: Array.from(availableTools.values()).reduce((sum, { tools }) => sum + tools.length, 0),
+    });
+
+    // Build accumulated content for streaming
+    let accumulatedContent = '';
+    const toolCalls: ToolCall[] = [];
+
+    // Call Codex
+    const result = await codexWrapper.call({
+      message: messageWithContext,
+      sessionId,
+      model: codexModel,
+      instructions: fullSystemPrompt,
+      fullAuto: false,  // Don't auto-execute shell commands
+      cwd: this.workingDir || undefined,
+      onToken: (token) => {
+        accumulatedContent += token;
+      },
+      onToolUse: (toolName, input) => {
+        console.log('[OpenAI] Codex tool use:', toolName, input);
+        toolCalls.push({
+          id: crypto.randomUUID(),
+          serverId: 'codex-cli',
+          toolName,
+          arguments: input,
+          status: 'completed',
+        });
+      },
+      onSessionId: (newSessionId) => {
+        console.log('[OpenAI] Codex session ID:', newSessionId);
+        if (this.currentConversationId && !sessionId) {
+          codexSessionManager.registerSession(this.currentConversationId, newSessionId, codexModel || 'gpt-4o');
+        }
+      },
+      onError: (error) => {
+        console.error('[OpenAI] Codex error:', error);
+      },
+    });
+
+    if (!result.success) {
+      throw new Error(result.error || 'Codex CLI call failed');
+    }
+
+    // Update session tracking
+    if (this.currentConversationId && sessionId) {
+      codexSessionManager.touch(this.currentConversationId);
+    }
+
+    const responseContent = accumulatedContent || result.result || '[No response from Codex]';
+
+    // Update conversation summary with this exchange
+    conversationSummary.updateSummary(conversationId, lastUserMessage.content, responseContent);
+
+    return {
+      message: {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: responseContent,
+        timestamp: new Date(),
+      },
+      toolCalls,
+    };
+  }
+
+  /**
+   * Map model names for Codex CLI with ChatGPT subscription
+   * ChatGPT subscription accounts can't use API model names like gpt-4o
+   * but CAN use Codex-specific models like gpt-5.2-codex
+   */
+  private mapModelForCodex(model: string): string | undefined {
+    if (this.useCliWrapper) {
+      // Codex-specific models can be passed through
+      if (model && model.includes('codex')) {
+        return model;
+      }
+      // API models (gpt-4o, o1-preview, etc.) aren't supported with ChatGPT subscription
+      // Return undefined to let Codex use its default
+      return undefined;
+    }
+    // For API mode, use the model directly
+    return model || 'gpt-4o';
+  }
+
+  /**
+   * Ensure the OpenAI client is initialized with the appropriate credentials.
+   * Auth method validation is done in chat() before calling this.
+   */
+  private ensureClientInitialized() {
+    const authMethod = this.getAuthMethod();
+
+    // CLI mode doesn't use the OpenAI client
+    if (authMethod === 'cli') {
+      return;
+    }
+
+    // Determine which key to use based on auth method
+    const key = authMethod === 'oauth' ? this.oauthToken : this.apiKey;
+
+    if (!key) {
+      throw new Error('No API key or OAuth token available for OpenAI client initialization');
+    }
+
+    // Recreate client if key has changed or client doesn't exist
+    if (!this.client || this.clientKey !== key) {
+      console.log('[OpenAI] Initializing client with', authMethod, this.clientKey !== key ? '(key changed)' : '');
+      this.client = new OpenAI({
+        apiKey: key,
+        dangerouslyAllowBrowser: true,
+      });
+      this.clientKey = key;
     }
   }
 
@@ -83,7 +377,42 @@ export class OpenAIClient {
     model = 'gpt-4o',
     additionalSystemPrompt?: string
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
-    this.ensureInitialized();
+    const authMethod = this.getAuthMethod();
+    console.log('[OpenAI] chat() called', {
+      useCliWrapper: this.useCliWrapper,
+      useOAuth: this.useOAuth,
+      hasApiKey: !!this.apiKey,
+      authMethod,
+      model,
+    });
+
+    // Use getAuthMethod() to determine the actual auth path
+    switch (authMethod) {
+      case 'cli':
+        return this.chatViaCli(messages, availableTools, model, additionalSystemPrompt);
+
+      case 'oauth':
+        // OAuth mode - ensure we have an OAuth token
+        if (!this.oauthToken) {
+          throw new Error('OpenAI OAuth token not available. Please reconnect your ChatGPT subscription.');
+        }
+        console.log('[OpenAI] Using OAuth for API access');
+        break;
+
+      case 'api_key':
+        // API key mode - ensure we have a key and client
+        if (!this.apiKey) {
+          throw new Error('OpenAI API key not configured. Please set your API key in settings.');
+        }
+        console.log('[OpenAI] Using API key for direct access');
+        break;
+
+      case 'none':
+        throw new Error('No OpenAI authentication configured. Please set up API key or CLI in Settings.');
+    }
+
+    // Initialize the client for non-CLI modes
+    this.ensureClientInitialized();
 
     const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [];
     const toolMap = new Map<string, { serverId: string; tool: MCPTool }>();

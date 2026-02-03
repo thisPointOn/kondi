@@ -1,0 +1,246 @@
+.proxy-log-viewer {
+  background: var(--bg-secondary, #1a1a2e);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  overflow: hidden;
+}
+
+.proxy-log-viewer.collapsed {
+  max-height: 36px;
+}
+
+.log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-tertiary, #252540);
+  cursor: pointer;
+  user-select: none;
+}
+
+.log-header:hover {
+  background: var(--bg-hover, #303050);
+}
+
+.log-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary, #aaa);
+}
+
+.log-header-left svg {
+  color: var(--accent-color, #6366f1);
+}
+
+.log-title {
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+}
+
+.log-count {
+  font-size: 10px;
+  color: var(--text-tertiary, #666);
+  background: var(--bg-secondary, #1a1a2e);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.log-header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.log-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary, #aaa);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.log-btn:hover {
+  background: var(--bg-hover, #404060);
+  color: var(--text-primary, #fff);
+}
+
+.log-btn.active {
+  color: var(--accent-color, #6366f1);
+}
+
+.log-btn.close:hover {
+  background: var(--error-bg, #3d1a1a);
+  color: var(--error-color, #f87171);
+}
+
+.log-btn svg.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.log-content {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.log-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-tertiary, #666);
+}
+
+.log-entry {
+  display: flex;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
+.log-entry:hover {
+  background: var(--bg-hover, #252540);
+}
+
+.log-entry.error {
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.log-entry.error .log-level {
+  color: var(--error-color, #f87171);
+}
+
+.log-time {
+  color: var(--text-tertiary, #666);
+  flex-shrink: 0;
+  width: 70px;
+}
+
+.log-level {
+  color: var(--accent-color, #6366f1);
+  flex-shrink: 0;
+  width: 40px;
+  text-transform: uppercase;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.log-message {
+  color: var(--text-primary, #e0e0e0);
+  word-break: break-word;
+  flex: 1;
+}
+
+/* All Proxy Logs Panel */
+.all-proxy-logs-panel {
+  background: var(--bg-secondary, #1a1a2e);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 400px;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  background: var(--bg-tertiary, #252540);
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.panel-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+}
+
+.panel-header-left svg {
+  color: var(--accent-color, #6366f1);
+}
+
+.panel-header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.panel-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.no-proxies {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-tertiary, #666);
+}
+
+.proxy-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg-tertiary, #252540);
+  overflow-x: auto;
+}
+
+.proxy-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-secondary, #1a1a2e);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary, #aaa);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.proxy-tab:hover {
+  background: var(--bg-hover, #303050);
+  color: var(--text-primary, #fff);
+}
+
+.proxy-tab.active {
+  background: var(--accent-color, #6366f1);
+  border-color: var(--accent-color, #6366f1);
+  color: #fff;
+}
+
+.tab-count {
+  background: rgba(0, 0, 0, 0.2);
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+}
+
+.selected-proxy-logs {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+}

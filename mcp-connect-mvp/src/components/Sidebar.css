@@ -6,6 +6,8 @@
   flex-direction: column;
   padding: 12px;
   transition: width 0.2s ease;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .sidebar.collapsed {
@@ -396,6 +398,119 @@
 .popover-item-time {
   font-size: 11px;
   color: #666;
+}
+
+/* FlowForge Section */
+.flowforge-section {
+  margin-top: 16px;
+}
+
+.section-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #666;
+}
+
+.section-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #2a2a2a;
+}
+
+.nav-btn {
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #999;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+  transition: all 0.2s;
+}
+
+.sidebar.collapsed .nav-btn {
+  justify-content: center;
+  padding: 10px;
+}
+
+.nav-btn:hover {
+  background: #1a1a1a;
+  color: #ccc;
+}
+
+.nav-btn.active {
+  background: #1a1a2e;
+  border-color: #6366f1;
+  color: #a5b4fc;
+}
+
+.light-theme .nav-btn {
+  color: #555;
+}
+
+.light-theme .nav-btn:hover {
+  background: #e8e8e8;
+  color: #222;
+}
+
+.light-theme .nav-btn.active {
+  background: #e8e8fc;
+  border-color: #6366f1;
+  color: #4f46e5;
+}
+
+/* Provider error badge */
+.nav-btn.has-error {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.nav-btn .error-badge {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ef4444;
+  animation: pulse-error 2s ease-in-out infinite;
+}
+
+.sidebar.collapsed .nav-btn .error-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  margin-left: 0;
+}
+
+.sidebar.collapsed .nav-btn {
+  position: relative;
+}
+
+@keyframes pulse-error {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.light-theme .section-divider {
+  color: #888;
+}
+
+.light-theme .section-divider::after {
+  background: #d8d8d8;
 }
 
 .sidebar-spacer {

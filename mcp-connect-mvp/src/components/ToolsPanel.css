@@ -106,7 +106,161 @@
 .library-panel {
   display: flex;
   flex-direction: column;
+  gap: 0;
+  max-height: 500px;
+  overflow: hidden;
+}
+
+.library-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #2a2a2a;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.library-search {
+  padding: 12px;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.library-search input {
+  width: 100%;
+  padding: 10px 12px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  color: #e8e8e8;
+  font-size: 13px;
+  outline: none;
+}
+
+.library-search input:focus {
+  border-color: #6366f1;
+}
+
+.library-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.category-btn {
+  padding: 5px 10px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 14px;
+  color: #999;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.category-btn:hover {
+  background: #252525;
+  color: #e8e8e8;
+}
+
+.category-btn.active {
+  background: #6366f1;
+  border-color: #6366f1;
+  color: white;
+}
+
+.library-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.library-empty {
+  padding: 24px;
+  text-align: center;
+  color: #666;
+  font-size: 13px;
+}
+
+.library-group {
+  margin-bottom: 8px;
+}
+
+.library-group-header {
+  padding: 8px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.library-items {
+  display: flex;
+  flex-direction: column;
+}
+
+.library-item {
+  display: flex;
+  align-items: center;
   gap: 12px;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.library-item:hover {
+  background: #1a1a1a;
+}
+
+.library-item-icon {
+  font-size: 20px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #252525;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.library-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.library-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #e8e8e8;
+}
+
+.library-item-desc {
+  font-size: 11px;
+  color: #888;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.library-item-config {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: #f59e0b;
+  margin-top: 2px;
+}
+
+.library-item-arrow {
+  color: #666;
+  flex-shrink: 0;
 }
 
 .library-placeholder {
@@ -726,6 +880,41 @@
   background: #0d8a6a;
 }
 
+.details-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.details-actions .submit-btn {
+  flex: 1;
+}
+
+.reauth-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: #f59e0b !important;
+}
+
+.reauth-btn:hover:not(:disabled) {
+  background: #d97706 !important;
+}
+
+.reauth-btn:disabled {
+  background: #92400e !important;
+  opacity: 0.7;
+}
+
+.light-theme .reauth-btn {
+  background: #f59e0b !important;
+}
+
+.light-theme .reauth-btn:hover:not(:disabled) {
+  background: #d97706 !important;
+}
+
 .server-name.clickable {
   cursor: pointer;
   text-decoration: underline;
@@ -1130,10 +1319,32 @@
   margin-top: 4px;
   font-size: 12px;
   transition: border-color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .working-dir-display:hover {
   border-color: #4a9eff;
+}
+
+.clear-dir-btn {
+  background: transparent;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.clear-dir-btn:hover {
+  background: #333;
+  color: #ef4444;
 }
 
 .working-dir-path {
@@ -1226,6 +1437,15 @@
 
 .light-theme .cancel-dir-btn:hover {
   background: #d0d0d0;
+}
+
+.light-theme .clear-dir-btn {
+  color: #999;
+}
+
+.light-theme .clear-dir-btn:hover {
+  background: #e0e0e0;
+  color: #ef4444;
 }
 
 .local-tools-card .server-icon {

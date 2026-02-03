@@ -6,7 +6,7 @@ import { Paperclip, X } from 'lucide-react';
 import type { MCPServer, MCPTool, Message, ToolCall, CollaborationMode } from '../types/mcp';
 import { openaiClient } from '../services/openaiClient';
 import { anthropicClient } from '../services/anthropicClient';
-import { LOCAL_TOOLS, LOCAL_SERVER_ID } from '../services/localTools';
+import { LOCAL_TOOLS, LOCAL_SERVER_ID, localToolsService } from '../services/localTools';
 import './ChatArea.css';
 
 interface AttachedFile {
@@ -273,12 +273,31 @@ const ChatArea: FC<ChatAreaProps> = ({
     let message: Message;
     let toolCalls: any[];
 
+    // Set conversation ID for CLI session tracking (used by CLI wrapper modes)
+    if (chatId) {
+      openaiClient.setCurrentConversationId(chatId);
+      anthropicClient.setCurrentConversationId(chatId);
+    }
+
+    // Set working directory for both clients (unified experience across all LLMs)
+    const workingDir = localToolsService.getWorkingDirectory();
+    openaiClient.setWorkingDir(workingDir);
+    anthropicClient.setWorkingDir(workingDir);
+
+    console.log('[ChatArea] callProvider called with:', {
+      targetProvider,
+      openaiAuthMode: openaiClient.getAuthMethod(),
+      anthropicAuthMode: anthropicClient.getAuthMethod(),
+    });
+
     if (targetProvider === 'chatgpt') {
+      console.log('[ChatArea] Routing to OpenAI client');
       const result = await openaiClient.chat(msgs, availableTools, openaiModel, modePrompt);
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = 'chatgpt';
     } else {
+      console.log('[ChatArea] Routing to Anthropic client');
       const result = await anthropicClient.chat(
         msgs,
         availableTools,

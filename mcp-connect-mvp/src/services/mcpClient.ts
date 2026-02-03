@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { MCPServer, MCPTool, OAuthDiscovery, GithubInstallResult, CommandOutput, McpManifest } from '../types/mcp';
+import * as proxyService from './proxyService';
 
 interface McpResponse {
   body: string;
@@ -47,6 +48,194 @@ export class MCPClient {
 
   setAuthHandler(handler: (server: MCPServer) => Promise<string | null>): void {
     this.onAuthRequired = handler;
+  }
+
+  /**
+   * Connect to a remote server via the local proxy
+   * This handles: starting proxy, checking auth, triggering OAuth if needed, fetching tools
+   */
+  private async connectViaProxy(server: MCPServer): Promise<void> {
+    console.log(`[MCP Proxy] Connecting ${server.name} via proxy...`);
+
+    // Step 1: Ensure proxy config exists and is up to date, get the proxy ID
+    const proxyId = await this.ensureProxyForServer(server);
+    console.log(`[MCP Proxy] Using proxy ID: ${proxyId}`);
+
+    // Step 2: Start proxy if not running
+    let proxyPort: number;
+    try {
+      const isRunning = await proxyService.isProxyRunning(proxyId);
+      if (!isRunning) {
+        console.log(`[MCP Proxy] Starting proxy for ${server.name}...`);
+        proxyPort = await proxyService.startProxy(proxyId);
+      } else {
+        const config = await proxyService.getProxyConfig(proxyId);
+        proxyPort = config.localPort;
+      }
+      console.log(`[MCP Proxy] Proxy running on port ${proxyPort}`);
+    } catch (err) {
+      throw new Error(`Failed to start proxy: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // Step 3: Check proxy health and handle auth
+    let health: proxyService.ProxyHealthResponse;
+    const maxAuthAttempts = 2;
+    let authAttempts = 0;
+
+    while (authAttempts < maxAuthAttempts) {
+      // Give proxy a moment to connect
+      await this.sleep(500);
+
+      try {
+        health = await proxyService.getProxyHealth(proxyId);
+        console.log(`[MCP Proxy] Health status: ${health.status}`);
+      } catch (err) {
+        // Proxy might still be starting
+        console.log(`[MCP Proxy] Health check failed, retrying...`);
+        await this.sleep(1000);
+        try {
+          health = await proxyService.getProxyHealth(proxyId);
+        } catch {
+          throw new Error(`Proxy not responding: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      // Handle auth states
+      if (health.status === 'needs_auth' || health.status === 'needs_reauth') {
+        console.log(`[MCP Proxy] Auth required (${health.status}), triggering OAuth...`);
+        authAttempts++;
+
+        try {
+          // Use reauthenticateProxy for fresh dynamic registration
+          // This ensures we don't use stale client_id when credentials are revoked
+          console.log(`[MCP Proxy] Using reauthenticate for clean OAuth flow...`);
+          const authResult = await proxyService.reauthenticateProxy(proxyId);
+          console.log(`[MCP Proxy] Reauthenticate result:`, authResult);
+
+          // Wait for auth to complete (user will complete in browser)
+          // Poll health until status changes
+          const authTimeout = 120000; // 2 minutes
+          const startTime = Date.now();
+
+          while (Date.now() - startTime < authTimeout) {
+            await this.sleep(2000);
+            try {
+              health = await proxyService.getProxyHealth(proxyId);
+              if (health.status === 'connected') {
+                console.log(`[MCP Proxy] Auth completed successfully`);
+
+                // Update server with new token from proxy config
+                try {
+                  const proxyConfig = await proxyService.getProxyConfig(proxyId);
+                  if (proxyConfig.oauth?.accessToken) {
+                    server.accessToken = proxyConfig.oauth.accessToken;
+                    server.clientId = proxyConfig.oauth.clientId;
+                    server.clientSecret = proxyConfig.oauth.clientSecret;
+                    this.servers.set(server.id, server);
+                  }
+                } catch {
+                  // Ignore config read errors
+                }
+                break;
+              }
+              if (health.status === 'error') {
+                throw new Error(health.error || 'Authentication failed');
+              }
+            } catch {
+              // Continue polling
+            }
+          }
+
+          if (health.status !== 'connected') {
+            throw new Error('Authentication timed out');
+          }
+        } catch (authErr) {
+          if (authAttempts >= maxAuthAttempts) {
+            throw new Error(`Authentication failed: ${authErr instanceof Error ? authErr.message : String(authErr)}`);
+          }
+        }
+      } else if (health.status === 'connected') {
+        break;
+      } else if (health.status === 'connecting') {
+        // Wait for connection
+        await this.sleep(1000);
+        continue;
+      } else if (health.status === 'error' || health.status === 'remote_unreachable') {
+        throw new Error(health.error || `Proxy status: ${health.status}`);
+      } else {
+        break;
+      }
+    }
+
+    // Step 4: Fetch tools through the proxy
+    const proxyUrl = `http://127.0.0.1:${proxyPort}/mcp`;
+    console.log(`[MCP Proxy] Fetching tools from ${proxyUrl}...`);
+
+    try {
+      // Initialize
+      const initRaw = await invoke<any>('mcp_request', {
+        url: proxyUrl,
+        method: 'POST',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: this.nextRequestId(),
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: { tools: {} },
+            clientInfo: { name: 'kondi', version: '1.0.0' },
+          },
+        }),
+        accessToken: null, // No auth needed - proxy handles it
+        sessionId: null,
+      });
+      const initResult = normalizeInvokeResult(initRaw);
+      if (initResult.session_id) {
+        server.sessionId = initResult.session_id;
+      }
+      console.log(`[MCP Proxy] Initialize successful`);
+
+      // Fetch tools
+      const toolsRaw = await invoke<any>('mcp_request', {
+        url: proxyUrl,
+        method: 'POST',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: this.nextRequestId(),
+          method: 'tools/list',
+          params: {},
+        }),
+        accessToken: null,
+        sessionId: server.sessionId || null,
+      });
+      const toolsResult = normalizeInvokeResult(toolsRaw);
+      const jsonBody = parseResponseBody(toolsResult.body);
+      const responseData = JSON.parse(jsonBody);
+      const toolsData = responseData.result || responseData;
+      console.log(`[MCP Proxy] Loaded ${toolsData.tools?.length || 0} tools`);
+      this.tools.set(server.id, toolsData.tools || []);
+    } catch (err) {
+      throw new Error(`Failed to fetch tools: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // Step 5: Update server status and sync to LLM configs
+    server.status = 'connected';
+    server.messageEndpoint = proxyUrl; // Use proxy URL for future calls
+    this.servers.set(server.id, server);
+    void this.persistServer(server);
+
+    // Sync to LLM configs
+    try {
+      await proxyService.syncProxyToClaudeConfig(proxyId);
+      await proxyService.syncProxyToCodexConfig(proxyId);
+      console.log(`[MCP Proxy] Synced ${server.name} to LLM configs`);
+    } catch (err) {
+      console.warn(`[MCP Proxy] Failed to sync LLM configs:`, err);
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   async probeServer(url: string): Promise<OAuthDiscovery> {
@@ -186,6 +375,12 @@ export class MCPClient {
       server.status = 'connecting';
       server.sessionId = undefined; // Clear any old session
       this.servers.set(server.id, server);
+
+      // For remote servers (http/sse), use proxy-based connection
+      if ((server.transport === 'http' || server.transport === 'sse') && server.type !== 'github_mcp_local') {
+        await this.connectViaProxy(server);
+        return;
+      }
 
       if (server.transport === 'http') {
         // Step 1: Initialize to establish session (many servers require this before tools)
@@ -606,11 +801,10 @@ export class MCPClient {
       return result.content;
     }
 
-    // Use messageEndpoint for SSE transport, otherwise use the main URL
-    const endpoint = server.transport === 'sse' && server.messageEndpoint
-      ? server.messageEndpoint
-      : server.url;
-    console.log('[MCP] Using endpoint:', endpoint, '(transport:', server.transport, ')');
+    // Use messageEndpoint if set (proxy URL), otherwise use the main URL
+    // messageEndpoint is set to the local proxy URL for remote servers
+    const endpoint = server.messageEndpoint || server.url;
+    console.log('[MCP] Using endpoint:', endpoint, '(transport:', server.transport, ', via proxy:', !!server.messageEndpoint, ')');
 
     const requestBody = {
       jsonrpc: '2.0',
@@ -623,17 +817,21 @@ export class MCPClient {
     };
     console.log('[MCP] Sending tools/call request:', JSON.stringify(requestBody));
 
+    // If using proxy (messageEndpoint is set), don't send access token - proxy handles auth
+    const isViaProxy = !!server.messageEndpoint;
+    const accessToken = isViaProxy ? null : (server.accessToken || null);
+
     let rawResult: any;
     try {
       rawResult = await invoke<any>('mcp_request', {
         url: endpoint,
         method: 'POST',
         body: JSON.stringify(requestBody),
-        accessToken: server.accessToken || null,
+        accessToken,
         sessionId: server.sessionId || null,
       });
     } catch (err) {
-      // If unauthorized/expired, attempt re-auth once
+      // If unauthorized/expired, attempt re-auth
       const msg = err instanceof Error ? err.message : String(err);
       const unauthorized =
         msg.includes('401') ||
@@ -643,8 +841,30 @@ export class MCPClient {
         msg.toLowerCase().includes('expired') ||
         msg.toLowerCase().includes('authentication') ||
         msg.toLowerCase().includes('token');
-      // Skip OAuth re-auth if user provided a manual bearer token (authHint === 'token')
-      if (unauthorized && this.onAuthRequired && server.authHint !== 'token') {
+
+      if (unauthorized && isViaProxy) {
+        // For proxy-based connections, use reauthenticateProxy for fresh credentials
+        // This ensures we do proper dynamic client registration if old credentials are revoked
+        console.log('[MCP] Proxy returned auth error, triggering full re-authentication...');
+        try {
+          // Find the actual proxy config ID (might differ from server.id if proxy was found by name)
+          const proxyId = await this.ensureProxyForServer(server);
+          await proxyService.reauthenticateProxy(proxyId);
+          // Wait a bit for the proxy to restart with new credentials
+          await this.sleep(3000);
+          // Retry the request
+          rawResult = await invoke<any>('mcp_request', {
+            url: endpoint,
+            method: 'POST',
+            body: JSON.stringify(requestBody),
+            accessToken: null,
+            sessionId: server.sessionId || null,
+          });
+        } catch (authErr) {
+          throw new Error(`Re-authentication required. Please reconnect the server.`);
+        }
+      } else if (unauthorized && this.onAuthRequired && server.authHint !== 'token') {
+        // Skip OAuth re-auth if user provided a manual bearer token (authHint === 'token')
         console.log('[MCP] tools/call unauthorized, re-authenticating...');
         server.accessToken = undefined;
         this.servers.set(server.id, server);
@@ -742,14 +962,212 @@ export class MCPClient {
           metadata: server.metadata || null,
         },
       });
+
+      // Auto-create/update proxy for remote servers (http/sse transport)
+      if (server.transport === 'http' || server.transport === 'sse') {
+        await this.ensureProxyForServer(server);
+      }
     } catch (_e) {
       // swallow in tests/non-tauri contexts
     }
   }
 
+  /**
+   * Ensure a proxy exists for the given server and is running
+   * Returns the proxy ID being used (may differ from server.id if reusing existing proxy)
+   */
+  private async ensureProxyForServer(server: MCPServer): Promise<string> {
+    try {
+      // Check if proxy already exists by ID first
+      let proxyConfig: proxyService.ProxyConfig | null = null;
+      try {
+        proxyConfig = await proxyService.getProxyConfig(server.id);
+      } catch {
+        // Proxy doesn't exist by ID, check by name
+      }
+
+      // If not found by ID, check if one exists with the same name
+      if (!proxyConfig) {
+        try {
+          const allConfigs = await proxyService.listProxyConfigs();
+          const existingByName = allConfigs.find(c => c.name === server.name);
+          if (existingByName) {
+            console.log(`[MCP] Found existing proxy for ${server.name} (id: ${existingByName.id}), reusing config`);
+            proxyConfig = existingByName;
+          }
+        } catch {
+          // Couldn't list configs, will create new
+        }
+      }
+
+      if (!proxyConfig) {
+        // Allocate ports - base port 18000 + hash of server id
+        const portOffset = Math.abs(this.hashCode(server.id)) % 1000;
+        const localPort = 18000 + portOffset;
+        const callbackPort = 19000 + portOffset;
+
+        // Determine auth method from server config
+        const authMethod = this.determineAuthMethod(server);
+
+        // Create proxy config
+        proxyConfig = {
+          id: server.id,
+          name: server.name,
+          remoteUrl: server.url,
+          transport: server.transport,
+          localPort,
+          authMethod,
+          oauth: authMethod === 'oauth' && server.clientId ? {
+            clientId: server.clientId,
+            clientSecret: server.clientSecret || '',
+            authUrl: this.deriveOAuthUrl(server.url, 'authorize'),
+            tokenUrl: this.deriveOAuthUrl(server.url, 'token'),
+            scopes: ['openid', 'profile', 'offline_access'],
+            callbackPort,
+            accessToken: server.accessToken,
+          } : undefined,
+          bearerToken: authMethod === 'bearer_token' && server.accessToken ? {
+            token: server.accessToken,
+          } : undefined,
+        };
+
+        await proxyService.saveProxyConfig(proxyConfig);
+        console.log(`[MCP] Created proxy config for ${server.name} on port ${localPort}`);
+      } else {
+        // Update existing proxy config with current credentials
+        // IMPORTANT: Don't downgrade authMethod from 'oauth' to 'none'
+        // If proxy was already oauth, it just needs re-auth, not a complete auth method change
+        const newAuthMethod = this.determineAuthMethod(server);
+        const existingAuthMethod = proxyConfig.authMethod;
+
+        // Only change authMethod if upgrading (e.g., none -> oauth) or if explicitly different
+        // Don't downgrade oauth -> none just because server object temporarily lacks credentials
+        if (newAuthMethod !== 'none' || existingAuthMethod === 'none') {
+          proxyConfig.authMethod = newAuthMethod;
+        } else {
+          console.log(`[MCP] Keeping existing authMethod '${existingAuthMethod}' (server suggests '${newAuthMethod}')`);
+        }
+        proxyConfig.remoteUrl = server.url;
+
+        // Update credentials if authMethod is oauth and we have new credentials
+        if (proxyConfig.authMethod === 'oauth') {
+          if (server.clientId) {
+            // Update with new credentials from server
+            proxyConfig.oauth = {
+              ...proxyConfig.oauth,
+              clientId: server.clientId,
+              clientSecret: server.clientSecret || proxyConfig.oauth?.clientSecret || '',
+              authUrl: proxyConfig.oauth?.authUrl || this.deriveOAuthUrl(server.url, 'authorize'),
+              tokenUrl: proxyConfig.oauth?.tokenUrl || this.deriveOAuthUrl(server.url, 'token'),
+              scopes: proxyConfig.oauth?.scopes || ['openid', 'profile', 'offline_access'],
+              callbackPort: proxyConfig.oauth?.callbackPort || 19000 + (Math.abs(this.hashCode(server.id)) % 1000),
+              accessToken: server.accessToken || proxyConfig.oauth?.accessToken,
+            };
+          }
+          // If no clientId on server but authMethod is oauth, keep existing oauth config
+          // (will need re-auth via reauthenticateProxy)
+        } else if (proxyConfig.authMethod === 'bearer_token' && server.accessToken) {
+          proxyConfig.bearerToken = { token: server.accessToken };
+        } else if (proxyConfig.authMethod === 'none') {
+          proxyConfig.oauth = undefined;
+          proxyConfig.bearerToken = undefined;
+        }
+
+        await proxyService.saveProxyConfig(proxyConfig);
+        console.log(`[MCP] Updated proxy config for ${server.name}`);
+      }
+
+      // Use proxy config ID for all operations (may differ from server.id)
+      const proxyId = proxyConfig.id;
+
+      // Start the proxy if not running
+      const isRunning = await proxyService.isProxyRunning(proxyId);
+      if (!isRunning) {
+        try {
+          const port = await proxyService.startProxy(proxyId);
+          console.log(`[MCP] Started proxy for ${server.name} on port ${port}`);
+
+          // Sync to LLM configs
+          await proxyService.syncProxyToClaudeConfig(proxyId);
+          await proxyService.syncProxyToCodexConfig(proxyId);
+          console.log(`[MCP] Synced ${server.name} to Claude and Codex configs`);
+        } catch (err) {
+          console.error(`[MCP] Failed to start proxy for ${server.name}:`, err);
+        }
+      } else {
+        // Reload proxy to pick up updated config
+        try {
+          await proxyService.reloadProxy(proxyId);
+          console.log(`[MCP] Reloaded proxy config for ${server.name}`);
+        } catch (err) {
+          console.warn(`[MCP] Failed to reload proxy for ${server.name}:`, err);
+        }
+      }
+
+      return proxyId;
+    } catch (err) {
+      console.error(`[MCP] Error managing proxy for ${server.name}:`, err);
+      // Return server.id as fallback
+      return server.id;
+    }
+  }
+
+  /**
+   * Determine auth method from server config
+   */
+  private determineAuthMethod(server: MCPServer): string {
+    if (server.authHint === 'oauth' || (server.clientId && server.accessToken)) {
+      return 'oauth';
+    }
+    if (server.authHint === 'token' || (server.accessToken && !server.clientId)) {
+      return 'bearer_token';
+    }
+    return 'none';
+  }
+
+  /**
+   * Derive OAuth URL from server URL
+   */
+  private deriveOAuthUrl(serverUrl: string, endpoint: 'authorize' | 'token'): string {
+    try {
+      const url = new URL(serverUrl);
+      const base = `${url.protocol}//${url.host}`;
+      return `${base}/oauth/${endpoint}`;
+    } catch {
+      return serverUrl;
+    }
+  }
+
+  /**
+   * Simple hash code for string
+   */
+  private hashCode(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return hash;
+  }
+
   private async deleteServer(serverId: string): Promise<void> {
     try {
       await invoke('delete_server_config', { id: serverId });
+
+      // Also delete the proxy
+      try {
+        const server = this.servers.get(serverId);
+        if (server) {
+          // Remove from LLM configs
+          await proxyService.removeProxyFromClaudeConfig(server.name);
+          await proxyService.removeProxyFromCodexConfig(server.name);
+        }
+        await proxyService.deleteProxyConfig(serverId);
+        console.log(`[MCP] Deleted proxy for ${serverId}`);
+      } catch (err) {
+        console.warn(`[MCP] Failed to delete proxy for ${serverId}:`, err);
+      }
     } catch (_e) {
       // swallow in tests/non-tauri contexts
     }

@@ -1,4 +1,4 @@
-import { Plus, Settings, ChevronDown, Check, Zap, MessageSquare, PanelLeftClose, PanelLeft } from 'lucide-react';
+import { Plus, Settings, ChevronDown, Check, Zap, MessageSquare, PanelLeftClose, PanelLeft, Workflow, Sparkles, Cpu, Play, Users, AlertCircle } from 'lucide-react';
 import { useEffect, useState, type FC } from 'react';
 import './Sidebar.css';
 
@@ -8,9 +8,11 @@ type SidebarChat = {
   timestamp?: string;
 };
 
+export type AppView = 'chat' | 'settings' | 'workflows' | 'planner' | 'executions' | 'providers' | 'council';
+
 interface SidebarProps {
-  currentView: 'chat' | 'settings';
-  onViewChange: (view: 'chat' | 'settings') => void;
+  currentView: AppView;
+  onViewChange: (view: AppView) => void;
   currentChatId: string | null;
   onChatSelect: (id: string) => void;
   onNewChat: () => void;
@@ -19,6 +21,8 @@ interface SidebarProps {
   showToolsPanel: boolean;
   onToggleToolsPanel: () => void;
   className?: string;
+  /** Number of LLM providers with errors */
+  providerErrorCount?: number;
 }
 
 const Sidebar: FC<SidebarProps> = ({
@@ -32,9 +36,10 @@ const Sidebar: FC<SidebarProps> = ({
   showToolsPanel,
   onToggleToolsPanel,
   className,
+  providerErrorCount = 0,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
-  const [chatsExpanded, setChatsExpanded] = useState(true);
+  const [chatsExpanded, setChatsExpanded] = useState(false);
   const [showChatsPopover, setShowChatsPopover] = useState(false);
   const [chatMenu, setChatMenu] = useState<{ id: string; x: number; y: number } | null>(null);
 
@@ -153,6 +158,65 @@ const Sidebar: FC<SidebarProps> = ({
           )}
         </div>
       )}
+
+      {/* FlowForge Section */}
+      {!collapsed && (
+        <div className="flowforge-section">
+          <div className="section-divider">
+            <span>FlowForge</span>
+          </div>
+        </div>
+      )}
+
+      <button
+        className={`nav-btn ${currentView === 'workflows' ? 'active' : ''}`}
+        onClick={() => onViewChange('workflows')}
+        title="Workflows"
+      >
+        <Workflow size={18} />
+        {!collapsed && <span>Workflows</span>}
+      </button>
+
+      <button
+        className={`nav-btn ${currentView === 'planner' ? 'active' : ''}`}
+        onClick={() => onViewChange('planner')}
+        title="AI Planner"
+      >
+        <Sparkles size={18} />
+        {!collapsed && <span>AI Planner</span>}
+      </button>
+
+      <button
+        className={`nav-btn ${currentView === 'executions' ? 'active' : ''}`}
+        onClick={() => onViewChange('executions')}
+        title="Executions"
+      >
+        <Play size={18} />
+        {!collapsed && <span>Executions</span>}
+      </button>
+
+      <button
+        className={`nav-btn ${currentView === 'council' ? 'active' : ''}`}
+        onClick={() => onViewChange('council')}
+        title="Council - Multi-Model Deliberation"
+      >
+        <Users size={18} />
+        {!collapsed && <span>Council</span>}
+      </button>
+
+      <button
+        className={`nav-btn ${currentView === 'providers' ? 'active' : ''} ${providerErrorCount > 0 ? 'has-error' : ''}`}
+        onClick={() => onViewChange('providers')}
+        title={providerErrorCount > 0 ? `LLM Providers (${providerErrorCount} error${providerErrorCount > 1 ? 's' : ''})` : 'LLM Providers'}
+      >
+        <Cpu size={18} />
+        {!collapsed && <span>LLM Providers</span>}
+        {providerErrorCount > 0 && (
+          <span className="error-badge" title={`${providerErrorCount} provider error${providerErrorCount > 1 ? 's' : ''}`}>
+            <AlertCircle size={14} />
+          </span>
+        )}
+      </button>
 
       <div className="sidebar-spacer" />
 

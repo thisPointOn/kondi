@@ -1,10 +1,12 @@
 import { useMemo, useState, useEffect, type FC } from 'react';
-import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal } from 'lucide-react';
+import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal, FileText } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, OAuthDiscovery } from '../types/mcp';
 import { LOCAL_TOOLS, localToolsService } from '../services/localTools';
 import { fetchGithubManifest, fetchGithubReadme } from '../services/githubManifestFetcher';
 import { mcpClient } from '../services/mcpClient';
+import { ProxyLogViewer } from './ProxyLogViewer';
 import './ToolsPanel.css';
 
 interface ToolsPanelProps {
@@ -21,6 +23,7 @@ interface ToolsPanelProps {
   onServerDisconnect: (serverId: string) => void;
   onServerDelete: (serverId: string) => void;
   onServerUpdate: (server: MCPServer) => void;
+  onServerReauthenticate?: (server: MCPServer) => Promise<void>;
   onServerAddLocal?: (server: MCPServer) => void;
   onGithubCheck?: (params: { repoUrl: string; manifestRaw: string; readmeText: string }) => Promise<void>;
   onToolClick: (toolName: string) => void;
@@ -33,6 +36,370 @@ type AddPhase = 'url_entry' | 'probing' | 'credentials_required' | 'oauth_pendin
 type AuthMethod = 'auto' | 'bearer' | 'none';
 type GithubPhase = 'form' | 'confirm' | 'downloading' | 'installing' | 'ready';
 
+// ============================================================================
+// MCP Server Library - Curated list of popular servers
+// ============================================================================
+
+interface LibraryServer {
+  id: string;
+  name: string;
+  description: string;
+  category: 'official' | 'filesystem' | 'developer' | 'productivity' | 'data' | 'ai' | 'local';
+  icon: string;
+  transport: MCPServer['transport'];
+  url?: string;
+  repoUrl?: string;
+  authMethod?: AuthMethod;
+  requiresConfig?: boolean;
+  configHint?: string;
+}
+
+const MCP_SERVER_LIBRARY: LibraryServer[] = [
+  // Official Anthropic MCPs
+  {
+    id: 'filesystem',
+    name: 'Filesystem',
+    description: 'Read, write, and manage local files and directories',
+    category: 'official',
+    icon: '📁',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem',
+  },
+  {
+    id: 'github',
+    name: 'GitHub',
+    description: 'Interact with GitHub repos, issues, PRs, and more',
+    category: 'official',
+    icon: '🐙',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/github',
+    requiresConfig: true,
+    configHint: 'Requires GITHUB_TOKEN environment variable',
+  },
+  {
+    id: 'gitlab',
+    name: 'GitLab',
+    description: 'GitLab API integration for repos and CI/CD',
+    category: 'official',
+    icon: '🦊',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/gitlab',
+    requiresConfig: true,
+    configHint: 'Requires GITLAB_TOKEN environment variable',
+  },
+  {
+    id: 'git',
+    name: 'Git',
+    description: 'Git operations: clone, commit, push, branch management',
+    category: 'official',
+    icon: '📦',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/git',
+  },
+  {
+    id: 'slack',
+    name: 'Slack',
+    description: 'Send messages, read channels, manage Slack workspaces',
+    category: 'official',
+    icon: '💬',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/slack',
+    requiresConfig: true,
+    configHint: 'Requires SLACK_BOT_TOKEN and SLACK_TEAM_ID',
+  },
+  {
+    id: 'google-drive',
+    name: 'Google Drive',
+    description: 'Access and manage Google Drive files',
+    category: 'official',
+    icon: '📂',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/gdrive',
+    requiresConfig: true,
+    configHint: 'Requires Google OAuth credentials',
+  },
+  {
+    id: 'postgres',
+    name: 'PostgreSQL',
+    description: 'Query and manage PostgreSQL databases',
+    category: 'official',
+    icon: '🐘',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/postgres',
+    requiresConfig: true,
+    configHint: 'Requires POSTGRES_CONNECTION_STRING',
+  },
+  {
+    id: 'sqlite',
+    name: 'SQLite',
+    description: 'Query and manage SQLite databases',
+    category: 'official',
+    icon: '🗄️',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite',
+  },
+  {
+    id: 'memory',
+    name: 'Memory',
+    description: 'Persistent memory and knowledge graph storage',
+    category: 'official',
+    icon: '🧠',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/memory',
+  },
+  {
+    id: 'brave-search',
+    name: 'Brave Search',
+    description: 'Web search using Brave Search API',
+    category: 'official',
+    icon: '🦁',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search',
+    requiresConfig: true,
+    configHint: 'Requires BRAVE_API_KEY',
+  },
+  {
+    id: 'fetch',
+    name: 'Fetch',
+    description: 'Fetch and process web content from URLs',
+    category: 'official',
+    icon: '🌐',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/fetch',
+  },
+  {
+    id: 'puppeteer',
+    name: 'Puppeteer',
+    description: 'Browser automation and web scraping',
+    category: 'official',
+    icon: '🎭',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer',
+  },
+  // Developer Tools
+  {
+    id: 'sequential-thinking',
+    name: 'Sequential Thinking',
+    description: 'Step-by-step reasoning and problem solving',
+    category: 'developer',
+    icon: '🤔',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking',
+  },
+  {
+    id: 'everything',
+    name: 'Everything',
+    description: 'Reference server with all MCP features for testing',
+    category: 'developer',
+    icon: '🧪',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/everything',
+  },
+  // Community Servers
+  {
+    id: 'notion',
+    name: 'Notion',
+    description: 'Interact with Notion pages and databases',
+    category: 'productivity',
+    icon: '📝',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/notion',
+    requiresConfig: true,
+    configHint: 'Requires NOTION_API_KEY',
+  },
+  {
+    id: 'linear',
+    name: 'Linear',
+    description: 'Manage Linear issues and projects',
+    category: 'productivity',
+    icon: '📊',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/jerhadf/linear-mcp-server',
+    requiresConfig: true,
+    configHint: 'Requires LINEAR_API_KEY',
+  },
+  {
+    id: 'obsidian',
+    name: 'Obsidian',
+    description: 'Access and edit Obsidian vault notes',
+    category: 'productivity',
+    icon: '💎',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/smithery-ai/mcp-obsidian',
+  },
+  {
+    id: 'todoist',
+    name: 'Todoist',
+    description: 'Manage Todoist tasks and projects',
+    category: 'productivity',
+    icon: '✅',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/abhiz123/todoist-mcp-server',
+    requiresConfig: true,
+    configHint: 'Requires TODOIST_API_TOKEN',
+  },
+  {
+    id: 'docker',
+    name: 'Docker',
+    description: 'Manage Docker containers and images',
+    category: 'developer',
+    icon: '🐳',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/ckreiling/mcp-server-docker',
+  },
+  {
+    id: 'kubernetes',
+    name: 'Kubernetes',
+    description: 'Interact with Kubernetes clusters',
+    category: 'developer',
+    icon: '☸️',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/strowk/mcp-k8s-go',
+  },
+  {
+    id: 'aws',
+    name: 'AWS',
+    description: 'Interact with AWS services',
+    category: 'developer',
+    icon: '☁️',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/rishikavikondala/mcp-server-aws',
+    requiresConfig: true,
+    configHint: 'Requires AWS credentials configured',
+  },
+  {
+    id: 'raycast',
+    name: 'Raycast',
+    description: 'Control Raycast commands and extensions',
+    category: 'productivity',
+    icon: '🔦',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/raycast/mcp-server-raycast',
+  },
+  {
+    id: 'sentry',
+    name: 'Sentry',
+    description: 'Access Sentry error tracking and monitoring',
+    category: 'developer',
+    icon: '🔴',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/getsentry/sentry-mcp',
+    requiresConfig: true,
+    configHint: 'Requires SENTRY_AUTH_TOKEN',
+  },
+  {
+    id: 'time',
+    name: 'Time',
+    description: 'Get current time and timezone information',
+    category: 'local',
+    icon: '🕐',
+    transport: 'stdio',
+    repoUrl: 'https://github.com/modelcontextprotocol/servers/tree/main/src/time',
+  },
+];
+
+const LIBRARY_CATEGORIES = [
+  { id: 'official', name: 'Official', icon: '⭐' },
+  { id: 'developer', name: 'Developer Tools', icon: '🛠️' },
+  { id: 'productivity', name: 'Productivity', icon: '📋' },
+  { id: 'data', name: 'Data & Storage', icon: '💾' },
+  { id: 'local', name: 'Local', icon: '💻' },
+];
+
+// Library Panel Component
+const LibraryPanel: FC<{
+  onSelect: (server: LibraryServer) => void;
+  onCancel: () => void;
+}> = ({ onSelect, onCancel }) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+
+  const filteredServers = MCP_SERVER_LIBRARY.filter((server) => {
+    const matchesSearch =
+      searchQuery === '' ||
+      server.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      server.description.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCategory = !selectedCategory || server.category === selectedCategory;
+    return matchesSearch && matchesCategory;
+  });
+
+  const groupedServers = LIBRARY_CATEGORIES.map((cat) => ({
+    ...cat,
+    servers: filteredServers.filter((s) => s.category === cat.id),
+  })).filter((cat) => cat.servers.length > 0);
+
+  return (
+    <div className="library-panel">
+      <div className="library-header">
+        <span>MCP Server Library</span>
+        <button className="cancel-btn" onClick={onCancel}>Cancel</button>
+      </div>
+
+      <div className="library-search">
+        <input
+          type="text"
+          placeholder="Search servers..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+      </div>
+
+      <div className="library-categories">
+        <button
+          className={`category-btn ${!selectedCategory ? 'active' : ''}`}
+          onClick={() => setSelectedCategory(null)}
+        >
+          All
+        </button>
+        {LIBRARY_CATEGORIES.map((cat) => (
+          <button
+            key={cat.id}
+            className={`category-btn ${selectedCategory === cat.id ? 'active' : ''}`}
+            onClick={() => setSelectedCategory(cat.id === selectedCategory ? null : cat.id)}
+          >
+            {cat.icon} {cat.name}
+          </button>
+        ))}
+      </div>
+
+      <div className="library-content">
+        {groupedServers.length === 0 ? (
+          <div className="library-empty">No servers found</div>
+        ) : (
+          groupedServers.map((group) => (
+            <div key={group.id} className="library-group">
+              <div className="library-group-header">
+                {group.icon} {group.name}
+              </div>
+              <div className="library-items">
+                {group.servers.map((server) => (
+                  <div
+                    key={server.id}
+                    className="library-item"
+                    onClick={() => onSelect(server)}
+                  >
+                    <span className="library-item-icon">{server.icon}</span>
+                    <div className="library-item-info">
+                      <span className="library-item-name">{server.name}</span>
+                      <span className="library-item-desc">{server.description}</span>
+                      {server.requiresConfig && (
+                        <span className="library-item-config">
+                          <Lock size={10} /> {server.configHint || 'Requires configuration'}
+                        </span>
+                      )}
+                    </div>
+                    <ChevronRight size={16} className="library-item-arrow" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+};
+
 // Helper components defined first so they can be used by main component
 const ToolItem: FC<{ tool: MCPTool; onClick: () => void }> = ({ tool, onClick }) => (
   <div className="tool-item" onClick={onClick} title={tool.description}>
@@ -42,21 +409,35 @@ const ToolItem: FC<{ tool: MCPTool; onClick: () => void }> = ({ tool, onClick })
 );
 
 const LocalToolsCard: FC<{ onToolClick: (toolName: string) => void }> = ({ onToolClick }) => {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [workingDir, setWorkingDir] = useState(() => localToolsService.getWorkingDirectory() || '');
-  const [editingDir, setEditingDir] = useState(false);
-  const [tempDir, setTempDir] = useState('');
+  const [selectingDir, setSelectingDir] = useState(false);
 
-  const handleSaveDir = () => {
-    const dir = tempDir.trim();
-    localToolsService.setWorkingDirectory(dir || null);
-    setWorkingDir(dir);
-    setEditingDir(false);
+  const handleSelectDir = async () => {
+    if (selectingDir) return;
+    setSelectingDir(true);
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: 'Select Working Directory',
+        defaultPath: workingDir || undefined,
+      });
+      if (selected && typeof selected === 'string') {
+        localToolsService.setWorkingDirectory(selected);
+        setWorkingDir(selected);
+      }
+    } catch (err) {
+      console.error('[LocalTools] Failed to select directory:', err);
+    } finally {
+      setSelectingDir(false);
+    }
   };
 
-  const handleEditDir = () => {
-    setTempDir(workingDir);
-    setEditingDir(true);
+  const handleClearDir = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    localToolsService.setWorkingDirectory(null);
+    setWorkingDir('');
   };
 
   return (
@@ -84,34 +465,27 @@ const LocalToolsCard: FC<{ onToolClick: (toolName: string) => void }> = ({ onToo
             <div className="server-meta-row">
               <span className="meta-label">Working Directory</span>
             </div>
-            {editingDir ? (
-              <div className="working-dir-edit">
-                <input
-                  type="text"
-                  value={tempDir}
-                  onChange={(e) => setTempDir(e.target.value)}
-                  placeholder="/path/to/project"
-                  className="working-dir-input"
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSaveDir();
-                    if (e.key === 'Escape') setEditingDir(false);
-                  }}
-                />
-                <div className="working-dir-actions">
-                  <button className="save-dir-btn" onClick={handleSaveDir}>Save</button>
-                  <button className="cancel-dir-btn" onClick={() => setEditingDir(false)}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div className="working-dir-display" onClick={handleEditDir}>
-                {workingDir ? (
+            <div className="working-dir-display" onClick={handleSelectDir}>
+              {selectingDir ? (
+                <span className="working-dir-placeholder">
+                  <Loader2 size={12} className="spin" style={{ marginRight: 6 }} />
+                  Selecting...
+                </span>
+              ) : workingDir ? (
+                <>
                   <span className="working-dir-path">{workingDir}</span>
-                ) : (
-                  <span className="working-dir-placeholder">Click to set working directory...</span>
-                )}
-              </div>
-            )}
+                  <button
+                    className="clear-dir-btn"
+                    onClick={handleClearDir}
+                    title="Clear working directory"
+                  >
+                    ×
+                  </button>
+                </>
+              ) : (
+                <span className="working-dir-placeholder">Click to select folder...</span>
+              )}
+            </div>
           </div>
 
           <div className="tools-list">
@@ -136,6 +510,7 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
   onServerDisconnect,
   onServerDelete,
   onServerUpdate,
+  onServerReauthenticate,
   onServerAddLocal,
   onGithubCheck,
   onToolClick,
@@ -594,15 +969,23 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
         )}
 
         {addMode === 'library' && (
-          <div className="library-panel">
-            <div className="library-header">
-              <span>Browse Library</span>
-              <button className="cancel-btn" onClick={() => setAddMode(null)}>Cancel</button>
-            </div>
-            <div className="library-placeholder">
-              Coming soon...
-            </div>
-          </div>
+          <LibraryPanel
+            onSelect={(server) => {
+              if (server.transport === 'stdio') {
+                // For stdio servers, set up github install flow
+                setGithubRepoUrl(server.repoUrl || '');
+                setAddMode('github');
+              } else {
+                // For HTTP/SSE servers, go to custom form pre-filled
+                setNewServerName(server.name);
+                setNewServerUrl(server.url || '');
+                setTransport(server.transport);
+                setAuthMethod(server.authMethod || 'none');
+                setAddMode('custom');
+              }
+            }}
+            onCancel={() => setAddMode(null)}
+          />
         )}
 
         {addMode === 'custom' && (
@@ -781,6 +1164,7 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
             onDisconnect={() => onServerDisconnect(server.id)}
             onDelete={() => onServerDelete(server.id)}
             onUpdateServer={onServerUpdate}
+            onReauthenticate={onServerReauthenticate}
             connectDeadline={connectDeadlines[server.id]}
           />
         ))}
@@ -798,16 +1182,20 @@ const ServerCard: FC<{
   onDisconnect: () => void;
   onDelete: () => void;
   onUpdateServer?: (server: MCPServer) => void;
+  onReauthenticate?: (server: MCPServer) => Promise<void>;
   connectDeadline?: number;
-}> = ({ server, onToolClick, onConnect, onDisconnect, onDelete, onUpdateServer, connectDeadline }) => {
-  const [expanded, setExpanded] = useState(true);
+}> = ({ server, onToolClick, onConnect, onDisconnect, onDelete, onUpdateServer, onReauthenticate, connectDeadline }) => {
+  const [expanded, setExpanded] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
   const [editName, setEditName] = useState(server.name);
   const [editUrl, setEditUrl] = useState(server.url);
   const [editTransport, setEditTransport] = useState(server.transport);
   const [editToken, setEditToken] = useState(server.accessToken || '');
   const [editClientId, setEditClientId] = useState(server.clientId || '');
   const [editClientSecret, setEditClientSecret] = useState(server.clientSecret || '');
+  const [isReauthenticating, setIsReauthenticating] = useState(false);
+  const [reauthError, setReauthError] = useState<string | null>(null);
   const [, forceTick] = useState(0);
 
   useEffect(() => {
@@ -843,6 +1231,24 @@ const ServerCard: FC<{
       });
     }
     setShowDetails(false);
+  };
+
+  const handleReauthenticate = async () => {
+    if (!onReauthenticate) return;
+
+    setIsReauthenticating(true);
+    setReauthError(null);
+
+    try {
+      // Re-authenticate using the current server config
+      // The backend will handle re-probing and getting fresh OAuth credentials
+      await onReauthenticate(server);
+      setShowDetails(false);
+    } catch (err) {
+      setReauthError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsReauthenticating(false);
+    }
   };
 
   const tools = server.tools || [];
@@ -923,6 +1329,10 @@ const ServerCard: FC<{
                   </button>
                 </>
               )}
+              <button className="menu-item" onClick={() => { setShowLogs(!showLogs); setMenuOpen(false); }}>
+                <FileText size={12} />
+                {showLogs ? 'Hide Logs' : 'View Logs'}
+              </button>
               <button className="menu-item danger" onClick={onDelete}>
                 Delete
               </button>
@@ -931,12 +1341,26 @@ const ServerCard: FC<{
         </div>
       </div>
 
+      {showLogs && (
+        <ProxyLogViewer
+          proxyId={server.id}
+          proxyName={server.name}
+          onClose={() => setShowLogs(false)}
+        />
+      )}
+
       {showDetails && (
         <div className="server-details">
           <div className="details-header">
             <span>Server Configuration</span>
-            <button className="cancel-btn" onClick={() => setShowDetails(false)}>Cancel</button>
+            <button className="cancel-btn" onClick={() => { setShowDetails(false); setReauthError(null); }}>Cancel</button>
           </div>
+          {reauthError && (
+            <div className="discovery-error">
+              <AlertCircle size={14} />
+              <span>{reauthError}</span>
+            </div>
+          )}
           <input
             type="text"
             placeholder="Server name"
@@ -983,9 +1407,27 @@ const ServerCard: FC<{
               onChange={(e) => setEditClientSecret(e.target.value)}
             />
           </div>
-          <button className="submit-btn" onClick={handleSaveDetails}>
-            Save Changes
-          </button>
+          <div className="details-actions">
+            <button className="submit-btn" onClick={handleSaveDetails}>
+              Save Changes
+            </button>
+            {(server.authHint === 'oauth' || server.clientId) && onReauthenticate && (
+              <button
+                className="submit-btn reauth-btn"
+                onClick={handleReauthenticate}
+                disabled={isReauthenticating}
+              >
+                {isReauthenticating ? (
+                  <>
+                    <Loader2 size={14} className="spin" />
+                    Authenticating...
+                  </>
+                ) : (
+                  'Re-authenticate'
+                )}
+              </button>
+            )}
+          </div>
         </div>
       )}
 
