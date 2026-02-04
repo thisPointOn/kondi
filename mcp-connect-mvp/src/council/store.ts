@@ -10,11 +10,17 @@ import type {
   OrchestrationConfig,
   SharedContext,
   Resolution,
+  DeliberationConfig,
+  DeliberationState,
+  DeliberationRoleAssignment,
+  DeliberationPhase,
 } from './types';
 import { validateCouncil } from './validation';
+import { deleteLedger } from './ledger-store';
+import { deleteAllArtifacts } from './context-store';
 
 const STORAGE_KEY = 'mcp-councils';
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
 
 interface StorageData {
   version: number;
@@ -33,16 +39,38 @@ function loadFromStorage(): StorageData {
       return { version: STORAGE_VERSION, councils: [], lastUpdated: new Date().toISOString() };
     }
     const data = JSON.parse(raw) as StorageData;
-    // Handle version migrations if needed
-    if (data.version !== STORAGE_VERSION) {
+    // Handle version migrations
+    if (data.version < STORAGE_VERSION) {
       console.log('[CouncilStore] Migrating from version', data.version, 'to', STORAGE_VERSION);
-      // Add migration logic here when schema changes
+      data.councils = migrateCouncils(data.councils, data.version);
+      data.version = STORAGE_VERSION;
+      saveToStorage(data);
     }
     return data;
   } catch (error) {
     console.error('[CouncilStore] Failed to load from storage:', error);
     return { version: STORAGE_VERSION, councils: [], lastUpdated: new Date().toISOString() };
   }
+}
+
+/**
+ * Migrate councils from older versions
+ */
+function migrateCouncils(councils: Council[], fromVersion: number): Council[] {
+  let migrated = councils;
+
+  // Migration from v1 to v2: Add deliberation fields
+  if (fromVersion < 2) {
+    migrated = migrated.map((council) => ({
+      ...council,
+      // Existing councils get undefined deliberation (backward compatible)
+      deliberation: undefined,
+      deliberationState: undefined,
+    }));
+    console.log('[CouncilStore] Migrated', migrated.length, 'councils from v1 to v2');
+  }
+
+  return migrated;
 }
 
 function saveToStorage(data: StorageData): void {
@@ -87,8 +115,10 @@ export function createCouncil(params: {
   sharedContext?: Partial<SharedContext>;
   personas?: Persona[];
   orchestration?: Partial<OrchestrationConfig>;
+  deliberation?: Partial<DeliberationConfig>;
 }): Council {
   const now = new Date().toISOString();
+  const isDeliberationMode = params.orchestration?.mode === 'deliberation';
 
   const council: Council = {
     id: crypto.randomUUID(),
@@ -117,13 +147,29 @@ export function createCouncil(params: {
     status: 'active',
     totalTokensUsed: 0,
     estimatedCost: 0,
+    // Deliberation config (only for deliberation mode)
+    deliberation: isDeliberationMode ? {
+      enabled: true,
+      roleAssignments: params.deliberation?.roleAssignments || [],
+      maxRounds: params.deliberation?.maxRounds ?? 4,
+      maxRevisions: params.deliberation?.maxRevisions ?? 3,
+      decisionCriteria: params.deliberation?.decisionCriteria,
+      summaryMode: params.deliberation?.summaryMode ?? 'manager',
+      summarizeAfterRound: params.deliberation?.summarizeAfterRound ?? 2,
+      contextTokenBudget: params.deliberation?.contextTokenBudget ?? 80000,
+      consultantErrorPolicy: params.deliberation?.consultantErrorPolicy ?? 'retry',
+      maxRetries: params.deliberation?.maxRetries ?? 2,
+      requirePlan: params.deliberation?.requirePlan ?? false,
+    } : undefined,
+    // Deliberation state (initialized when deliberation starts)
+    deliberationState: undefined,
   };
 
   const data = loadFromStorage();
   data.councils.push(council);
   saveToStorage(data);
 
-  console.log('[CouncilStore] Created council:', council.id, council.name);
+  console.log('[CouncilStore] Created council:', council.id, council.name, isDeliberationMode ? '(deliberation mode)' : '');
   return council;
 }
 
@@ -452,6 +498,8 @@ export function duplicateCouncil(councilId: string, newName?: string): Council |
       ...p,
       id: crypto.randomUUID(),
     })),
+    // Reset deliberation state but keep config
+    deliberationState: undefined,
   };
 
   const data = loadFromStorage();
@@ -459,6 +507,316 @@ export function duplicateCouncil(councilId: string, newName?: string): Council |
   saveToStorage(data);
 
   return duplicate;
+}
+
+// ============================================================================
+// Deliberation State Operations
+// ============================================================================
+
+/**
+ * Initialize deliberation state for a council
+ */
+export function initializeDeliberationState(councilId: string): Council | null {
+  const council = getCouncil(councilId);
+  if (!council || !council.deliberation) return null;
+
+  const initialState: DeliberationState = {
+    currentPhase: 'created',
+    currentRound: 0,
+    roundRunId: crypto.randomUUID(),
+    maxRounds: council.deliberation.maxRounds,
+    revisionCount: 0,
+    maxRevisions: council.deliberation.maxRevisions,
+    roundSubmissions: {},
+    roundSummaries: {},
+    activeContextId: '',
+    activeContextVersion: 0,
+    pendingPatches: [],
+    errorLog: [],
+  };
+
+  return updateCouncil(councilId, { deliberationState: initialState });
+}
+
+/**
+ * Update deliberation state
+ */
+export function updateDeliberationState(
+  councilId: string,
+  updates: Partial<DeliberationState>
+): Council | null {
+  const council = getCouncil(councilId);
+  if (!council || !council.deliberationState) return null;
+
+  const updatedState: DeliberationState = {
+    ...council.deliberationState,
+    ...updates,
+  };
+
+  return updateCouncil(councilId, { deliberationState: updatedState });
+}
+
+/**
+ * Update deliberation phase
+ */
+export function setDeliberationPhase(
+  councilId: string,
+  phase: DeliberationPhase,
+  previousPhase?: DeliberationPhase
+): Council | null {
+  let council = getCouncil(councilId);
+  if (!council) return null;
+
+  // Initialize deliberationState if it doesn't exist
+  if (!council.deliberationState) {
+    council = initializeDeliberationState(councilId);
+    if (!council) return null;
+  }
+
+  const updates: Partial<DeliberationState> = { currentPhase: phase };
+  if (previousPhase !== undefined) {
+    updates.previousPhase = previousPhase;
+  }
+
+  return updateDeliberationState(councilId, updates);
+}
+
+/**
+ * Advance to next round
+ */
+export function advanceDeliberationRound(councilId: string): Council | null {
+  const council = getCouncil(councilId);
+  if (!council || !council.deliberationState) return null;
+
+  const newRound = council.deliberationState.currentRound + 1;
+
+  return updateDeliberationState(councilId, {
+    currentRound: newRound,
+    roundRunId: crypto.randomUUID(),
+  });
+}
+
+/**
+ * Record a consultant submission for the current round
+ */
+export function recordRoundSubmission(
+  councilId: string,
+  personaId: string
+): Council | null {
+  const council = getCouncil(councilId);
+  if (!council || !council.deliberationState) return null;
+
+  const currentRound = council.deliberationState.currentRound;
+  const submissions = { ...council.deliberationState.roundSubmissions };
+
+  if (!submissions[currentRound]) {
+    submissions[currentRound] = [];
+  }
+
+  if (!submissions[currentRound].includes(personaId)) {
+    submissions[currentRound].push(personaId);
+  }
+
+  return updateDeliberationState(councilId, { roundSubmissions: submissions });
+}
+
+/**
+ * Check if all consultants have submitted for the current round
+ */
+export function isRoundComplete(councilId: string): boolean {
+  const council = getCouncil(councilId);
+  if (!council || !council.deliberation || !council.deliberationState) return false;
+
+  const currentRound = council.deliberationState.currentRound;
+  const submissions = council.deliberationState.roundSubmissions[currentRound] || [];
+
+  // Get consultant persona IDs from role assignments
+  const consultantIds = council.deliberation.roleAssignments
+    .filter((r) => r.role === 'consultant')
+    .map((r) => r.personaId);
+
+  return consultantIds.every((id) => submissions.includes(id));
+}
+
+/**
+ * Set role assignments for a council
+ */
+export function setRoleAssignments(
+  councilId: string,
+  assignments: DeliberationRoleAssignment[]
+): Council | null {
+  const council = getCouncil(councilId);
+  if (!council || !council.deliberation) return null;
+
+  const updatedDeliberation: DeliberationConfig = {
+    ...council.deliberation,
+    roleAssignments: assignments,
+  };
+
+  return updateCouncil(councilId, { deliberation: updatedDeliberation });
+}
+
+/**
+ * Add a pending patch to deliberation state
+ */
+export function addPendingPatch(councilId: string, patchId: string): Council | null {
+  const council = getCouncil(councilId);
+  if (!council || !council.deliberationState) return null;
+
+  const pendingPatches = [...council.deliberationState.pendingPatches, patchId];
+
+  return updateDeliberationState(councilId, { pendingPatches });
+}
+
+/**
+ * Remove a pending patch from deliberation state
+ */
+export function removePendingPatch(councilId: string, patchId: string): Council | null {
+  const council = getCouncil(councilId);
+  if (!council || !council.deliberationState) return null;
+
+  const pendingPatches = council.deliberationState.pendingPatches.filter(
+    (id) => id !== patchId
+  );
+
+  return updateDeliberationState(councilId, { pendingPatches });
+}
+
+/**
+ * Set round summary
+ */
+export function setRoundSummary(
+  councilId: string,
+  round: number,
+  summary: string
+): Council | null {
+  const council = getCouncil(councilId);
+  if (!council || !council.deliberationState) return null;
+
+  const roundSummaries = {
+    ...council.deliberationState.roundSummaries,
+    [round]: summary,
+  };
+
+  return updateDeliberationState(councilId, { roundSummaries });
+}
+
+/**
+ * Set active context
+ */
+export function setActiveContext(
+  councilId: string,
+  contextId: string,
+  version: number
+): Council | null {
+  return updateDeliberationState(councilId, {
+    activeContextId: contextId,
+    activeContextVersion: version,
+  });
+}
+
+/**
+ * Set manager's last evaluation
+ */
+export function setManagerEvaluation(
+  councilId: string,
+  evaluation: DeliberationState['managerLastEvaluation']
+): Council | null {
+  return updateDeliberationState(councilId, { managerLastEvaluation: evaluation });
+}
+
+/**
+ * Set final decision ID
+ */
+export function setFinalDecision(councilId: string, decisionId: string): Council | null {
+  return updateDeliberationState(councilId, { finalDecisionId: decisionId });
+}
+
+/**
+ * Set work directive ID
+ */
+export function setWorkDirective(councilId: string, directiveId: string): Council | null {
+  return updateDeliberationState(councilId, { workDirectiveId: directiveId });
+}
+
+/**
+ * Set current output ID
+ */
+export function setCurrentOutput(councilId: string, outputId: string): Council | null {
+  return updateDeliberationState(councilId, { currentOutputId: outputId });
+}
+
+/**
+ * Increment revision count
+ */
+export function incrementRevisionCount(councilId: string): Council | null {
+  const council = getCouncil(councilId);
+  if (!council || !council.deliberationState) return null;
+
+  return updateDeliberationState(councilId, {
+    revisionCount: council.deliberationState.revisionCount + 1,
+  });
+}
+
+/**
+ * Add error to log
+ */
+export function addErrorToLog(councilId: string, error: string): Council | null {
+  const council = getCouncil(councilId);
+  if (!council || !council.deliberationState) return null;
+
+  const errorLog = [...council.deliberationState.errorLog, error];
+
+  return updateDeliberationState(councilId, { errorLog });
+}
+
+/**
+ * Get persona by role
+ */
+export function getPersonaByRole(
+  council: Council,
+  role: 'manager' | 'consultant' | 'worker'
+): Persona[] {
+  if (!council.deliberation) return [];
+
+  const roleAssignments = council.deliberation.roleAssignments.filter(
+    (r) => r.role === role
+  );
+
+  return roleAssignments
+    .map((r) => council.personas.find((p) => p.id === r.personaId))
+    .filter((p): p is Persona => p !== undefined);
+}
+
+/**
+ * Get role assignment for a persona
+ */
+export function getRoleAssignment(
+  council: Council,
+  personaId: string
+): DeliberationRoleAssignment | undefined {
+  return council.deliberation?.roleAssignments.find((r) => r.personaId === personaId);
+}
+
+/**
+ * Check if council is in deliberation mode
+ */
+export function isDeliberationMode(council: Council): boolean {
+  return council.orchestration.mode === 'deliberation' && council.deliberation?.enabled === true;
+}
+
+/**
+ * Delete council and all associated deliberation data
+ */
+export function deleteCouncilWithData(id: string): boolean {
+  // Delete ledger
+  deleteLedger(id);
+
+  // Delete artifacts
+  deleteAllArtifacts(id);
+
+  // Delete council
+  return deleteCouncil(id);
 }
 
 // ============================================================================
@@ -493,7 +851,7 @@ export class CouncilStore {
   }
 
   delete(id: string): boolean {
-    const success = deleteCouncil(id);
+    const success = deleteCouncilWithData(id);
     if (success) this.notify();
     return success;
   }
@@ -506,6 +864,12 @@ export class CouncilStore {
 
   removePersona(councilId: string, personaId: string): Council | null {
     const council = removePersona(councilId, personaId);
+    if (council) this.notify();
+    return council;
+  }
+
+  updatePersona(councilId: string, personaId: string, updates: Partial<Omit<Persona, 'id'>>): Council | null {
+    const council = updatePersona(councilId, personaId, updates);
     if (council) this.notify();
     return council;
   }
@@ -527,6 +891,127 @@ export class CouncilStore {
     if (council) this.notify();
     return council;
   }
+
+  // ============================================================================
+  // Deliberation Methods
+  // ============================================================================
+
+  initializeDeliberation(councilId: string): Council | null {
+    const council = initializeDeliberationState(councilId);
+    if (council) this.notify();
+    return council;
+  }
+
+  updateDeliberationState(
+    councilId: string,
+    updates: Partial<DeliberationState>
+  ): Council | null {
+    const council = updateDeliberationState(councilId, updates);
+    if (council) this.notify();
+    return council;
+  }
+
+  setDeliberationPhase(
+    councilId: string,
+    phase: DeliberationPhase,
+    previousPhase?: DeliberationPhase
+  ): Council | null {
+    const council = setDeliberationPhase(councilId, phase, previousPhase);
+    if (council) this.notify();
+    return council;
+  }
+
+  advanceRound(councilId: string): Council | null {
+    const council = advanceDeliberationRound(councilId);
+    if (council) this.notify();
+    return council;
+  }
+
+  recordSubmission(councilId: string, personaId: string): Council | null {
+    const council = recordRoundSubmission(councilId, personaId);
+    if (council) this.notify();
+    return council;
+  }
+
+  isRoundComplete(councilId: string): boolean {
+    return isRoundComplete(councilId);
+  }
+
+  setRoleAssignments(
+    councilId: string,
+    assignments: DeliberationRoleAssignment[]
+  ): Council | null {
+    const council = setRoleAssignments(councilId, assignments);
+    if (council) this.notify();
+    return council;
+  }
+
+  addPendingPatch(councilId: string, patchId: string): Council | null {
+    const council = addPendingPatch(councilId, patchId);
+    if (council) this.notify();
+    return council;
+  }
+
+  removePendingPatch(councilId: string, patchId: string): Council | null {
+    const council = removePendingPatch(councilId, patchId);
+    if (council) this.notify();
+    return council;
+  }
+
+  setRoundSummary(councilId: string, round: number, summary: string): Council | null {
+    const council = setRoundSummary(councilId, round, summary);
+    if (council) this.notify();
+    return council;
+  }
+
+  setActiveContext(councilId: string, contextId: string, version: number): Council | null {
+    const council = setActiveContext(councilId, contextId, version);
+    if (council) this.notify();
+    return council;
+  }
+
+  setManagerEvaluation(
+    councilId: string,
+    evaluation: DeliberationState['managerLastEvaluation']
+  ): Council | null {
+    const council = setManagerEvaluation(councilId, evaluation);
+    if (council) this.notify();
+    return council;
+  }
+
+  setFinalDecision(councilId: string, decisionId: string): Council | null {
+    const council = setFinalDecision(councilId, decisionId);
+    if (council) this.notify();
+    return council;
+  }
+
+  setWorkDirective(councilId: string, directiveId: string): Council | null {
+    const council = setWorkDirective(councilId, directiveId);
+    if (council) this.notify();
+    return council;
+  }
+
+  setCurrentOutput(councilId: string, outputId: string): Council | null {
+    const council = setCurrentOutput(councilId, outputId);
+    if (council) this.notify();
+    return council;
+  }
+
+  incrementRevisionCount(councilId: string): Council | null {
+    const council = incrementRevisionCount(councilId);
+    if (council) this.notify();
+    return council;
+  }
+
+  addError(councilId: string, error: string): Council | null {
+    const council = addErrorToLog(councilId, error);
+    if (council) this.notify();
+    return council;
+  }
+
+  getPersonaByRole = getPersonaByRole;
+  getRoleAssignment = getRoleAssignment;
+  isDeliberationMode = isDeliberationMode;
 }
 
 // Singleton instance for app-wide use

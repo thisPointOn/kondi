@@ -396,3 +396,79 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Council Badges */
+.council-badges {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.council-mode-badge {
+  font-size: 0.6875rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 9999px;
+  font-weight: 500;
+}
+
+.council-mode-badge.deliberation {
+  background: #7c3aed20;
+  color: #a78bfa;
+}
+
+/* Mode Selector */
+.mode-selector {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+}
+
+.mode-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 1rem;
+  background: var(--bg-tertiary, #252525);
+  border: 2px solid var(--border-color, #333);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+
+.mode-btn:hover {
+  border-color: var(--text-secondary, #999);
+}
+
+.mode-btn.selected {
+  border-color: var(--accent-color, #3b82f6);
+  background: var(--accent-color, #3b82f6)10;
+}
+
+.mode-icon {
+  font-size: 1.5rem;
+}
+
+.mode-name {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary, #e5e5e5);
+}
+
+.mode-desc {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #999);
+  line-height: 1.3;
+}
+
+.mode-hint {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem;
+  background: #7c3aed15;
+  border: 1px solid #7c3aed30;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  color: #c4b5fd;
+  line-height: 1.4;
+}

@@ -1,4 +1,4 @@
-import { Plus, Settings, ChevronDown, Check, Zap, MessageSquare, PanelLeftClose, PanelLeft, Workflow, Sparkles, Cpu, Play, Users, AlertCircle } from 'lucide-react';
+import { Plus, Settings, ChevronDown, Check, Zap, MessageSquare, PanelLeftClose, PanelLeft, Workflow, Sparkles, Cpu, Play, Users, AlertCircle, Server } from 'lucide-react';
 import { useEffect, useState, type FC } from 'react';
 import './Sidebar.css';
 
@@ -8,7 +8,7 @@ type SidebarChat = {
   timestamp?: string;
 };
 
-export type AppView = 'chat' | 'settings' | 'workflows' | 'planner' | 'executions' | 'providers' | 'council';
+export type AppView = 'chat' | 'settings' | 'workflows' | 'planner' | 'executions' | 'providers' | 'services' | 'council';
 
 interface SidebarProps {
   currentView: AppView;
@@ -180,10 +180,10 @@ const Sidebar: FC<SidebarProps> = ({
       <button
         className={`nav-btn ${currentView === 'planner' ? 'active' : ''}`}
         onClick={() => onViewChange('planner')}
-        title="AI Planner"
+        title="Workflow Designer"
       >
         <Sparkles size={18} />
-        {!collapsed && <span>AI Planner</span>}
+        {!collapsed && <span>Workflow Designer</span>}
       </button>
 
       <button
@@ -216,6 +216,15 @@ const Sidebar: FC<SidebarProps> = ({
             <AlertCircle size={14} />
           </span>
         )}
+      </button>
+
+      <button
+        className={`nav-btn ${currentView === 'services' ? 'active' : ''}`}
+        onClick={() => onViewChange('services')}
+        title="Built-in Services"
+      >
+        <Server size={18} />
+        {!collapsed && <span>Built-in Services</span>}
       </button>
 
       <div className="sidebar-spacer" />

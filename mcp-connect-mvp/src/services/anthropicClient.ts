@@ -588,7 +588,7 @@ class AnthropicClient {
     system?: string
   ) {
     return this.request('/v1/messages', 'POST', {
-      model: model || 'claude-3-5-sonnet-latest',
+      model: model || 'claude-sonnet-4-20250514',
       max_tokens: 1024,
       messages,
       tools: tools && tools.length > 0 ? tools : undefined,

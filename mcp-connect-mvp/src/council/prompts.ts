@@ -3,7 +3,7 @@
  * System prompts and prompt templates for personas
  */
 
-import type { Council, Persona, CouncilMessage, TurnContext, CouncilMode } from './types';
+import type { Council, Persona, CouncilMessage, TurnContext, CouncilMode, LedgerEntry, ContextPatch } from './types';
 
 /**
  * Get interaction instruction based on council mode and persona stance
@@ -322,4 +322,379 @@ export function extractOpenQuestions(messages: CouncilMessage[]): string[] {
 
   // Return unique questions, most recent first
   return [...new Set(questions.reverse())].slice(0, 5);
+}
+
+// ============================================================================
+// Deliberation Prompts - Structured Multi-Agent Workflow
+// ============================================================================
+
+/**
+ * Minimal worker system prompt when persona is suppressed
+ */
+export function getMinimalWorkerSystemPrompt(): string {
+  return `You are the Worker agent. Your job is to execute the directive precisely.
+
+IMPORTANT: You are a text-generation agent. You do NOT have access to a file system,
+terminal, or any external tools. All of your output must be produced directly as text
+in your response. If the directive asks you to create files, write code, or produce
+documents, include them in your response using clearly labeled code blocks or sections.
+
+For example, if asked to write a file, output it like:
+\`\`\`filename: path/to/file.ts
+// file contents here
+\`\`\`
+
+Rules:
+- Follow the directive exactly as written
+- Produce ALL output directly in your response text — do not attempt to write files or run commands
+- If anything is unclear, flag it explicitly in your output — do not guess
+- If something seems incorrect or impossible, say so — do not silently deviate
+- Do not add features, optimizations, or changes not specified in the directive`;
+}
+
+// ============================================================================
+// Manager Prompts
+// ============================================================================
+
+/**
+ * Manager frames the problem - Section 9.1
+ */
+export function buildManagerFramingPrompt(rawProblem: string): string {
+  return `You are framing a problem for a team of consultants who will analyze it
+from different perspectives, then debate approaches.
+
+Write a structured problem statement that includes:
+- CONTEXT: What background does the team need?
+- PROBLEM: What specific question must be answered?
+- CONSTRAINTS: What are the non-negotiable requirements?
+- DESIRED OUTCOME: What does a good solution look like?
+- SCOPE: What is and isn't in scope?
+
+RAW PROBLEM:
+${rawProblem}`;
+}
+
+/**
+ * Manager evaluates the round - Section 9.4
+ */
+export function buildManagerEvaluationPrompt(
+  ledgerContext: string,
+  pendingPatches: ContextPatch[],
+  expectedOutput?: string
+): string {
+  const patchesSection = pendingPatches.length > 0
+    ? `\n---\n\nPENDING CONTEXT PROPOSALS:\n${pendingPatches.map((p) =>
+        `Patch ${p.id} by ${p.authorPersonaId}:\nWhat: ${p.diff}\nRationale: ${p.rationale}`
+      ).join('\n\n')}\n\nFor each patch, decide: ACCEPT or REJECT with reason.`
+    : '';
+
+  const expectedOutputSection = expectedOutput
+    ? `\n---\n\nEXPECTED OUTPUT (the final deliverable must satisfy this):\n${expectedOutput}`
+    : '';
+
+  return `${ledgerContext}
+${patchesSection}
+${expectedOutputSection}
+
+---
+
+Evaluate this round of deliberation.
+
+YOUR RESPONSIBILITIES AS MANAGER:
+1. Keep the conversation focused on the task and expected output
+2. If the discussion is getting derailed or fixated on irrelevant topics, use REDIRECT
+3. Ensure progress is being made toward a solution that meets the expected output
+4. Move the conversation forward productively
+
+Decide:
+1. CONTINUE — positions are still evolving, run another round
+   Include a question to focus and advance the discussion.
+2. DECIDE — enough clarity exists to make a decision that will meet the expected output
+3. REDIRECT — consultants are off-track, unfocused, or fixated on irrelevant details.
+   Use this to get the conversation back on track with a specific refocusing question.
+
+Respond as JSON:
+{
+  "patchDecisions": [
+    { "patchId": "...", "accepted": true/false, "reason": "..." }
+  ],
+  "action": "continue" | "decide" | "redirect",
+  "reasoning": "...",
+  "question": "required for continue or redirect - use this to guide the discussion",
+  "confidence": 0.0-1.0,
+  "missingInformation": ["optional list"]
+}`;
+}
+
+/**
+ * Manager makes decision - Section 9.5
+ */
+export function buildManagerDecisionPrompt(
+  ledgerContext: string,
+  decisionCriteria?: string[],
+  expectedOutput?: string
+): string {
+  const criteriaBlock = decisionCriteria?.length
+    ? `\n---\n\nDECISION CRITERIA (evaluate against these):\n${decisionCriteria.map((c) => `- ${c}`).join('\n')}`
+    : '';
+
+  const expectedOutputBlock = expectedOutput
+    ? `\n---\n\nEXPECTED OUTPUT (the final deliverable MUST satisfy this):\n${expectedOutput}`
+    : '';
+
+  return `${ledgerContext}
+${criteriaBlock}
+${expectedOutputBlock}
+
+---
+
+The deliberation is complete. Make your decision.
+
+IMPORTANT: Your decision must lead to a deliverable that matches the expected output exactly.
+
+Write:
+- SUMMARY: Key positions and arguments from the consultants
+- DECISION: What approach will we take?
+- RATIONALE: Why this approach? Which arguments were most persuasive?
+- REJECTED: Alternatives considered and why they were rejected
+- RISKS: Known risks we are accepting
+- ACCEPTANCE CRITERIA: How will we know the work output is correct?
+
+You are not bound by majority opinion. Choose the approach with
+the strongest reasoning.`;
+}
+
+/**
+ * Manager forced decision (early termination) - Section 9.9
+ */
+export function buildManagerForcedDecisionPrompt(ledgerContext: string): string {
+  return `${ledgerContext}
+
+---
+
+NOTE: This deliberation was ended early by the user.
+You must make a decision now with the information available.
+Acknowledge what is incomplete or uncertain.
+
+Write:
+- SUMMARY: What was discussed so far
+- DECISION: Best approach given available information
+- RATIONALE: Why, and what you're uncertain about
+- RISKS: Higher than normal due to incomplete deliberation
+- ACCEPTANCE CRITERIA: How to verify the output`;
+}
+
+/**
+ * Manager creates execution plan
+ */
+export function buildManagerPlanPrompt(decision: string): string {
+  return `Based on your decision, create an execution plan.
+
+YOUR DECISION:
+${decision}
+
+Write a plan that:
+- Breaks down the work into clear steps
+- Identifies dependencies between steps
+- Specifies what each step should produce
+- Notes any prerequisites or setup needed
+
+Keep the plan concrete and actionable.`;
+}
+
+/**
+ * Manager issues work directive - Section 9.6
+ */
+export function buildWorkDirectivePrompt(decision: string, plan?: string): string {
+  const planSection = plan ? `\nPLAN:\n${plan}\n` : '';
+
+  return `Based on your decision, write a concrete work directive.
+
+YOUR DECISION:
+${decision}
+${planSection}
+The directive must be:
+- SPECIFIC: Exactly what to do
+- CONSTRAINED: Rules and limitations
+- MEASURABLE: What does "done" look like?
+- SELF-CONTAINED: The worker can execute from this alone
+
+Do not include deliberation history, rejected alternatives,
+or consultant arguments. The worker will not see any of that.
+Give a clear, unambiguous task.`;
+}
+
+/**
+ * Manager reviews output - Section 9.8
+ */
+export function buildManagerReviewPrompt(
+  workOutput: string,
+  directive: string,
+  acceptanceCriteria?: string,
+  expectedOutput?: string
+): string {
+  const criteriaSection = acceptanceCriteria
+    ? `\nACCEPTANCE CRITERIA (from your decision):\n${acceptanceCriteria}\n`
+    : '';
+
+  const expectedOutputSection = expectedOutput
+    ? `\nEXPECTED OUTPUT (the deliverable MUST match this):\n${expectedOutput}\n`
+    : '';
+
+  return `WORK DIRECTIVE:
+${directive}
+${criteriaSection}${expectedOutputSection}
+WORKER OUTPUT:
+${workOutput}
+
+---
+
+Review the worker's output against the directive, acceptance criteria, and expected output.
+
+CRITICAL: The output MUST match what was specified in the expected output. If it doesn't,
+use REVISE with specific instructions to correct it, or RE-DELIBERATE if the approach
+needs to be reconsidered by the consultants.
+
+Decide:
+- ACCEPT: Output meets the directive, acceptance criteria, AND expected output. Explain briefly.
+- REVISE: Output needs changes to meet the expected output. Provide specific, actionable feedback.
+- RE-DELIBERATE: The approach taken doesn't satisfy the expected output and requires the
+  consultants to reconsider. Explain what needs to change.
+
+Respond as JSON:
+{
+  "verdict": "accept" | "revise" | "re_deliberate",
+  "reasoning": "...",
+  "feedback": "specific revision instructions (if revise)",
+  "newInformation": "what changed (if re_deliberate)"
+}`;
+}
+
+/**
+ * Manager writes round summary - Section 9.10
+ */
+export function buildManagerRoundSummaryPrompt(roundEntries: LedgerEntry[]): string {
+  const entriesText = roundEntries
+    .filter((e) => ['analysis', 'response', 'proposal'].includes(e.entryType))
+    .map((e) => `[${e.authorPersonaId}, ${e.entryType}]:\n${e.content}`)
+    .join('\n\n');
+
+  return `Summarize this round of deliberation for the next round's consultants.
+Capture:
+- Each consultant's key position
+- Points of agreement
+- Points of disagreement
+- Unresolved questions
+
+Keep it concise. The consultants will use this summary instead of
+reading the full round.
+
+ROUND ENTRIES:
+${entriesText}`;
+}
+
+// ============================================================================
+// Consultant Prompts
+// ============================================================================
+
+/**
+ * Consultant independent analysis (Round 1) - Section 9.2
+ */
+export function buildIndependentAnalysisPrompt(
+  persona: Persona,
+  focusArea: string,
+  contextContent: string
+): string {
+  return `${contextContent}
+
+---
+
+Analyze this problem from your area of expertise (${focusArea}).
+
+Provide:
+- Your assessment of the key challenges
+- Your recommended approach
+- Risks and concerns from your perspective
+- Tradeoffs to consider
+
+If you believe the shared context is missing something important,
+you may propose a CONTEXT CHANGE by clearly marking it:
+
+PROPOSED CONTEXT CHANGE:
+What: {description of what to add/modify}
+Why: {rationale}
+
+Other consultants are analyzing this independently. You will see
+their perspectives and can respond in the next round.`;
+}
+
+/**
+ * Consultant deliberation response (Round 2+) - Section 9.3
+ */
+export function buildDeliberationResponsePrompt(
+  persona: Persona,
+  focusArea: string,
+  fullContext: string
+): string {
+  return `${fullContext}
+
+---
+
+You have seen the other consultants' analyses. Provide your updated perspective:
+
+- Where do you AGREE with other consultants and why?
+- Where do you DISAGREE and what is your counter-argument?
+- What important considerations have been MISSED?
+- Has your position CHANGED? If so, how and why?
+- What is your REFINED recommendation?
+
+Do not restate your previous position unchanged.
+Engage substantively with the other perspectives.
+
+You may propose a CONTEXT CHANGE if you believe the shared context
+should be updated:
+
+PROPOSED CONTEXT CHANGE:
+What: {description}
+Why: {rationale}`;
+}
+
+// ============================================================================
+// Worker Prompts
+// ============================================================================
+
+/**
+ * Worker execution - Section 9.7
+ */
+export function buildWorkerExecutionPrompt(directive: string): string {
+  return `DIRECTIVE:
+${directive}
+
+---
+Remember: Produce all output directly in your response. Use labeled code blocks for any files or code.
+Do not attempt to access a file system or run commands — you are a text-only agent.`;
+}
+
+/**
+ * Worker revision - Section 9.7.1
+ */
+export function buildWorkerRevisionPrompt(
+  directive: string,
+  previousOutput: string,
+  feedback: string
+): string {
+  return `DIRECTIVE:
+${directive}
+
+YOUR PREVIOUS OUTPUT:
+${previousOutput}
+
+REVISION FEEDBACK:
+${feedback}
+
+Revise your output to address the feedback. Follow the original
+directive. Only change what the feedback asks you to change.
+
+Remember: Produce all output directly in your response. Use labeled code blocks for any files or code.
+Do not attempt to access a file system or run commands — you are a text-only agent.`;
 }

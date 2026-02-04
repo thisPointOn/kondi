@@ -1,0 +1,1125 @@
+/**
+ * DeliberationView: Main view for deliberation mode
+ * Replaces CouncilView when mode === 'deliberation'
+ */
+
+import { useState, useEffect, useRef } from 'react';
+import { open } from '@tauri-apps/plugin-dialog';
+import type {
+  Council,
+  Persona,
+  LedgerEntry,
+  DeliberationPhase,
+  ContextArtifact,
+  ContextPatch,
+  DeliberationRoleAssignment,
+} from '../../council/types';
+import { councilStore, createPersonaFromTemplate, allTemplates, templateCategories } from '../../council';
+import { localToolsService } from '../../services/localTools';
+import { ledgerStore, getAllEntries } from '../../council/ledger-store';
+import { contextStore, getCurrentContext, getPendingPatches, getContextHistory } from '../../council/context-store';
+import PhaseIndicator from './PhaseIndicator';
+import LedgerEntryCard from './LedgerEntryCard';
+import LedgerTimeline from './LedgerTimeline';
+import RoleAssignment from './RoleAssignment';
+import DeliberationControls from './DeliberationControls';
+import PatchReviewPanel from './PatchReviewPanel';
+import ArtifactPanel from './ArtifactPanel';
+import AddPersonaModal from './AddPersonaModal';
+import { acceptPatch, rejectPatch } from '../../council/context-store';
+import type { PresetPersona } from '../../council/types';
+import './DeliberationView.css';
+
+interface DeliberationViewProps {
+  councilId: string;
+  onBack?: () => void;
+  onFrameProblem?: (council: Council, rawProblem: string) => Promise<void>;
+  onRunRound?: (council: Council) => Promise<void>;
+  onEvaluateRound?: (council: Council) => Promise<void>;
+  onMakeDecision?: (council: Council) => Promise<void>;
+  onCreatePlan?: (council: Council) => Promise<void>;
+  onIssueDirective?: (council: Council) => Promise<void>;
+  onExecuteWork?: (council: Council) => Promise<void>;
+  onReviewWork?: (council: Council) => Promise<void>;
+  onPause?: (council: Council) => Promise<void>;
+  onResume?: (council: Council) => Promise<void>;
+  onForceDecision?: (council: Council) => Promise<void>;
+  onAbort?: (council: Council) => Promise<void>;
+  /** Called when user sends a message while paused - last responder should reply */
+  onUserMessage?: (council: Council, message: string, lastResponderId: string) => Promise<void>;
+  /** Configured providers for model selection */
+  configuredProviders?: {
+    'anthropic-cli': boolean;
+    'anthropic-api': boolean;
+    'openai-cli': boolean;
+    'openai-api': boolean;
+    deepseek: boolean;
+  };
+  /** Personas currently thinking/generating responses */
+  thinkingPersonas?: Persona[];
+}
+
+export default function DeliberationView({
+  councilId,
+  onBack,
+  onFrameProblem,
+  onRunRound,
+  onEvaluateRound,
+  onMakeDecision,
+  onCreatePlan,
+  onIssueDirective,
+  onExecuteWork,
+  onReviewWork,
+  onPause,
+  onResume,
+  onForceDecision,
+  onAbort,
+  onUserMessage,
+  configuredProviders = {
+    'anthropic-cli': true,
+    'anthropic-api': true,
+    'openai-cli': true,
+    'openai-api': true,
+    deepseek: true
+  },
+  thinkingPersonas = [],
+}: DeliberationViewProps) {
+  const [council, setCouncil] = useState<Council | null>(null);
+  const [entries, setEntries] = useState<LedgerEntry[]>([]);
+  const [context, setContext] = useState<ContextArtifact | null>(null);
+  const [pendingPatches, setPendingPatches] = useState<ContextPatch[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [showContextPanel, setShowContextPanel] = useState(false);
+  const [showPatchReview, setShowPatchReview] = useState(false);
+  const [showArtifactPanel, setShowArtifactPanel] = useState(false);
+  const [activePanel, setActivePanel] = useState<'setup' | 'task' | 'deliberation' | 'decision' | 'execution' | null>(null);
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
+  const [pausedUserInput, setPausedUserInput] = useState('');
+  const [workingDirectory, setWorkingDirectory] = useState(council?.deliberation?.workingDirectory || '');
+  const [directoryConstrained, setDirectoryConstrained] = useState(council?.deliberation?.directoryConstrained ?? true);
+  const [problemInput, setProblemInput] = useState(() => {
+    const c = councilStore.get(councilId);
+    return c?.deliberation?.savedProblem || '';
+  });
+  const [expectedOutput, setExpectedOutput] = useState(() => {
+    const c = councilStore.get(councilId);
+    return c?.deliberation?.expectedOutput || '';
+  });
+  // Track if task is saved - starts as true if there's existing saved data
+  const [taskSaved, setTaskSaved] = useState(() => {
+    const c = councilStore.get(councilId);
+    return !!c?.deliberation?.savedProblem;
+  });
+  const [councilName, setCouncilName] = useState('');
+  const [councilTopic, setCouncilTopic] = useState('');
+  const [isAddingPersona, setIsAddingPersona] = useState(false);
+  const [editingPersona, setEditingPersona] = useState<Persona | null>(null);
+  const ledgerEndRef = useRef<HTMLDivElement>(null);
+
+  // Load council and subscribe to updates
+  useEffect(() => {
+    const loadCouncil = () => {
+      const c = councilStore.get(councilId);
+      setCouncil(c);
+      // Load council name and topic
+      if (c?.name && !councilName) {
+        setCouncilName(c.name);
+      }
+      if (c?.topic && !councilTopic) {
+        setCouncilTopic(c.topic);
+      }
+      // Note: problemInput, expectedOutput, and taskSaved are initialized from councilStore
+      // in useState initializers, so we don't need to load them here
+      // Load directory settings - prefer council setting, fall back to local tools
+      if (c?.deliberation?.workingDirectory !== undefined) {
+        setWorkingDirectory(c.deliberation.workingDirectory);
+      } else if (!workingDirectory) {
+        // Initialize from local tools service if council has no directory set
+        const localDir = localToolsService.getWorkingDirectory();
+        if (localDir) {
+          setWorkingDirectory(localDir);
+        }
+      }
+      if (c?.deliberation?.directoryConstrained !== undefined) {
+        setDirectoryConstrained(c.deliberation.directoryConstrained);
+      }
+    };
+
+    loadCouncil();
+    const unsubscribe = councilStore.subscribe(loadCouncil);
+    return unsubscribe;
+  }, [councilId]);
+
+  // Load ledger entries
+  useEffect(() => {
+    const loadEntries = () => {
+      const e = getAllEntries(councilId);
+      setEntries(e);
+    };
+
+    loadEntries();
+    const unsubscribe = ledgerStore.subscribe(councilId, loadEntries);
+    return unsubscribe;
+  }, [councilId]);
+
+  // Load context and patches
+  useEffect(() => {
+    const loadContext = () => {
+      setContext(getCurrentContext(councilId));
+      setPendingPatches(getPendingPatches(councilId));
+    };
+
+    loadContext();
+    const unsubscribe = contextStore.subscribe(councilId, loadContext);
+    return unsubscribe;
+  }, [councilId]);
+
+  // Auto-scroll to bottom on new entries
+  useEffect(() => {
+    ledgerEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [entries.length]);
+
+  // Get persona by ID
+  const getPersona = (personaId: string): Persona | undefined => {
+    return council?.personas.find((p) => p.id === personaId);
+  };
+
+  // Get the last persona who responded (for user messages during pause)
+  const getLastResponder = (): Persona | undefined => {
+    if (entries.length === 0) return undefined;
+    // Find the last entry with a persona (not system entries)
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i];
+      if (entry.authorPersonaId) {
+        return getPersona(entry.authorPersonaId);
+      }
+    }
+    return undefined;
+  };
+
+  const lastResponder = getLastResponder();
+  const isPaused = council?.deliberationState?.currentPhase === 'paused';
+
+  // Handle user message during pause
+  const handlePausedUserMessage = async () => {
+    if (!council || !onUserMessage || !pausedUserInput.trim() || !lastResponder) return;
+
+    setIsGenerating(true);
+    try {
+      await onUserMessage(council, pausedUserInput.trim(), lastResponder.id);
+      setPausedUserInput('');
+    } catch (error) {
+      console.error('[DeliberationView] Error sending user message:', error);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Get current phase
+  const currentPhase = council?.deliberationState?.currentPhase || 'created';
+  const currentRound = council?.deliberationState?.currentRound || 0;
+  const maxRounds = council?.deliberation?.maxRounds || 4;
+
+  // Check if roles are assigned
+  const hasRoleAssignments = (council?.deliberation?.roleAssignments?.length ?? 0) > 0;
+  const hasManager = council?.deliberation?.roleAssignments?.some((r) => r.role === 'manager');
+  const hasConsultants = council?.deliberation?.roleAssignments?.some((r) => r.role === 'consultant');
+  const hasWorker = council?.deliberation?.roleAssignments?.some((r) => r.role === 'worker');
+  const canStart = hasManager && hasConsultants && hasWorker;
+
+  // Handle problem framing
+  const handleFrameProblem = async () => {
+    console.log('[DeliberationView] handleFrameProblem called', {
+      hasCouncil: !!council,
+      councilId: council?.id,
+      hasOnFrameProblem: !!onFrameProblem,
+      problemInput: problemInput.trim(),
+      canStart,
+      hasManager,
+      hasConsultants,
+      hasWorker,
+    });
+    if (!council) {
+      console.error('[DeliberationView] No council available');
+      return;
+    }
+    if (!onFrameProblem) {
+      console.error('[DeliberationView] No onFrameProblem callback provided');
+      return;
+    }
+    if (!problemInput.trim()) {
+      console.error('[DeliberationView] No problem input provided');
+      return;
+    }
+    console.log('[DeliberationView] All checks passed, starting...');
+    setIsGenerating(true);
+    try {
+      console.log('[DeliberationView] Calling onFrameProblem...');
+      await onFrameProblem(council, problemInput.trim());
+      console.log('[DeliberationView] onFrameProblem completed successfully');
+      setProblemInput('');
+    } catch (error) {
+      console.error('[DeliberationView] Error framing problem:', error);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Save task (problem + expected output)
+  const handleSaveTask = () => {
+    if (!council || !problemInput.trim()) return;
+
+    const trimmedProblem = problemInput.trim();
+    const trimmedOutput = expectedOutput.trim();
+
+    // Update the council's deliberation config with the saved problem and expected output
+    if (council.deliberation) {
+      councilStore.update(councilId, {
+        deliberation: {
+          ...council.deliberation,
+          savedProblem: trimmedProblem,
+          expectedOutput: trimmedOutput || undefined,
+        },
+      });
+    }
+
+    // Mark as saved
+    setTaskSaved(true);
+    console.log('[DeliberationView] Task saved');
+  };
+
+  // Restart deliberation - clear results and start fresh
+  const handleRestartDeliberation = async () => {
+    if (!council || !onFrameProblem || !problemInput.trim()) return;
+
+    console.log('[DeliberationView] Restarting deliberation...');
+
+    // Clear the ledger entries (this also notifies subscribers)
+    ledgerStore.clear(councilId);
+
+    // Reset the deliberation state to 'created'
+    councilStore.update(councilId, {
+      deliberationState: undefined,
+    });
+
+    // Start fresh deliberation
+    setIsGenerating(true);
+    try {
+      await onFrameProblem(council, problemInput.trim());
+    } catch (error) {
+      console.error('[DeliberationView] Error restarting deliberation:', error);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Handle action based on current phase
+  const handlePhaseAction = async () => {
+    if (!council) return;
+    setIsGenerating(true);
+
+    try {
+      switch (currentPhase) {
+        case 'round_independent':
+        case 'round_interactive':
+          await onRunRound?.(council);
+          break;
+        case 'round_waiting_for_manager':
+          await onEvaluateRound?.(council);
+          break;
+        case 'deciding':
+          await onMakeDecision?.(council);
+          break;
+        case 'planning':
+          await onCreatePlan?.(council);
+          break;
+        case 'directing':
+          await onIssueDirective?.(council);
+          break;
+        case 'executing':
+          await onExecuteWork?.(council);
+          break;
+        case 'reviewing':
+          await onReviewWork?.(council);
+          break;
+      }
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  if (!council) {
+    return (
+      <div className="deliberation-view deliberation-loading">
+        <p>Loading deliberation...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="deliberation-view">
+      {/* Header */}
+      <div className="deliberation-header">
+        <div className="deliberation-header-left">
+          {onBack && (
+            <button className="deliberation-back-btn" onClick={onBack}>
+              Back
+            </button>
+          )}
+          <div className="deliberation-title-section">
+            <h2>{council.name}</h2>
+            <span className={`deliberation-status deliberation-status-${council.status}`}>
+              {council.status}
+            </span>
+          </div>
+        </div>
+        <div className="deliberation-header-right">
+          <span className="deliberation-mode">Deliberation Mode</span>
+          <button
+            className="deliberation-artifacts-btn"
+            onClick={() => setShowArtifactPanel(true)}
+          >
+            Artifacts
+          </button>
+          <button
+            className="deliberation-context-btn"
+            onClick={() => setShowContextPanel(!showContextPanel)}
+          >
+            Context v{context?.version || 0}
+          </button>
+          {pendingPatches.length > 0 && (
+            <button
+              className="deliberation-patches-btn"
+              onClick={() => setShowPatchReview(true)}
+            >
+              {pendingPatches.length} Patch{pendingPatches.length > 1 ? 'es' : ''}
+            </button>
+          )}
+          <span className="deliberation-stats">
+            {entries.length} entries
+          </span>
+        </div>
+      </div>
+
+      {/* Phase Indicator */}
+      <PhaseIndicator
+        currentPhase={currentPhase}
+        currentRound={currentRound}
+        maxRounds={maxRounds}
+        onPhaseClick={(group) => setActivePanel(activePanel === group ? null : group)}
+        completedSteps={{
+          setup: canStart, // Roles are assigned
+          task: !!council.deliberation?.savedProblem, // Task/problem saved
+          deliberation: currentPhase !== 'created' && currentPhase !== 'problem_framing', // Deliberation in progress
+          decision: ['directing', 'executing', 'reviewing', 'revising', 'completed'].includes(currentPhase),
+          execution: currentPhase === 'completed',
+        }}
+        activeStep={activePanel}
+      />
+
+      {/* Inline Phase Panel - shown below timeline for Deliberation/Decision/Execution */}
+      {activePanel && activePanel !== 'setup' && activePanel !== 'task' && (
+        <div className={`inline-phase-panel ${panelCollapsed ? 'collapsed' : ''}`}>
+          <div className="inline-phase-header">
+            <h3>
+              {activePanel === 'deliberation' && 'Deliberation'}
+              {activePanel === 'decision' && 'Decision'}
+              {activePanel === 'execution' && 'Execution'}
+            </h3>
+            <div className="inline-phase-header-actions">
+              <button
+                className="collapse-inline-btn"
+                onClick={() => setPanelCollapsed(!panelCollapsed)}
+                title={panelCollapsed ? 'Expand' : 'Collapse'}
+              >
+                {panelCollapsed ? '▼' : '▲'}
+              </button>
+              <button className="close-inline-btn" onClick={() => setActivePanel(null)} title="Close">
+                ×
+              </button>
+            </div>
+          </div>
+          {!panelCollapsed && <div className="inline-phase-content">
+            {/* Deliberation Panel - Start/Restart */}
+            {activePanel === 'deliberation' && (
+              <div className="inline-deliberation-status">
+                {entries.length > 0 ? (
+                  <>
+                    <div className="settings-section">
+                      <div className="settings-section-header">
+                        <h4>Status</h4>
+                      </div>
+                      <div className="settings-grid">
+                        <div className="setting-item">
+                          <span className="setting-label">Round</span>
+                          <span className="setting-value">{currentRound} / {maxRounds}</span>
+                        </div>
+                        <div className="setting-item">
+                          <span className="setting-label">Phase</span>
+                          <span className="setting-value">{currentPhase}</span>
+                        </div>
+                        <div className="setting-item">
+                          <span className="setting-label">Entries</span>
+                          <span className="setting-value">{entries.length}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="deliberation-actions">
+                      <button
+                        className="deliberation-restart-btn"
+                        onClick={handleRestartDeliberation}
+                        disabled={!problemInput.trim() || isGenerating || !canStart}
+                      >
+                        {isGenerating ? 'Running...' : 'Restart Deliberation'}
+                      </button>
+                      <p className="action-hint">This will erase current results and start fresh.</p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="deliberation-prompt">
+                      {canStart && problemInput.trim()
+                        ? 'Ready to start the deliberation. The council will discuss and analyze your task.'
+                        : 'Complete Setup and Task steps before starting the deliberation.'}
+                    </p>
+                    <div className="deliberation-actions">
+                      <button
+                        className="deliberation-start-btn"
+                        onClick={handleFrameProblem}
+                        disabled={!problemInput.trim() || isGenerating || !canStart}
+                      >
+                        {isGenerating ? 'Starting...' : 'Start Deliberation'}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Decision Panel Content */}
+            {activePanel === 'decision' && (
+              <>
+                <div className="settings-section">
+                  <div className="settings-section-header">
+                    <h4>Manager</h4>
+                  </div>
+                  {council.personas
+                    .filter((p) => council.deliberation?.roleAssignments?.find(
+                      (r) => r.personaId === p.id && r.role === 'manager'
+                    ))
+                    .map((persona) => (
+                      <div key={persona.id} className="persona-item">
+                        <span
+                          className="persona-avatar"
+                          style={{ backgroundColor: persona.color + '30', color: persona.color }}
+                        >
+                          {persona.avatar || '🤖'}
+                        </span>
+                        <div className="persona-info">
+                          <span className="persona-name">{persona.name}</span>
+                          <span className="persona-model">{persona.model}</span>
+                        </div>
+                        <span className="role-badge role-manager">Manager</span>
+                      </div>
+                    ))}
+                </div>
+                <div className="settings-section">
+                  <div className="settings-section-header">
+                    <h4>Decision Status</h4>
+                  </div>
+                  <p className="settings-value">
+                    {currentPhase === 'deciding' && 'Manager is making the final decision...'}
+                    {currentPhase === 'planning' && 'Creating execution plan...'}
+                    {currentPhase === 'directing' && 'Issuing directive to worker...'}
+                    {!['deciding', 'planning', 'directing'].includes(currentPhase) &&
+                      'Decision phase will begin after deliberation rounds.'}
+                  </p>
+                </div>
+              </>
+            )}
+
+            {/* Execution Panel Content */}
+            {activePanel === 'execution' && (
+              <>
+                <div className="settings-section">
+                  <div className="settings-section-header">
+                    <h4>Worker</h4>
+                  </div>
+                  {council.personas
+                    .filter((p) => council.deliberation?.roleAssignments?.find(
+                      (r) => r.personaId === p.id && r.role === 'worker'
+                    ))
+                    .map((persona) => (
+                      <div key={persona.id} className="persona-item">
+                        <span
+                          className="persona-avatar"
+                          style={{ backgroundColor: persona.color + '30', color: persona.color }}
+                        >
+                          {persona.avatar || '🤖'}
+                        </span>
+                        <div className="persona-info">
+                          <span className="persona-name">{persona.name}</span>
+                          <span className="persona-model">{persona.model}</span>
+                        </div>
+                        <span className="role-badge role-worker">Worker</span>
+                      </div>
+                    ))}
+                </div>
+                <div className="settings-section">
+                  <div className="settings-section-header">
+                    <h4>Execution Status</h4>
+                  </div>
+                  <div className="settings-grid">
+                    <div className="setting-item">
+                      <span className="setting-label">Phase</span>
+                      <span className="setting-value">{currentPhase}</span>
+                    </div>
+                    <div className="setting-item">
+                      <span className="setting-label">Max Revisions</span>
+                      <span className="setting-value">{council.deliberation?.maxRevisions || 3}</span>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>}
+        </div>
+      )}
+
+      {/* Main Content */}
+      <div className="deliberation-main">
+        {/* Ledger Timeline */}
+        <div className="deliberation-ledger">
+          {/* Setup Panel - shown in main area */}
+          {activePanel === 'setup' ? (
+            <div className="main-setup-panel">
+              <h3>Setup</h3>
+
+              {/* Council Name */}
+              <div className="setup-section">
+                <h4>Council Name</h4>
+                <input
+                  type="text"
+                  className="council-name-input"
+                  placeholder="Enter council name"
+                  value={councilName}
+                  onChange={(e) => setCouncilName(e.target.value)}
+                  onBlur={() => {
+                    if (councilName.trim() && councilName !== council.name) {
+                      councilStore.update(councilId, { name: councilName.trim() });
+                    }
+                  }}
+                />
+              </div>
+
+              {/* Topic */}
+              <div className="setup-section">
+                <h4>Topic</h4>
+                <textarea
+                  className="council-topic-input"
+                  placeholder="What should the council deliberate on?"
+                  value={councilTopic}
+                  onChange={(e) => setCouncilTopic(e.target.value)}
+                  onBlur={() => {
+                    if (councilTopic.trim() && councilTopic !== council.topic) {
+                      councilStore.update(councilId, { topic: councilTopic.trim() });
+                    }
+                  }}
+                  rows={3}
+                />
+              </div>
+
+              {/* Working Directory */}
+              <div className="setup-section">
+                <h4>Working Directory</h4>
+                <div className="directory-input-row">
+                  <input
+                    type="text"
+                    className="directory-input"
+                    placeholder="/path/to/project"
+                    value={workingDirectory}
+                    onChange={(e) => setWorkingDirectory(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="directory-browse-btn"
+                    onClick={async () => {
+                      try {
+                        const selected = await open({
+                          directory: true,
+                          multiple: false,
+                          title: 'Select Working Directory',
+                          defaultPath: workingDirectory || undefined,
+                        });
+                        if (selected && typeof selected === 'string') {
+                          setWorkingDirectory(selected);
+                        }
+                      } catch (err) {
+                        console.error('[DeliberationView] Error selecting directory:', err);
+                      }
+                    }}
+                  >
+                    Browse...
+                  </button>
+                  <label className="constraint-toggle">
+                    <input
+                      type="checkbox"
+                      checked={directoryConstrained}
+                      onChange={(e) => setDirectoryConstrained(e.target.checked)}
+                    />
+                    <span className="constraint-label">
+                      {directoryConstrained ? 'Constrained' : 'Unconstrained'}
+                    </span>
+                  </label>
+                </div>
+                <p className="directory-hint">
+                  {directoryConstrained
+                    ? 'All file operations will be restricted to this directory.'
+                    : 'File operations can access files outside this directory.'}
+                </p>
+              </div>
+
+              {/* Council Mode */}
+              <div className="setup-section">
+                <h4>Council Mode</h4>
+                <div className="mode-selector">
+                  <button
+                    type="button"
+                    className={`mode-option ${council.orchestration.mode === 'deliberation' ? 'active' : ''}`}
+                    onClick={() => {
+                      councilStore.update(councilId, {
+                        orchestration: { ...council.orchestration, mode: 'deliberation' },
+                        deliberation: council.deliberation || {
+                          enabled: true,
+                          roleAssignments: [],
+                          maxRounds: 4,
+                          maxRevisions: 3,
+                          summaryMode: 'hybrid',
+                          summarizeAfterRound: 2,
+                          contextTokenBudget: 100000,
+                          consultantErrorPolicy: 'retry',
+                          maxRetries: 2,
+                          requirePlan: false,
+                          consultantExecution: 'sequential',
+                        },
+                      });
+                    }}
+                  >
+                    <span className="mode-icon">⚖️</span>
+                    <span className="mode-label">Deliberation</span>
+                    <span className="mode-desc">Manager orchestrates consultants and worker</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`mode-option ${council.orchestration.mode === 'freeform' ? 'active' : ''}`}
+                    onClick={() => {
+                      councilStore.update(councilId, {
+                        orchestration: { ...council.orchestration, mode: 'freeform' },
+                      });
+                    }}
+                  >
+                    <span className="mode-icon">💬</span>
+                    <span className="mode-label">Freeform</span>
+                    <span className="mode-desc">Open discussion between all personas</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Consultant Execution Mode - only show in deliberation mode */}
+              {council.orchestration.mode === 'deliberation' && (
+                <div className="setup-section">
+                  <h4>Consultant Execution</h4>
+                  <p className="section-hint">How consultants run during each round</p>
+                  <div className="execution-mode-selector">
+                    <button
+                      type="button"
+                      className={`execution-option ${council.deliberation?.consultantExecution !== 'parallel' ? 'active' : ''}`}
+                      onClick={() => {
+                        if (council.deliberation) {
+                          councilStore.update(councilId, {
+                            deliberation: { ...council.deliberation, consultantExecution: 'sequential' },
+                          });
+                        }
+                      }}
+                    >
+                      <span className="execution-icon">🔗</span>
+                      <span className="execution-label">Sequential</span>
+                      <span className="execution-desc">Each consultant sees previous responses</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`execution-option ${council.deliberation?.consultantExecution === 'parallel' ? 'active' : ''}`}
+                      onClick={() => {
+                        if (council.deliberation) {
+                          councilStore.update(councilId, {
+                            deliberation: { ...council.deliberation, consultantExecution: 'parallel' },
+                          });
+                        }
+                      }}
+                    >
+                      <span className="execution-icon">⚡</span>
+                      <span className="execution-label">Parallel</span>
+                      <span className="execution-desc">All consultants respond simultaneously</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Participants (consolidated with Role Assignment) */}
+              <div className="setup-section">
+                <RoleAssignment
+                  council={council}
+                  configuredProviders={configuredProviders}
+                  onClose={() => setActivePanel(null)}
+                  onSave={(assignments, personaUpdates) => {
+                    councilStore.setRoleAssignments(councilId, assignments);
+                    if (personaUpdates) {
+                      for (const update of personaUpdates) {
+                        councilStore.updatePersona(councilId, update.id, {
+                          model: update.model,
+                          provider: update.provider,
+                        });
+                      }
+                    }
+                    // Save directory settings and sync with local tools
+                    if (council.deliberation) {
+                      councilStore.update(councilId, {
+                        deliberation: {
+                          ...council.deliberation,
+                          workingDirectory: workingDirectory || undefined,
+                          directoryConstrained,
+                        },
+                      });
+                    }
+                    // Sync working directory with local tools service
+                    if (workingDirectory) {
+                      localToolsService.setWorkingDirectory(workingDirectory);
+                    }
+                    // Move to Task panel after saving
+                    setActivePanel('task');
+                  }}
+                  inline
+                  onAddPersona={() => setIsAddingPersona(true)}
+                  onRemovePersona={(personaId) => councilStore.removePersona(councilId, personaId)}
+                  onEditPersona={(persona) => setEditingPersona(persona)}
+                />
+              </div>
+            </div>
+          ) : activePanel === 'task' ? (
+            <div className="main-task-panel">
+              <h3>Task Definition</h3>
+
+              {/* Task/Problem Input */}
+              <div className="task-section">
+                <label className="task-label">Task Description</label>
+                <p className="task-hint">Describe the task, problem, or question for the council to deliberate on.</p>
+                <textarea
+                  className="task-input"
+                  placeholder="What should the team work on?"
+                  value={problemInput}
+                  onChange={(e) => {
+                    setProblemInput(e.target.value);
+                    setTaskSaved(false); // Mark as unsaved when user makes changes
+                  }}
+                  rows={6}
+                />
+              </div>
+
+              {/* Expected Output */}
+              <div className="task-section">
+                <label className="task-label">Expected Output</label>
+                <p className="task-hint">Describe the deliverable the worker should produce. The manager will ensure this is met.</p>
+                <textarea
+                  className="task-input"
+                  placeholder="What should be delivered at the end? (e.g., a working function, documentation, a design spec...)"
+                  value={expectedOutput}
+                  onChange={(e) => {
+                    setExpectedOutput(e.target.value);
+                    setTaskSaved(false); // Mark as unsaved when user makes changes
+                  }}
+                  rows={4}
+                />
+              </div>
+
+              {/* Save and Start buttons */}
+              <div className="task-actions">
+                <button
+                  className={`task-save-btn ${taskSaved ? 'saved' : ''}`}
+                  onClick={() => {
+                    console.log('[Task Save] clicked, council:', !!council, 'problemInput:', problemInput, 'taskSaved:', taskSaved);
+                    if (!council || !problemInput.trim() || taskSaved) {
+                      console.log('[Task Save] early return');
+                      return;
+                    }
+                    const trimmedProblem = problemInput.trim();
+                    const trimmedOutput = expectedOutput.trim();
+                    if (council.deliberation) {
+                      console.log('[Task Save] updating councilStore');
+                      councilStore.update(councilId, {
+                        deliberation: {
+                          ...council.deliberation,
+                          savedProblem: trimmedProblem,
+                          expectedOutput: trimmedOutput || undefined,
+                        },
+                      });
+                    }
+                    console.log('[Task Save] setting taskSaved to true');
+                    setTaskSaved(true);
+                  }}
+                  disabled={!problemInput.trim() || taskSaved}
+                >
+                  {taskSaved ? 'Saved ✓' : 'Save Task'}
+                </button>
+                <button
+                  className="task-start-btn"
+                  onClick={() => {
+                    // Save task data first
+                    handleSaveTask();
+                    // Then start deliberation
+                    handleFrameProblem();
+                  }}
+                  disabled={!problemInput.trim() || isGenerating || !canStart}
+                >
+                  {isGenerating ? 'Starting...' : 'Start Deliberation →'}
+                </button>
+              </div>
+
+              {!canStart && (
+                <p className="task-warning">Complete Setup first (assign Manager, Consultant, and Worker roles)</p>
+              )}
+            </div>
+          ) : currentPhase === 'created' && !activePanel ? (
+            <div className="deliberation-setup-prompt">
+              <h3>Get Started</h3>
+              <p>Click on the phase indicators above to configure your deliberation:</p>
+              <ol className="setup-steps">
+                <li className={canStart ? 'complete' : 'incomplete'}>
+                  <strong>Setup</strong> - Assign roles to personas (Manager, Consultant, Worker)
+                  {!canStart && (
+                    <div className="role-status">
+                      <span className={hasManager ? 'complete' : 'incomplete'}>
+                        {hasManager ? '✓' : '○'} Manager
+                      </span>
+                      <span className={hasConsultants ? 'complete' : 'incomplete'}>
+                        {hasConsultants ? '✓' : '○'} Consultant(s)
+                      </span>
+                      <span className={hasWorker ? 'complete' : 'incomplete'}>
+                        {hasWorker ? '✓' : '○'} Worker
+                      </span>
+                    </div>
+                  )}
+                </li>
+                <li className={council.deliberation?.savedProblem ? 'complete' : 'incomplete'}>
+                  <strong>Task</strong> - Define the task and expected output
+                </li>
+                <li>
+                  <strong>Deliberation</strong> - Start the deliberation process
+                </li>
+              </ol>
+              {canStart && council.deliberation?.savedProblem && (
+                <div className="ready-to-start">
+                  <p>Ready to start! Click on <strong>Task</strong> above to begin the deliberation.</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {entries.length === 0 && thinkingPersonas.length === 0 ? (
+                <div className="deliberation-empty">
+                  <p>No entries yet. The deliberation is starting...</p>
+                </div>
+              ) : (
+                entries.map((entry) => (
+                  <LedgerEntryCard
+                    key={entry.id}
+                    entry={entry}
+                    persona={getPersona(entry.authorPersonaId)}
+                    showTimestamp
+                  />
+                ))
+              )}
+              {/* Thinking Indicators - show which personas are currently generating */}
+              {thinkingPersonas.length > 0 && (
+                <div className="thinking-indicators">
+                  {thinkingPersonas.map((persona) => (
+                    <div key={persona.id} className="thinking-indicator">
+                      <span
+                        className="thinking-avatar"
+                        style={{ backgroundColor: persona.color + '30', color: persona.color }}
+                      >
+                        {persona.avatar || '🤖'}
+                      </span>
+                      <span className="thinking-name">{persona.name}</span>
+                      <span className="thinking-dots">
+                        <span className="dot" />
+                        <span className="dot" />
+                        <span className="dot" />
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div ref={ledgerEndRef} />
+            </>
+          )}
+
+          {/* Pending Patches */}
+          {pendingPatches.length > 0 && currentPhase === 'round_waiting_for_manager' && (
+            <div className="pending-patches-banner">
+              <span>{pendingPatches.length} context proposal(s) pending review</span>
+              <button
+                className="review-patches-btn"
+                onClick={() => setShowPatchReview(true)}
+              >
+                Review Patches
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Context Panel (Side) */}
+        {showContextPanel && context && (
+          <div className="context-panel">
+            <div className="context-panel-header">
+              <h3>Shared Context</h3>
+              <span className="context-version">v{context.version}</span>
+              <button
+                className="close-panel-btn"
+                onClick={() => setShowContextPanel(false)}
+              >
+                x
+              </button>
+            </div>
+            <div className="context-content">
+              {context.content}
+            </div>
+            {context.version > 1 && (
+              <div className="context-change-summary">
+                <strong>Last change:</strong> {context.changeSummary}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* User Input During Pause */}
+      {isPaused && lastResponder && (
+        <div className="paused-user-input">
+          <div className="paused-input-header">
+            <span className="paused-label">Deliberation Paused</span>
+            <span className="paused-responder">
+              <span
+                className="responder-avatar"
+                style={{ backgroundColor: lastResponder.color + '30', color: lastResponder.color }}
+              >
+                {lastResponder.avatar || '🤖'}
+              </span>
+              {lastResponder.name} will respond
+            </span>
+          </div>
+          <div className="paused-input-row">
+            <input
+              type="text"
+              className="paused-input-field"
+              placeholder="Ask a question or add a comment..."
+              value={pausedUserInput}
+              onChange={(e) => setPausedUserInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handlePausedUserMessage();
+                }
+              }}
+              disabled={isGenerating}
+            />
+            <button
+              className="paused-send-btn"
+              onClick={handlePausedUserMessage}
+              disabled={!pausedUserInput.trim() || isGenerating}
+            >
+              {isGenerating ? 'Sending...' : 'Send'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Controls */}
+      {currentPhase !== 'created' && (
+        <DeliberationControls
+          council={council}
+          currentPhase={currentPhase}
+          isGenerating={isGenerating}
+          onPhaseAction={handlePhaseAction}
+          onPause={() => onPause?.(council)}
+          onResume={() => onResume?.(council)}
+          onForceDecision={() => {
+            setIsGenerating(true);
+            onForceDecision?.(council).finally(() => setIsGenerating(false));
+          }}
+          onAbort={() => onAbort?.(council)}
+        />
+      )}
+
+      {/* Patch Review Panel */}
+      {showPatchReview && (
+        <PatchReviewPanel
+          council={council}
+          patches={pendingPatches}
+          currentContext={context}
+          onAccept={(patchId, reason, newContent) => {
+            acceptPatch(council.id, patchId, 'manager', reason, newContent, { allowStale: true });
+            councilStore.removePendingPatch(council.id, patchId);
+          }}
+          onReject={(patchId, reason) => {
+            rejectPatch(council.id, patchId, 'manager', reason);
+            councilStore.removePendingPatch(council.id, patchId);
+          }}
+          onClose={() => setShowPatchReview(false)}
+        />
+      )}
+
+      {/* Artifact Panel */}
+      {showArtifactPanel && (
+        <ArtifactPanel
+          councilId={councilId}
+          onClose={() => setShowArtifactPanel(false)}
+        />
+      )}
+
+      {/* Add/Edit Persona Modal */}
+      {(isAddingPersona || editingPersona) && (
+        <AddPersonaModal
+          templates={allTemplates}
+          categories={templateCategories}
+          existingPersonas={council.personas}
+          editingPersona={editingPersona}
+          existingRoleAssignment={editingPersona ? council.deliberation?.roleAssignments?.find(
+            (r) => r.personaId === editingPersona.id
+          ) : undefined}
+          onAdd={(template: PresetPersona, overrides?: Partial<Persona>) => {
+            const persona = createPersonaFromTemplate(template, overrides);
+            councilStore.addPersona(councilId, persona);
+            setIsAddingPersona(false);
+          }}
+          onUpdate={(personaId: string, updates: Partial<Persona>, roleUpdates?: Partial<DeliberationRoleAssignment>) => {
+            councilStore.updatePersona(councilId, personaId, updates);
+            if (roleUpdates && council.deliberation?.roleAssignments) {
+              const updatedAssignments = council.deliberation.roleAssignments.map((r) =>
+                r.personaId === personaId ? { ...r, ...roleUpdates } : r
+              );
+              councilStore.update(councilId, {
+                deliberation: { ...council.deliberation, roleAssignments: updatedAssignments },
+              });
+            }
+            setEditingPersona(null);
+          }}
+          onClose={() => {
+            setIsAddingPersona(false);
+            setEditingPersona(null);
+          }}
+        />
+      )}
+
+    </div>
+  );
+}

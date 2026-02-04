@@ -120,6 +120,7 @@ const ProviderSettings: FC<ProviderSettingsProps> = ({
   onCodexLogin,
   isCodexLoggingIn,
 }: ProviderSettingsProps) => {
+  console.log('[ProviderSettings] Render with:', { defaultProvider, defaultModel });
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [validating, setValidating] = useState<string | null>(null);
   const [editingKeys, setEditingKeys] = useState<Record<string, boolean>>({});
@@ -155,6 +156,7 @@ const ProviderSettings: FC<ProviderSettingsProps> = ({
 
   // Get active providers (those with credentials configured)
   const activeProviders = providers.filter(p => p.status === 'active');
+  // Match provider by exact ID
   const currentProvider = providers.find(p => p.id === defaultProvider);
   const currentModel = currentProvider?.models.find(m => m.id === defaultModel);
 
@@ -170,60 +172,37 @@ const ProviderSettings: FC<ProviderSettingsProps> = ({
         </button>
       </div>
 
-      {/* Default LLM Selector */}
+      {/* Default LLM Display */}
       <div className="default-llm-selector">
         <div className="default-llm-header">
           <Sparkles size={18} />
           <span>Default LLM</span>
         </div>
-        <div className="default-llm-controls">
-          <div className="selector-group">
-            <label>Provider</label>
-            <select
-              value={defaultProvider || ''}
-              onChange={(e) => {
-                const provider = providers.find(p => p.id === e.target.value);
-                if (provider && provider.models.length > 0) {
-                  onDefaultChange(provider.id, provider.models[0].id);
-                }
-              }}
-            >
-              {activeProviders.length === 0 && (
-                <option value="" disabled>No providers configured</option>
-              )}
-              {activeProviders.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
+        {currentProvider && currentModel ? (
+          <div className="default-llm-display">
+            <div className="default-provider-name">{currentProvider.name}</div>
+            <div className="default-llm-info">
+              <span className="model-info">
+                <Bot size={14} />
+                {currentModel.name}
+              </span>
+              <span className="context-info">
+                <Layers size={14} />
+                {(currentModel.contextWindow / 1000).toFixed(0)}K context
+              </span>
+              <span className="capabilities-info">
+                {currentModel.capabilities.slice(0, 3).join(' · ')}
+              </span>
+            </div>
           </div>
-          <div className="selector-group">
-            <label>Model</label>
-            <select
-              value={defaultModel || ''}
-              onChange={(e) => {
-                if (defaultProvider) {
-                  onDefaultChange(defaultProvider, e.target.value);
-                }
-              }}
-              disabled={!currentProvider}
-            >
-              {currentProvider?.models.map(m => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-        {currentModel && (
-          <div className="default-llm-info">
-            <span className="context-info">
-              <Layers size={14} />
-              {(currentModel.contextWindow / 1000).toFixed(0)}K context
-            </span>
-            <span className="capabilities-info">
-              {currentModel.capabilities.join(' · ')}
-            </span>
+        ) : (
+          <div className="default-llm-empty">
+            <span>No default selected</span>
           </div>
         )}
+        <p className="default-llm-hint">
+          Expand a provider below and click "Set Default" on a model to change.
+        </p>
       </div>
 
       <div className="provider-list">
@@ -240,7 +219,10 @@ const ProviderSettings: FC<ProviderSettingsProps> = ({
             showKey={showKeys[provider.id] || false}
             onToggleExpand={() => toggleExpanded(provider.id)}
             onValidate={() => handleValidate(provider.id)}
-            onSetDefault={(modelId) => onDefaultChange(provider.id, modelId)}
+            onSetDefault={(modelId) => {
+              console.log('[ProviderCard] onSetDefault called:', provider.id, modelId);
+              onDefaultChange(provider.id, modelId);
+            }}
             onStartEditKey={() => setEditingKeys((prev) => ({ ...prev, [provider.id]: true }))}
             onCancelEditKey={() => setEditingKeys((prev) => ({ ...prev, [provider.id]: false }))}
             onSaveKey={() => handleSaveKey(provider.id)}
@@ -338,6 +320,7 @@ const ProviderCard: FC<ProviderCardProps> = ({
   onCodexLogin,
   isCodexLoggingIn,
 }) => {
+  console.log('[ProviderCard] Render:', provider.id, { isDefault, defaultModel });
   const [showOAuthMenu, setShowOAuthMenu] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const ProviderIcon = getProviderIcon(provider.id);
@@ -551,86 +534,88 @@ const ProviderCard: FC<ProviderCardProps> = ({
               </div>
             )}
 
-            {/* API Key Option */}
-            <div className={`auth-option api-key-option ${provider.activeAuthMethod !== 'oauth' ? 'active-method' : ''}`}>
-              <div className="api-key-header-row">
-                <div className="api-key-left">
-                  {provider.cliTool && (
-                    <input
-                      type="radio"
-                      name={`auth-method-${provider.id}`}
-                      checked={provider.activeAuthMethod !== 'oauth'}
-                      onChange={() => onAuthMethodChange?.('api_key')}
-                      disabled={!provider.config.apiKey}
-                      className="auth-radio"
-                    />
+            {/* API Key Option - only show for non-CLI providers */}
+            {!provider.id.endsWith('-cli') && (
+              <div className={`auth-option api-key-option ${provider.activeAuthMethod !== 'oauth' ? 'active-method' : ''}`}>
+                <div className="api-key-header-row">
+                  <div className="api-key-left">
+                    {provider.cliTool && (
+                      <input
+                        type="radio"
+                        name={`auth-method-${provider.id}`}
+                        checked={provider.activeAuthMethod !== 'oauth'}
+                        onChange={() => onAuthMethodChange?.('api_key')}
+                        disabled={!provider.config.apiKey}
+                        className="auth-radio"
+                      />
+                    )}
+                    <span className="api-key-badge">
+                      <Zap size={12} />
+                      API Key
+                    </span>
+                    <span className="api-key-hint">Direct API access</span>
+                  </div>
+                  {provider.config.apiKey && (
+                    <span className="api-key-status configured">
+                      <Check size={12} /> Configured
+                    </span>
                   )}
-                  <span className="api-key-badge">
-                    <Zap size={12} />
-                    API Key
-                  </span>
-                  <span className="api-key-hint">Direct API access</span>
                 </div>
-                {provider.config.apiKey && (
-                  <span className="api-key-status configured">
-                    <Check size={12} /> Configured
-                  </span>
+                {isEditingKey ? (
+                  <div className="key-edit-row">
+                    <div className="key-input-wrapper">
+                      <input
+                        type={showKey ? 'text' : 'password'}
+                        value={keyValue}
+                        onChange={(e) => onKeyChange(e.target.value)}
+                        placeholder={`Enter ${provider.name} API key`}
+                        className="key-input"
+                      />
+                      <button
+                        className="toggle-visibility-btn"
+                        onClick={onToggleShowKey}
+                        type="button"
+                      >
+                        {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                    <div className="key-actions">
+                      <button className="key-btn save" onClick={onSaveKey}>
+                        <Check size={14} />
+                      </button>
+                      <button className="key-btn cancel" onClick={onCancelEditKey}>
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="key-display-row">
+                    <span className="key-value">
+                      {provider.config.apiKey
+                        ? `${provider.config.apiKey.slice(0, 8)}${'•'.repeat(20)}`
+                        : 'Not configured'}
+                    </span>
+                    <button className="edit-key-btn" onClick={onStartEditKey}>
+                      Edit
+                    </button>
+                    {provider.config.apiKey && (
+                      <button
+                        className="validate-btn"
+                        onClick={onValidate}
+                        disabled={isValidating}
+                      >
+                        {isValidating ? (
+                          <RefreshCw size={14} className="spinning" />
+                        ) : (
+                          <Check size={14} />
+                        )}
+                        Validate
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
-              {isEditingKey ? (
-                <div className="key-edit-row">
-                  <div className="key-input-wrapper">
-                    <input
-                      type={showKey ? 'text' : 'password'}
-                      value={keyValue}
-                      onChange={(e) => onKeyChange(e.target.value)}
-                      placeholder={`Enter ${provider.name} API key`}
-                      className="key-input"
-                    />
-                    <button
-                      className="toggle-visibility-btn"
-                      onClick={onToggleShowKey}
-                      type="button"
-                    >
-                      {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                  </div>
-                  <div className="key-actions">
-                    <button className="key-btn save" onClick={onSaveKey}>
-                      <Check size={14} />
-                    </button>
-                    <button className="key-btn cancel" onClick={onCancelEditKey}>
-                      <X size={14} />
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="key-display-row">
-                  <span className="key-value">
-                    {provider.config.apiKey
-                      ? `${provider.config.apiKey.slice(0, 8)}${'•'.repeat(20)}`
-                      : 'Not configured'}
-                  </span>
-                  <button className="edit-key-btn" onClick={onStartEditKey}>
-                    Edit
-                  </button>
-                  {provider.config.apiKey && (
-                    <button
-                      className="validate-btn"
-                      onClick={onValidate}
-                      disabled={isValidating}
-                    >
-                      {isValidating ? (
-                        <RefreshCw size={14} className="spinning" />
-                      ) : (
-                        <Check size={14} />
-                      )}
-                      Validate
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
+            )}
           </div>
 
           {/* Models Section */}
@@ -642,7 +627,10 @@ const ProviderCard: FC<ProviderCardProps> = ({
                   key={model.id}
                   model={model}
                   isDefault={model.id === defaultModel}
-                  onSetDefault={() => onSetDefault(model.id)}
+                  onSetDefault={() => {
+                    console.log('[ModelList] Setting default:', model.id, 'current defaultModel:', defaultModel);
+                    onSetDefault(model.id);
+                  }}
                 />
               ))}
             </div>
@@ -718,6 +706,14 @@ interface ModelRowProps {
 }
 
 const ModelRow: FC<ModelRowProps> = ({ model, isDefault, onSetDefault }) => {
+  // Debug: Log every model render with its isDefault status
+  console.log('[ModelRow] Render:', model.id, { isDefault });
+
+  const handleSetDefault = () => {
+    console.log('[ModelRow] Set default clicked for model:', model.id);
+    onSetDefault();
+  };
+
   return (
     <div className={`model-row ${isDefault ? 'default' : ''}`}>
       <div className="model-info">
@@ -740,7 +736,7 @@ const ModelRow: FC<ModelRowProps> = ({ model, isDefault, onSetDefault }) => {
             <Check size={14} /> Default
           </span>
         ) : (
-          <button className="set-default-btn" onClick={onSetDefault}>
+          <button className="set-default-btn" onClick={handleSetDefault}>
             Set Default
           </button>
         )}

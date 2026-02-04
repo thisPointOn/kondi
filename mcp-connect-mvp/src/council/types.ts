@@ -57,6 +57,9 @@ export interface Persona {
 
   /** Whether this persona is currently muted */
   muted?: boolean;
+
+  /** Preferred role in deliberation mode (optional hint) */
+  preferredDeliberationRole?: 'manager' | 'consultant' | 'worker';
 }
 
 export interface PresetPersona {
@@ -96,12 +99,13 @@ export interface SharedContext {
 }
 
 export type CouncilMode =
-  | 'debate'      // Personas argue opposing positions
-  | 'build'       // Personas collaborate, adding to each other
-  | 'review'      // One presents, others critique
-  | 'synthesis'   // Each offers perspective, then combine
-  | 'socratic'    // One questions, others defend
-  | 'freeform';   // No structure, natural conversation
+  | 'debate'        // Personas argue opposing positions
+  | 'build'         // Personas collaborate, adding to each other
+  | 'review'        // One presents, others critique
+  | 'synthesis'     // Each offers perspective, then combine
+  | 'socratic'      // One questions, others defend
+  | 'freeform'      // No structure, natural conversation
+  | 'deliberation'; // Structured Manager → Consultants → Worker workflow
 
 export type TurnStrategy =
   | 'round-robin'   // Each speaks in fixed order
@@ -156,7 +160,7 @@ export interface Council {
   /** How personas interact */
   orchestration: OrchestrationConfig;
 
-  /** The conversation */
+  /** The conversation (used in non-deliberation modes) */
   messages: CouncilMessage[];
 
   /** Current state */
@@ -168,6 +172,12 @@ export interface Council {
   /** Usage metrics */
   totalTokensUsed: number;
   estimatedCost: number;
+
+  /** Deliberation configuration (only when mode === 'deliberation') */
+  deliberation?: DeliberationConfig;
+
+  /** Runtime deliberation state (only when mode === 'deliberation') */
+  deliberationState?: DeliberationState;
 }
 
 // ============================================================================
@@ -376,4 +386,363 @@ export interface ArgumentNode {
 export interface ArgumentMap {
   rootClaim: string;
   nodes: ArgumentNode[];
+}
+
+// ============================================================================
+// Deliberation Types - Structured Multi-Agent Workflow
+// ============================================================================
+
+/**
+ * Deliberation roles define behavior and authority.
+ * Personas define style, model choice, and personality.
+ * Both are assigned per session.
+ */
+export type DeliberationRole = 'manager' | 'consultant' | 'worker';
+
+/**
+ * Ledger entry types - structured messaging for audit trail
+ */
+export type LedgerEntryType =
+  | 'problem_statement'       // Manager frames problem → creates Context v1
+  | 'analysis'                // Consultant round 1 (independent)
+  | 'proposal'                // Consultant proposes context change
+  | 'response'                // Consultant round 2+ (engaging others, no context change)
+  | 'context_acceptance'      // Manager accepts a context patch → new Context version
+  | 'context_rejection'       // Manager rejects a context patch
+  | 'manager_question'        // Manager injects question between rounds
+  | 'manager_redirect'        // Manager refocuses discussion
+  | 'round_summary'           // Progressive summarization
+  | 'decision'                // Manager's final decision → Decision artifact
+  | 'plan'                    // Optional execution plan → Plan artifact
+  | 'work_directive'          // Concrete task for Worker → Directive artifact
+  | 'work_output'             // Worker's deliverable → Output artifact
+  | 'review'                  // Manager reviews output
+  | 'revision_request'        // Manager sends back for revision
+  | 're_deliberation'         // Manager requests re-deliberation with new info
+  | 'cancellation'            // Workflow cancelled
+  | 'error';                  // Agent invocation error
+
+/**
+ * Workflow phases - deterministic state machine
+ */
+export type DeliberationPhase =
+  | 'created'                     // Workflow created, not started
+  | 'problem_framing'             // Manager framing the problem
+  | 'round_independent'           // Round 1: consultants working independently
+  | 'round_interactive'           // Round 2+: consultants engaging with each other
+  | 'round_waiting_for_manager'   // All consultants submitted, Manager evaluating
+  | 'planning'                    // Optional: Manager writing execution plan
+  | 'deciding'                    // Manager writing decision
+  | 'directing'                   // Manager writing work directive
+  | 'executing'                   // Worker executing
+  | 'reviewing'                   // Manager reviewing output
+  | 'revising'                    // Worker revising based on feedback
+  | 'paused'                      // User paused without losing state
+  | 'completed'                   // Workflow done
+  | 'cancelled'                   // User aborted
+  | 'failed';                     // Unrecoverable error
+
+/**
+ * Artifact types - versioned objects referenced by ledger entries
+ */
+export type ArtifactType =
+  | 'context'       // Shared understanding document
+  | 'decision'      // Manager's decision with rationale
+  | 'plan'          // Optional breakdown of how to execute
+  | 'directive'     // Concrete task for Worker
+  | 'output';       // Worker's deliverable
+
+/**
+ * Reference to an artifact from a ledger entry
+ */
+export interface ArtifactRef {
+  artifactType: ArtifactType;
+  artifactId: string;
+  version?: number;
+}
+
+/**
+ * Context artifact - the canonical shared understanding
+ * Version 1 is always the Manager's problem statement.
+ * Version 2+ result from accepted consultant proposals.
+ */
+export interface ContextArtifact {
+  id: string;
+  councilId: string;
+  version: number;              // Increments on each accepted change
+  content: string;              // The current shared context document
+
+  createdFromVersion?: number;  // Which version this was derived from
+  changeSummary: string;        // What changed in this version
+
+  authorRole: DeliberationRole;
+  authorPersonaId?: string;
+  roundNumber?: number;
+
+  createdAt: string;
+}
+
+/**
+ * Decision artifact - Manager's final decision
+ */
+export interface DecisionArtifact {
+  id: string;
+  councilId: string;
+  content: string;
+  contextVersionAtDecision: number;  // Which context version this was made against
+  acceptanceCriteria?: string;
+  createdAt: string;
+}
+
+/**
+ * Plan artifact - optional execution breakdown
+ */
+export interface PlanArtifact {
+  id: string;
+  councilId: string;
+  content: string;
+  decisionId: string;
+  createdAt: string;
+}
+
+/**
+ * Directive artifact - concrete task for Worker
+ */
+export interface DirectiveArtifact {
+  id: string;
+  councilId: string;
+  content: string;
+  decisionId: string;
+  planId?: string;
+  createdAt: string;
+}
+
+/**
+ * Output artifact - Worker's deliverable
+ */
+export interface OutputArtifact {
+  id: string;
+  councilId: string;
+  content: string;
+  directiveId: string;
+  version: number;              // For revisions
+  isRevision: boolean;
+  previousOutputId?: string;
+  createdAt: string;
+}
+
+/**
+ * Context patch - consultant proposal to change shared context
+ * Consultants don't modify context directly; they propose changes.
+ */
+export interface ContextPatch {
+  id: string;
+  councilId: string;
+  targetContextId: string;      // Which context artifact this patches
+  baseVersion: number;          // The version this patch was written against
+
+  diff: string;                 // What to change (structured or natural language)
+  rationale: string;            // Why this change is needed
+
+  authorPersonaId: string;
+  roundNumber: number;
+
+  status: 'pending' | 'accepted' | 'rejected';
+  reviewedBy?: string;          // Manager persona ID
+  reviewReason?: string;        // Why accepted/rejected
+
+  createdAt: string;
+  reviewedAt?: string;
+}
+
+/**
+ * Ledger entry - append-only audit trail
+ */
+export interface LedgerEntry {
+  id: string;
+  timestamp: string;
+
+  authorRole: DeliberationRole;
+  authorPersonaId: string;
+
+  entryType: LedgerEntryType;
+  phase: DeliberationPhase;
+  roundNumber?: number;
+
+  content: string;                  // Human-readable text
+  structured?: Record<string, unknown>; // Machine-parseable data
+
+  artifactRefs?: ArtifactRef[];     // References to artifacts created/modified
+  referencedEntries?: string[];     // IDs of prior entries this responds to
+
+  reviewOutcome?: 'accept' | 'revise' | 're_deliberate';
+
+  tokensUsed?: number;
+  latencyMs?: number;
+  error?: string;
+}
+
+/**
+ * Role assignment - maps persona to deliberation role
+ */
+export interface DeliberationRoleAssignment {
+  personaId: string;
+  role: DeliberationRole;
+  focusArea?: string;            // Consultant specialization (e.g., "security", "UX")
+  stance?: string;               // Optional: Consultant's starting position or bias
+  suppressPersona?: boolean;     // Default: true for Worker, false for others
+}
+
+/**
+ * Manager's structured evaluation output
+ */
+export interface ManagerEvaluation {
+  action: 'continue' | 'decide' | 'redirect';
+  reasoning: string;
+  confidence?: number;            // 0.0-1.0, optional self-assessment
+  missingInformation?: string[];  // What's still unknown
+  question?: string;              // For 'continue' or 'redirect'
+  patchDecisions?: {              // Accept/reject pending context patches
+    patchId: string;
+    accepted: boolean;
+    reason: string;
+  }[];
+}
+
+/**
+ * Manager's review verdict
+ */
+export interface ManagerReview {
+  verdict: 'accept' | 'revise' | 're_deliberate';
+  reasoning: string;
+  feedback?: string;              // Specific revision instructions (if revise)
+  newInformation?: string;        // What changed (if re_deliberate)
+}
+
+/**
+ * Summary mode for managing context window
+ */
+export type SummaryMode =
+  | 'manager'     // Manager writes summary (API call, higher quality)
+  | 'automatic'   // Orchestrator extracts key points mechanically (no API call)
+  | 'hybrid'      // Automatic for early rounds, Manager for later rounds
+  | 'none';       // No summarization, always full context
+
+/**
+ * Deliberation configuration
+ */
+export interface DeliberationConfig {
+  enabled: boolean;
+
+  roleAssignments: DeliberationRoleAssignment[];
+
+  maxRounds: number;               // Default: 4
+  maxRevisions: number;            // Default: 3
+
+  // Working directory for execution
+  workingDirectory?: string;       // Directory path for task execution
+  directoryConstrained?: boolean;  // If true, constrain all file operations to this directory
+
+  // Saved problem/question for deliberation (before starting)
+  savedProblem?: string;
+
+  // Expected output/deliverable description
+  expectedOutput?: string;         // What the worker should produce at the end
+
+  // Decision guidance — what should the Manager optimize for?
+  decisionCriteria?: string[];     // e.g., ["technical feasibility", "security"]
+
+  summaryMode: SummaryMode;        // Default: 'manager'
+  summarizeAfterRound: number;     // Default: 2
+  contextTokenBudget: number;      // Default: 80000
+
+  consultantErrorPolicy: 'retry' | 'skip' | 'fail';  // Default: 'retry'
+  maxRetries: number;              // Default: 2
+
+  requirePlan: boolean;            // Default: false
+
+  /**
+   * How consultants execute during a round:
+   * - 'parallel': All consultants receive same context, respond simultaneously
+   * - 'sequential': Each consultant sees previous consultants' responses
+   */
+  consultantExecution: 'parallel' | 'sequential';  // Default: 'sequential'
+}
+
+/**
+ * Deliberation state - runtime workflow state
+ */
+export interface DeliberationState {
+  currentPhase: DeliberationPhase;
+  previousPhase?: DeliberationPhase;  // For pause/resume
+  currentRound: number;
+  roundRunId: string;                 // Unique ID per round execution
+
+  maxRounds: number;
+  revisionCount: number;
+  maxRevisions: number;
+
+  roundSubmissions: Record<number, string[]>;  // round → persona IDs that submitted
+  roundSummaries: Record<number, string>;
+
+  activeContextId: string;            // Current context artifact ID
+  activeContextVersion: number;       // Current context version number
+  pendingPatches: string[];           // IDs of unreviewed context patches
+
+  managerLastEvaluation?: ManagerEvaluation;
+
+  finalDecisionId?: string;           // Decision artifact ID
+  workDirectiveId?: string;           // Directive artifact ID
+  currentOutputId?: string;           // Current output artifact ID
+
+  errorLog: string[];
+}
+
+/**
+ * Ledger index for chunked storage
+ */
+export interface LedgerIndex {
+  councilId: string;
+  entryCount: number;
+  chunkCount: number;
+  chunkBoundaries: number[];        // Entry indices where chunks start
+  totalTokens: number;
+  lastUpdated: string;
+}
+
+// ============================================================================
+// Deliberation Events
+// ============================================================================
+
+export type DeliberationEvent =
+  | { type: 'phase-changed'; from: DeliberationPhase; to: DeliberationPhase }
+  | { type: 'round-started'; round: number }
+  | { type: 'round-completed'; round: number }
+  | { type: 'consultant-submitted'; personaId: string; round: number }
+  | { type: 'context-updated'; version: number }
+  | { type: 'patch-proposed'; patchId: string; authorId: string }
+  | { type: 'patch-reviewed'; patchId: string; accepted: boolean }
+  | { type: 'decision-made'; decisionId: string }
+  | { type: 'directive-issued'; directiveId: string }
+  | { type: 'work-submitted'; outputId: string }
+  | { type: 'review-completed'; verdict: string }
+  | { type: 'deliberation-completed'; councilId: string }
+  | { type: 'deliberation-cancelled'; councilId: string }
+  | { type: 'deliberation-failed'; councilId: string; error: string }
+  | { type: 'deliberation-paused'; councilId: string }
+  | { type: 'deliberation-resumed'; councilId: string };
+
+// ============================================================================
+// Extended Council Type for Deliberation
+// ============================================================================
+
+/**
+ * Extended Council interface with deliberation support
+ */
+export interface CouncilWithDeliberation extends Council {
+  /** Deliberation configuration (only when mode === 'deliberation') */
+  deliberation?: DeliberationConfig;
+
+  /** Runtime deliberation state */
+  deliberationState?: DeliberationState;
 }

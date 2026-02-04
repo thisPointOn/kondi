@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, type FC } from 'react';
-import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal, FileText } from 'lucide-react';
+import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal, FileText, Search, Box, CheckCircle, ExternalLink, RefreshCw } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, OAuthDiscovery } from '../types/mcp';
@@ -7,6 +7,9 @@ import { LOCAL_TOOLS, localToolsService } from '../services/localTools';
 import { fetchGithubManifest, fetchGithubReadme } from '../services/githubManifestFetcher';
 import { mcpClient } from '../services/mcpClient';
 import { ProxyLogViewer } from './ProxyLogViewer';
+import {
+  getSearchServerConfig,
+} from '../services/searchService';
 import './ToolsPanel.css';
 
 interface ToolsPanelProps {
@@ -1155,6 +1158,7 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
         {/* Local Tools - always available */}
         <LocalToolsCard onToolClick={onToolClick} />
 
+        {/* MCP Servers */}
         {sortedServers.map((server) => (
           <ServerCard
             key={server.id}
@@ -1194,6 +1198,7 @@ const ServerCard: FC<{
   const [editToken, setEditToken] = useState(server.accessToken || '');
   const [editClientId, setEditClientId] = useState(server.clientId || '');
   const [editClientSecret, setEditClientSecret] = useState(server.clientSecret || '');
+  const [editAutoConnect, setEditAutoConnect] = useState(server.autoConnect ?? false);
   const [isReauthenticating, setIsReauthenticating] = useState(false);
   const [reauthError, setReauthError] = useState<string | null>(null);
   const [, forceTick] = useState(0);
@@ -1212,6 +1217,7 @@ const ServerCard: FC<{
     setEditToken(server.accessToken || '');
     setEditClientId(server.clientId || '');
     setEditClientSecret(server.clientSecret || '');
+    setEditAutoConnect(server.autoConnect ?? false);
   }, [server]);
 
   const handleToolClick = (tool: MCPTool) => {
@@ -1228,6 +1234,7 @@ const ServerCard: FC<{
         accessToken: editToken || undefined,
         clientId: editClientId || undefined,
         clientSecret: editClientSecret || undefined,
+        autoConnect: editAutoConnect,
       });
     }
     setShowDetails(false);
@@ -1278,7 +1285,9 @@ const ServerCard: FC<{
             style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
           />
           <span className="server-icon">
-            {server.type === 'github_mcp_local' ? (
+            {server.id === 'kondi-search' ? (
+              <Search size={16} className="server-icon-svg builtin" />
+            ) : server.type === 'github_mcp_local' ? (
               <Terminal size={16} className="server-icon-svg local" />
             ) : (
               <Globe size={16} className="server-icon-svg remote" />
@@ -1293,10 +1302,9 @@ const ServerCard: FC<{
           >
             {server.name}
           </span>
+          {/* Error indicator dot - full error shown when expanded */}
           {hasError && server.error && (
-            <span className="server-error-inline" title={server.error}>
-              {server.error}
-            </span>
+            <span className="server-error-dot" title="Connection error - expand for details" />
           )}
         </div>
         <div
@@ -1407,6 +1415,17 @@ const ServerCard: FC<{
               onChange={(e) => setEditClientSecret(e.target.value)}
             />
           </div>
+          <div className="auto-connect-section">
+            <label className="auto-connect-label">
+              <input
+                type="checkbox"
+                checked={editAutoConnect}
+                onChange={(e) => setEditAutoConnect(e.target.checked)}
+              />
+              <span>Auto-connect on startup</span>
+            </label>
+            <span className="auto-connect-hint">Automatically connect to this server when the app starts</span>
+          </div>
           <div className="details-actions">
             <button className="submit-btn" onClick={handleSaveDetails}>
               Save Changes
@@ -1447,6 +1466,14 @@ const ServerCard: FC<{
               <span className="meta-label">Transport</span>
               <span className="meta-value">{server.transport?.toUpperCase()}</span>
             </div>
+            {server.messageEndpoint && (
+              <div className="server-meta-row">
+                <span className="meta-label">Local Proxy</span>
+                <span className="meta-value proxy-port">
+                  {server.messageEndpoint}
+                </span>
+              </div>
+            )}
             <div className="server-meta-row">
               <span className="meta-label">Auth</span>
               <span className="meta-value">

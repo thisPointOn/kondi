@@ -131,8 +131,8 @@ const ChatArea: FC<ChatAreaProps> = ({
   anthropicKey,
   openaiKey,
   provider,
-  anthropicModel = 'claude-3-5-sonnet-latest',
-  openaiModel = 'gpt-4o',
+  anthropicModel = 'claude-sonnet-4-20250514',
+  openaiModel = 'gpt-5.2-codex',
 }) => {
   const [inputValue, setInputValue] = useState('');
   const [showToolAutocomplete, setShowToolAutocomplete] = useState(false);

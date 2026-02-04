@@ -458,7 +458,7 @@ export class OpenAIClient {
 
     // First API call
     const completion = await this.client!.chat.completions.create({
-      model: model || 'gpt-4o',
+      model: model || 'gpt-5.2-codex',
       messages: openaiMessages,
       tools: tools.length > 0 ? tools : undefined,
       tool_choice: tools.length > 0 ? 'auto' : undefined,
@@ -551,7 +551,7 @@ export class OpenAIClient {
       ];
 
       const followUp = await this.client!.chat.completions.create({
-        model: model || 'gpt-4o',
+        model: model || 'gpt-5.2-codex',
         messages: followUpMessages,
         tools: tools.length > 0 ? tools : undefined,
       });

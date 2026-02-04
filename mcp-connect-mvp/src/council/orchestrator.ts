@@ -26,6 +26,7 @@ import {
 import { selectNextSpeaker, isRoundComplete, getUnheardPersonas, selectDebateOpponents } from './turn-strategies';
 import { prepareSynthesisRequest, parseSynthesisResponse, createRoundSummary, quickConsensusCheck } from './synthesis';
 import { councilStore } from './store';
+import { getModelCostRates } from '../config/models';
 
 // ============================================================================
 // Types
@@ -54,22 +55,13 @@ export interface OrchestratorConfig {
 // Cost Estimation
 // ============================================================================
 
-const COST_PER_1K_TOKENS: Record<string, { input: number; output: number }> = {
-  'claude-opus-4-20250514': { input: 0.015, output: 0.075 },
-  'claude-sonnet-4-20250514': { input: 0.003, output: 0.015 },
-  'gpt-4o': { input: 0.005, output: 0.015 },
-  'gpt-4o-mini': { input: 0.00015, output: 0.0006 },
-  'deepseek-reasoner': { input: 0.00055, output: 0.00219 },
-  'deepseek-chat': { input: 0.00014, output: 0.00028 },
-};
-
 function estimateTokens(text: string): number {
   // Rough estimate: ~4 characters per token
   return Math.ceil(text.length / 4);
 }
 
 function calculateCost(model: string, inputTokens: number, outputTokens: number): number {
-  const rates = COST_PER_1K_TOKENS[model] || { input: 0.01, output: 0.03 };
+  const rates = getModelCostRates(model);
   return (inputTokens / 1000) * rates.input + (outputTokens / 1000) * rates.output;
 }
 

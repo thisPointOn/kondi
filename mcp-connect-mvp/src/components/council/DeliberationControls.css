@@ -1,0 +1,107 @@
+/**
+ * DeliberationControls Styles
+ */
+
+.deliberation-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  background: var(--bg-secondary, #1a1a1a);
+  border-top: 1px solid var(--border-color, #333);
+}
+
+.controls-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.controls-description {
+  font-size: 0.875rem;
+  color: var(--text-secondary, #999);
+}
+
+.controls-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.control-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.control-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-icon {
+  font-size: 1rem;
+}
+
+/* Primary Action Button */
+.primary-btn {
+  background: var(--accent-color, #3b82f6);
+  border: none;
+  color: white;
+  padding: 0.75rem 1.5rem;
+}
+
+.primary-btn:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+/* Force Decision Button */
+.force-btn {
+  background: #f59e0b20;
+  border: 1px solid #f59e0b40;
+  color: #fbbf24;
+}
+
+.force-btn:hover:not(:disabled) {
+  background: #f59e0b30;
+}
+
+/* Pause Button */
+.pause-btn {
+  background: var(--bg-tertiary, #252525);
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-secondary, #999);
+}
+
+.pause-btn:hover:not(:disabled) {
+  color: var(--text-primary, #e5e5e5);
+  border-color: var(--text-secondary, #999);
+}
+
+/* Resume Button */
+.resume-btn {
+  background: #16a34a;
+  border: none;
+  color: white;
+}
+
+.resume-btn:hover:not(:disabled) {
+  background: #15803d;
+}
+
+/* Abort Button */
+.abort-btn {
+  background: #dc262620;
+  border: 1px solid #dc262640;
+  color: #f87171;
+}
+
+.abort-btn:hover:not(:disabled) {
+  background: #dc262630;
+}

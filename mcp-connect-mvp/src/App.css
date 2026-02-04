@@ -28,6 +28,27 @@
   margin: 0 0 24px 0;
 }
 
+/* Built-in Services Pane */
+.services-pane {
+  padding: 32px;
+  width: 100%;
+  max-width: 700px;
+  overflow-y: auto;
+}
+
+.services-pane h2 {
+  margin: 0 0 8px 0;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.services-description {
+  margin: 0 0 24px 0;
+  color: #888;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 .settings-section {
   margin-bottom: 8px;
   border: 1px solid #2a2a2a;
@@ -653,3 +674,14 @@ select:focus {
 .tools-drawer {
   flex-shrink: 0;
 }
+
+/* Providers View Container */
+.providers-view {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px;
+  height: 100%;
+  overflow-y: auto;
+}
+

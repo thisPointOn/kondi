@@ -20,6 +20,7 @@ export const councilModeSchema = z.enum([
   'synthesis',
   'socratic',
   'freeform',
+  'deliberation',
 ]);
 
 export const turnStrategySchema = z.enum([
@@ -62,6 +63,8 @@ export const predispositionSchema = z.object({
 // Persona Schema
 // ============================================================================
 
+export const deliberationRoleSchema = z.enum(['manager', 'consultant', 'worker']);
+
 export const personaSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1, 'Name is required').max(50, 'Name too long'),
@@ -73,6 +76,7 @@ export const personaSchema = z.object({
   temperature: z.number().min(0).max(1).optional(),
   verbosity: verbositySchema,
   muted: z.boolean().optional(),
+  preferredDeliberationRole: deliberationRoleSchema.optional(),
 });
 
 export const presetPersonaSchema = z.object({
@@ -98,7 +102,7 @@ export const documentSchema = z.object({
 });
 
 export const sharedContextSchema = z.object({
-  description: z.string().min(10, 'Description must be at least 10 characters'),
+  description: z.string().min(1, 'Description is required'),
   documents: z.array(documentSchema).default([]),
   data: z.record(z.string(), z.unknown()).optional(),
   constraints: z.array(z.string()).optional(),
@@ -173,13 +177,16 @@ export const councilSchema = z.object({
   updatedAt: z.string().datetime(),
   topic: z.string().min(5, 'Topic must be at least 5 characters'),
   sharedContext: sharedContextSchema,
-  personas: z.array(personaSchema).min(2, 'At least 2 personas required'),
+  personas: z.array(personaSchema).min(1, 'At least 1 persona required'),
   orchestration: orchestrationConfigSchema,
   messages: z.array(councilMessageSchema).default([]),
   status: councilStatusSchema,
   resolution: resolutionSchema.optional(),
   totalTokensUsed: z.number().int().min(0).default(0),
   estimatedCost: z.number().min(0).default(0),
+  // Deliberation fields (optional, only when mode === 'deliberation')
+  deliberation: z.lazy(() => deliberationConfigSchema).optional(),
+  deliberationState: z.lazy(() => deliberationStateSchema).optional(),
 });
 
 // ============================================================================
@@ -227,6 +234,239 @@ export const steelmanRequestSchema = z.object({
 });
 
 // ============================================================================
+// Deliberation Schemas
+// ============================================================================
+
+export const ledgerEntryTypeSchema = z.enum([
+  'problem_statement',
+  'analysis',
+  'proposal',
+  'response',
+  'context_acceptance',
+  'context_rejection',
+  'manager_question',
+  'manager_redirect',
+  'round_summary',
+  'decision',
+  'plan',
+  'work_directive',
+  'work_output',
+  'review',
+  'revision_request',
+  're_deliberation',
+  'cancellation',
+  'error',
+]);
+
+export const deliberationPhaseSchema = z.enum([
+  'created',
+  'problem_framing',
+  'round_independent',
+  'round_interactive',
+  'round_waiting_for_manager',
+  'planning',
+  'deciding',
+  'directing',
+  'executing',
+  'reviewing',
+  'revising',
+  'paused',
+  'completed',
+  'cancelled',
+  'failed',
+]);
+
+export const artifactTypeSchema = z.enum([
+  'context',
+  'decision',
+  'plan',
+  'directive',
+  'output',
+]);
+
+export const summaryModeSchema = z.enum([
+  'manager',
+  'automatic',
+  'hybrid',
+  'none',
+]);
+
+export const consultantErrorPolicySchema = z.enum(['retry', 'skip', 'fail']);
+
+export const artifactRefSchema = z.object({
+  artifactType: artifactTypeSchema,
+  artifactId: z.string(),
+  version: z.number().int().optional(),
+});
+
+export const contextArtifactSchema = z.object({
+  id: z.string().uuid(),
+  councilId: z.string().uuid(),
+  version: z.number().int().min(1),
+  content: z.string().min(1),
+  createdFromVersion: z.number().int().optional(),
+  changeSummary: z.string(),
+  authorRole: deliberationRoleSchema,
+  authorPersonaId: z.string().optional(),
+  roundNumber: z.number().int().optional(),
+  createdAt: z.string().datetime(),
+});
+
+export const decisionArtifactSchema = z.object({
+  id: z.string().uuid(),
+  councilId: z.string().uuid(),
+  content: z.string().min(1),
+  contextVersionAtDecision: z.number().int().min(1),
+  acceptanceCriteria: z.string().optional(),
+  createdAt: z.string().datetime(),
+});
+
+export const planArtifactSchema = z.object({
+  id: z.string().uuid(),
+  councilId: z.string().uuid(),
+  content: z.string().min(1),
+  decisionId: z.string().uuid(),
+  createdAt: z.string().datetime(),
+});
+
+export const directiveArtifactSchema = z.object({
+  id: z.string().uuid(),
+  councilId: z.string().uuid(),
+  content: z.string().min(1),
+  decisionId: z.string().uuid(),
+  planId: z.string().uuid().optional(),
+  createdAt: z.string().datetime(),
+});
+
+export const outputArtifactSchema = z.object({
+  id: z.string().uuid(),
+  councilId: z.string().uuid(),
+  content: z.string().min(1),
+  directiveId: z.string().uuid(),
+  version: z.number().int().min(1),
+  isRevision: z.boolean(),
+  previousOutputId: z.string().uuid().optional(),
+  createdAt: z.string().datetime(),
+});
+
+export const contextPatchStatusSchema = z.enum(['pending', 'accepted', 'rejected']);
+
+export const contextPatchSchema = z.object({
+  id: z.string().uuid(),
+  councilId: z.string().uuid(),
+  targetContextId: z.string().uuid(),
+  baseVersion: z.number().int().min(1),
+  diff: z.string().min(1),
+  rationale: z.string().min(1),
+  authorPersonaId: z.string().uuid(),
+  roundNumber: z.number().int().min(1),
+  status: contextPatchStatusSchema,
+  reviewedBy: z.string().uuid().optional(),
+  reviewReason: z.string().optional(),
+  createdAt: z.string().datetime(),
+  reviewedAt: z.string().datetime().optional(),
+});
+
+export const reviewOutcomeSchema = z.enum(['accept', 'revise', 're_deliberate']);
+
+export const ledgerEntrySchema = z.object({
+  id: z.string().uuid(),
+  timestamp: z.string().datetime(),
+  authorRole: deliberationRoleSchema,
+  authorPersonaId: z.string(),
+  entryType: ledgerEntryTypeSchema,
+  phase: deliberationPhaseSchema,
+  roundNumber: z.number().int().optional(),
+  content: z.string(),
+  structured: z.record(z.string(), z.unknown()).optional(),
+  artifactRefs: z.array(artifactRefSchema).optional(),
+  referencedEntries: z.array(z.string().uuid()).optional(),
+  reviewOutcome: reviewOutcomeSchema.optional(),
+  tokensUsed: z.number().int().min(0).optional(),
+  latencyMs: z.number().int().min(0).optional(),
+  error: z.string().optional(),
+});
+
+export const deliberationRoleAssignmentSchema = z.object({
+  personaId: z.string().uuid(),
+  role: deliberationRoleSchema,
+  focusArea: z.string().optional(),
+  stance: z.string().optional(),
+  suppressPersona: z.boolean().optional(),
+});
+
+export const patchDecisionSchema = z.object({
+  patchId: z.string().uuid(),
+  accepted: z.boolean(),
+  reason: z.string(),
+});
+
+export const managerEvaluationSchema = z.object({
+  action: z.enum(['continue', 'decide', 'redirect']),
+  reasoning: z.string(),
+  confidence: z.number().min(0).max(1).optional(),
+  missingInformation: z.array(z.string()).optional(),
+  question: z.string().optional(),
+  patchDecisions: z.array(patchDecisionSchema).optional(),
+});
+
+export const managerReviewSchema = z.object({
+  verdict: reviewOutcomeSchema,
+  reasoning: z.string(),
+  feedback: z.string().optional(),
+  newInformation: z.string().optional(),
+});
+
+export const deliberationConfigSchema = z.object({
+  enabled: z.boolean(),
+  roleAssignments: z.array(deliberationRoleAssignmentSchema),
+  maxRounds: z.number().int().min(1).max(10).default(4),
+  maxRevisions: z.number().int().min(1).max(10).default(3),
+  decisionCriteria: z.array(z.string()).optional(),
+  summaryMode: summaryModeSchema.default('manager'),
+  summarizeAfterRound: z.number().int().min(1).default(2),
+  contextTokenBudget: z.number().int().min(1000).default(80000),
+  consultantErrorPolicy: consultantErrorPolicySchema.default('retry'),
+  maxRetries: z.number().int().min(0).max(5).default(2),
+  requirePlan: z.boolean().default(false),
+});
+
+export const deliberationStateSchema = z.object({
+  currentPhase: deliberationPhaseSchema,
+  previousPhase: deliberationPhaseSchema.optional(),
+  currentRound: z.number().int().min(0),
+  roundRunId: z.string(),
+  maxRounds: z.number().int().min(1),
+  revisionCount: z.number().int().min(0),
+  maxRevisions: z.number().int().min(1),
+  roundSubmissions: z.record(z.string(), z.array(z.string())),
+  roundSummaries: z.record(z.string(), z.string()),
+  activeContextId: z.string(),
+  activeContextVersion: z.number().int().min(0),
+  pendingPatches: z.array(z.string()),
+  managerLastEvaluation: managerEvaluationSchema.optional(),
+  finalDecisionId: z.string().optional(),
+  workDirectiveId: z.string().optional(),
+  currentOutputId: z.string().optional(),
+  errorLog: z.array(z.string()),
+});
+
+export const ledgerIndexSchema = z.object({
+  councilId: z.string().uuid(),
+  entryCount: z.number().int().min(0),
+  chunkCount: z.number().int().min(0),
+  chunkBoundaries: z.array(z.number().int()),
+  totalTokens: z.number().int().min(0),
+  lastUpdated: z.string().datetime(),
+});
+
+// Extended council schema with deliberation support
+export const councilWithDeliberationSchema = councilSchema.extend({
+  deliberation: deliberationConfigSchema.optional(),
+  deliberationState: deliberationStateSchema.optional(),
+});
+
+// ============================================================================
 // Type Exports
 // ============================================================================
 
@@ -237,6 +477,26 @@ export type OrchestrationConfigInput = z.infer<typeof orchestrationConfigSchema>
 export type SharedContextInput = z.infer<typeof sharedContextSchema>;
 export type CouncilMessageInput = z.infer<typeof councilMessageSchema>;
 export type ResolutionInput = z.infer<typeof resolutionSchema>;
+
+// Deliberation type exports
+export type DeliberationRoleInput = z.infer<typeof deliberationRoleSchema>;
+export type LedgerEntryTypeInput = z.infer<typeof ledgerEntryTypeSchema>;
+export type DeliberationPhaseInput = z.infer<typeof deliberationPhaseSchema>;
+export type ArtifactTypeInput = z.infer<typeof artifactTypeSchema>;
+export type SummaryModeInput = z.infer<typeof summaryModeSchema>;
+export type ContextArtifactInput = z.infer<typeof contextArtifactSchema>;
+export type DecisionArtifactInput = z.infer<typeof decisionArtifactSchema>;
+export type PlanArtifactInput = z.infer<typeof planArtifactSchema>;
+export type DirectiveArtifactInput = z.infer<typeof directiveArtifactSchema>;
+export type OutputArtifactInput = z.infer<typeof outputArtifactSchema>;
+export type ContextPatchInput = z.infer<typeof contextPatchSchema>;
+export type LedgerEntryInput = z.infer<typeof ledgerEntrySchema>;
+export type DeliberationRoleAssignmentInput = z.infer<typeof deliberationRoleAssignmentSchema>;
+export type ManagerEvaluationInput = z.infer<typeof managerEvaluationSchema>;
+export type ManagerReviewInput = z.infer<typeof managerReviewSchema>;
+export type DeliberationConfigInput = z.infer<typeof deliberationConfigSchema>;
+export type DeliberationStateInput = z.infer<typeof deliberationStateSchema>;
+export type LedgerIndexInput = z.infer<typeof ledgerIndexSchema>;
 
 // ============================================================================
 // Validation Helpers
@@ -276,4 +536,44 @@ export function validateWithErrors<T>(
   });
 
   return { success: false, errors };
+}
+
+// ============================================================================
+// Deliberation Validation Helpers
+// ============================================================================
+
+export function validateDeliberationConfig(data: unknown) {
+  return deliberationConfigSchema.safeParse(data);
+}
+
+export function validateDeliberationState(data: unknown) {
+  return deliberationStateSchema.safeParse(data);
+}
+
+export function validateLedgerEntry(data: unknown) {
+  return ledgerEntrySchema.safeParse(data);
+}
+
+export function validateContextArtifact(data: unknown) {
+  return contextArtifactSchema.safeParse(data);
+}
+
+export function validateContextPatch(data: unknown) {
+  return contextPatchSchema.safeParse(data);
+}
+
+export function validateManagerEvaluation(data: unknown) {
+  return managerEvaluationSchema.safeParse(data);
+}
+
+export function validateManagerReview(data: unknown) {
+  return managerReviewSchema.safeParse(data);
+}
+
+export function validateDeliberationRoleAssignment(data: unknown) {
+  return deliberationRoleAssignmentSchema.safeParse(data);
+}
+
+export function validateCouncilWithDeliberation(data: unknown) {
+  return councilWithDeliberationSchema.safeParse(data);
 }

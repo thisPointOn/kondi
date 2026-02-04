@@ -1,0 +1,1657 @@
+/**
+ * Council: Deliberation Orchestrator
+ * Deterministic state machine for structured multi-agent deliberation
+ *
+ * The orchestrator is CODE, not an agent. It:
+ * - Drives the state machine
+ * - Invokes agents with correct context
+ * - Manages artifacts and ledger
+ * - Enforces invariants
+ */
+
+import type {
+  Council,
+  Persona,
+  LedgerEntry,
+  LedgerEntryType,
+  DeliberationPhase,
+  DeliberationRole,
+  DeliberationRoleAssignment,
+  ManagerEvaluation,
+  ManagerReview,
+  ContextArtifact,
+  ContextPatch,
+  ArtifactRef,
+} from './types';
+
+import {
+  ledgerStore,
+  getEntries,
+  getAllEntries,
+  getLatestOfType,
+  getEntriesForRound,
+  getManagerNotes,
+  getLedgerTokenCount,
+  formatEntriesForContext,
+  buildMechanicalSummary,
+} from './ledger-store';
+
+import {
+  getCurrentContext,
+  getContextHistory,
+  createInitialContext,
+  createContextVersion,
+  getPendingPatches,
+  createPatch,
+  acceptPatch,
+  rejectPatch,
+  createDecision,
+  createPlan,
+  createDirective,
+  createOutput,
+  createRevisionOutput,
+  getDecision,
+  getPlan,
+  getDirective,
+  getLatestOutput,
+} from './context-store';
+
+import {
+  councilStore,
+  getPersonaByRole,
+  getRoleAssignment,
+  isDeliberationMode,
+} from './store';
+
+import {
+  buildManagerFramingPrompt,
+  buildManagerEvaluationPrompt,
+  buildManagerDecisionPrompt,
+  buildManagerForcedDecisionPrompt,
+  buildManagerPlanPrompt,
+  buildWorkDirectivePrompt,
+  buildManagerReviewPrompt,
+  buildManagerRoundSummaryPrompt,
+  buildIndependentAnalysisPrompt,
+  buildDeliberationResponsePrompt,
+  buildWorkerExecutionPrompt,
+  buildWorkerRevisionPrompt,
+  getMinimalWorkerSystemPrompt,
+} from './prompts';
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export interface AgentInvocation {
+  personaId: string;
+  systemPrompt: string;
+  userMessage: string;
+}
+
+export interface AgentResponse {
+  content: string;
+  tokensUsed: number;
+  latencyMs: number;
+  structured?: Record<string, unknown>;
+}
+
+export type AgentInvoker = (invocation: AgentInvocation, persona: Persona) => Promise<AgentResponse>;
+
+export interface OrchestratorConfig {
+  invokeAgent: AgentInvoker;
+  onPhaseChange?: (from: DeliberationPhase, to: DeliberationPhase) => void;
+  onEntryAdded?: (entry: LedgerEntry) => void;
+  onError?: (error: Error, context: string) => void;
+  /** Called when a persona starts thinking */
+  onAgentThinkingStart?: (persona: Persona) => void;
+  /** Called when a persona finishes thinking */
+  onAgentThinkingEnd?: (persona: Persona) => void;
+}
+
+// ============================================================================
+// Phase Transition Table
+// ============================================================================
+
+const PHASE_TRANSITIONS: Record<DeliberationPhase, {
+  validNext: DeliberationPhase[];
+  terminal: boolean;
+}> = {
+  created: { validNext: ['problem_framing'], terminal: false },
+  problem_framing: { validNext: ['round_independent'], terminal: false },
+  round_independent: { validNext: ['round_waiting_for_manager'], terminal: false },
+  round_interactive: { validNext: ['round_waiting_for_manager'], terminal: false },
+  round_waiting_for_manager: { validNext: ['round_interactive', 'deciding', 'planning'], terminal: false },
+  planning: { validNext: ['directing'], terminal: false },
+  deciding: { validNext: ['planning', 'directing'], terminal: false },
+  directing: { validNext: ['executing'], terminal: false },
+  executing: { validNext: ['reviewing'], terminal: false },
+  reviewing: { validNext: ['completed', 'revising', 'round_interactive'], terminal: false },
+  revising: { validNext: ['reviewing', 'completed'], terminal: false },
+  paused: { validNext: ['created', 'problem_framing', 'round_independent', 'round_interactive', 'round_waiting_for_manager', 'planning', 'deciding', 'directing', 'executing', 'reviewing', 'revising'], terminal: false },
+  completed: { validNext: [], terminal: true },
+  cancelled: { validNext: [], terminal: true },
+  failed: { validNext: [], terminal: true },
+};
+
+// ============================================================================
+// Deliberation Orchestrator
+// ============================================================================
+
+export class DeliberationOrchestrator {
+  private config: OrchestratorConfig;
+
+  constructor(config: OrchestratorConfig) {
+    this.config = config;
+  }
+
+  // ==========================================================================
+  // Auto-Run: Full Deliberation Loop
+  // ==========================================================================
+
+  /**
+   * Run the full deliberation automatically from start to completion.
+   * This method chains all phases together:
+   * 1. Frame problem
+   * 2. Run rounds (independent → manager eval → interactive → ...)
+   * 3. Make decision
+   * 4. Create plan & directive
+   * 5. Execute & review
+   */
+  async runFullDeliberation(council: Council, rawProblem: string): Promise<void> {
+    console.log('[Orchestrator] Starting full deliberation...');
+
+    // Phase 1: Frame the problem
+    await this.frameProblem(council, rawProblem);
+    council = councilStore.get(council.id)!;
+
+    // Phase 2: Deliberation rounds
+    const maxRounds = council.deliberation?.maxRounds || 4;
+    let roundCount = 0;
+
+    while (roundCount < maxRounds) {
+      council = councilStore.get(council.id)!;
+      const phase = council.deliberationState?.currentPhase;
+
+      if (phase === 'round_independent') {
+        console.log(`[Orchestrator] Running independent round ${roundCount + 1}...`);
+        await this.runIndependentRound(council);
+        roundCount++;
+      } else if (phase === 'round_waiting_for_manager') {
+        console.log('[Orchestrator] Manager evaluating...');
+        const evaluation = await this.managerEvaluate(council);
+
+        // Check if manager decided to move to decision phase
+        council = councilStore.get(council.id)!;
+        const newPhase = council.deliberationState?.currentPhase;
+        if (newPhase === 'deciding' || newPhase === 'planning') {
+          console.log('[Orchestrator] Manager decided to conclude deliberation');
+          break;
+        }
+      } else if (phase === 'round_interactive') {
+        console.log('[Orchestrator] Running interactive round...');
+        await this.runInteractiveRound(council);
+      } else if (phase === 'deciding' || phase === 'planning') {
+        break; // Move to decision phase
+      } else {
+        console.log(`[Orchestrator] Unexpected phase during deliberation: ${phase}`);
+        break;
+      }
+    }
+
+    // Phase 3: Decision
+    council = councilStore.get(council.id)!;
+    let phase = council.deliberationState?.currentPhase;
+
+    if (phase === 'deciding') {
+      console.log('[Orchestrator] Making decision...');
+      await this.makeDecision(council);
+      council = councilStore.get(council.id)!;
+      phase = council.deliberationState?.currentPhase;
+    }
+
+    if (phase === 'planning') {
+      console.log('[Orchestrator] Creating plan...');
+      await this.createPlan(council);
+      council = councilStore.get(council.id)!;
+      phase = council.deliberationState?.currentPhase;
+    }
+
+    if (phase === 'directing') {
+      console.log('[Orchestrator] Issuing directive...');
+      await this.issueDirective(council);
+      council = councilStore.get(council.id)!;
+      phase = council.deliberationState?.currentPhase;
+    }
+
+    // Phase 4: Execution
+    const maxRevisions = council.deliberation?.maxRevisions || 3;
+    let revisionCount = 0;
+
+    while (revisionCount < maxRevisions) {
+      council = councilStore.get(council.id)!;
+      phase = council.deliberationState?.currentPhase;
+
+      if (phase === 'executing') {
+        console.log('[Orchestrator] Executing work...');
+        await this.executeWork(council);
+      } else if (phase === 'reviewing') {
+        console.log('[Orchestrator] Reviewing work...');
+        const { review } = await this.reviewWork(council);
+
+        if (review.verdict === 'accept') {
+          console.log('[Orchestrator] Work approved!');
+          break;
+        } else if (review.verdict === 'revise') {
+          revisionCount++;
+          console.log(`[Orchestrator] Revision requested (${revisionCount}/${maxRevisions})`);
+        } else if (review.verdict === 're_deliberate') {
+          console.log('[Orchestrator] Re-deliberation requested');
+          // This will loop back through deliberation
+        }
+      } else if (phase === 'revising') {
+        console.log('[Orchestrator] Revising work...');
+        await this.requestRevision(council);
+      } else if (phase === 'completed') {
+        console.log('[Orchestrator] Deliberation completed!');
+        break;
+      } else {
+        console.log(`[Orchestrator] Unexpected phase during execution: ${phase}`);
+        break;
+      }
+    }
+
+    console.log('[Orchestrator] Full deliberation finished');
+  }
+
+  // ==========================================================================
+  // Phase 1: Problem Framing
+  // ==========================================================================
+
+  /**
+   * Manager frames the problem, creating Context v1
+   */
+  async frameProblem(council: Council, rawProblem: string): Promise<LedgerEntry> {
+    this.validatePhase(council, 'created');
+    const manager = this.getManager(council);
+
+    // Transition to problem_framing
+    this.transitionPhase(council.id, 'problem_framing');
+
+    // Build prompts per Section 9.1
+    const systemPrompt = manager.predisposition.systemPrompt;
+    const userMessage = buildManagerFramingPrompt(rawProblem);
+
+    // Invoke manager
+    const response = await this.invokeAgentSafe(
+      { personaId: manager.id, systemPrompt, userMessage },
+      manager,
+      'problem_framing'
+    );
+
+    // Create Context v1
+    const context = createInitialContext(council.id, response.content, manager.id);
+
+    // Update deliberation state
+    councilStore.setActiveContext(council.id, context.id, context.version);
+
+    // Create ledger entry
+    const entry = this.createEntry(
+      council.id,
+      'manager',
+      manager.id,
+      'problem_statement',
+      'problem_framing',
+      response.content,
+      response.tokensUsed,
+      response.latencyMs,
+      [{ artifactType: 'context', artifactId: context.id, version: 1 }]
+    );
+
+    // Transition to round_independent
+    this.transitionPhase(council.id, 'round_independent');
+    councilStore.advanceRound(council.id);
+
+    return entry;
+  }
+
+  // ==========================================================================
+  // Phase 2: Deliberation Rounds
+  // ==========================================================================
+
+  /**
+   * Generate independent analysis for all consultants (Round 1)
+   */
+  async runIndependentRound(council: Council): Promise<LedgerEntry[]> {
+    this.validatePhase(council, 'round_independent');
+    const consultants = this.getConsultants(council);
+    const context = getCurrentContext(council.id);
+
+    if (!context) {
+      throw new Error('No context found - problem must be framed first');
+    }
+
+    const entries: LedgerEntry[] = [];
+
+    // Run consultants in parallel
+    const promises = consultants.map(async (consultant) => {
+      const assignment = getRoleAssignment(council, consultant.id);
+      const focusArea = assignment?.focusArea || consultant.predisposition.domain || 'general';
+
+      // Build prompts per Section 9.2
+      const systemPrompt = consultant.predisposition.systemPrompt;
+      const userMessage = buildIndependentAnalysisPrompt(consultant, focusArea, context.content);
+
+      const response = await this.invokeAgentSafe(
+        { personaId: consultant.id, systemPrompt, userMessage },
+        consultant,
+        'independent_analysis'
+      );
+
+      // Check for context change proposal
+      const proposedPatch = this.extractContextProposal(response.content);
+
+      // Create ledger entry
+      const entry = this.createEntry(
+        council.id,
+        'consultant',
+        consultant.id,
+        'analysis',
+        'round_independent',
+        response.content,
+        response.tokensUsed,
+        response.latencyMs,
+        undefined,
+        council.deliberationState?.currentRound
+      );
+
+      // Record submission
+      councilStore.recordSubmission(council.id, consultant.id);
+
+      // Create patch if proposed
+      if (proposedPatch) {
+        const patch = createPatch(
+          council.id,
+          context.id,
+          context.version,
+          proposedPatch.diff,
+          proposedPatch.rationale,
+          consultant.id,
+          council.deliberationState?.currentRound || 1
+        );
+        councilStore.addPendingPatch(council.id, patch.id);
+      }
+
+      return entry;
+    });
+
+    const results = await Promise.allSettled(promises);
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        entries.push(result.value);
+      } else {
+        await this.handleConsultantError(council, 'unknown', result.reason);
+      }
+    }
+
+    // Check if round is complete
+    if (councilStore.isRoundComplete(council.id)) {
+      this.transitionPhase(council.id, 'round_waiting_for_manager');
+    }
+
+    return entries;
+  }
+
+  /**
+   * Generate deliberation response for a consultant (Round 2+)
+   */
+  async generateDeliberationResponse(council: Council, consultantId: string): Promise<LedgerEntry> {
+    this.validatePhase(council, 'round_interactive');
+    const consultant = council.personas.find((p) => p.id === consultantId);
+
+    if (!consultant) {
+      throw new Error(`Consultant not found: ${consultantId}`);
+    }
+
+    const assignment = getRoleAssignment(council, consultant.id);
+    const focusArea = assignment?.focusArea || consultant.predisposition.domain || 'general';
+
+    // Build context per Section 9.3
+    const contextContent = this.buildRoundNContext(council);
+
+    // Build prompts
+    const systemPrompt = consultant.predisposition.systemPrompt;
+    const userMessage = buildDeliberationResponsePrompt(consultant, focusArea, contextContent);
+
+    const response = await this.invokeAgentSafe(
+      { personaId: consultant.id, systemPrompt, userMessage },
+      consultant,
+      'deliberation_response'
+    );
+
+    // Check for context change proposal
+    const proposedPatch = this.extractContextProposal(response.content);
+    const context = getCurrentContext(council.id);
+
+    // Create ledger entry
+    const entryType: LedgerEntryType = proposedPatch ? 'proposal' : 'response';
+    const entry = this.createEntry(
+      council.id,
+      'consultant',
+      consultant.id,
+      entryType,
+      'round_interactive',
+      response.content,
+      response.tokensUsed,
+      response.latencyMs,
+      undefined,
+      council.deliberationState?.currentRound
+    );
+
+    // Record submission
+    councilStore.recordSubmission(council.id, consultant.id);
+
+    // Create patch if proposed
+    if (proposedPatch && context) {
+      const patch = createPatch(
+        council.id,
+        context.id,
+        context.version,
+        proposedPatch.diff,
+        proposedPatch.rationale,
+        consultant.id,
+        council.deliberationState?.currentRound || 1
+      );
+      councilStore.addPendingPatch(council.id, patch.id);
+    }
+
+    return entry;
+  }
+
+  /**
+   * Run a full interactive round for all consultants
+   */
+  async runInteractiveRound(council: Council): Promise<LedgerEntry[]> {
+    this.validatePhase(council, 'round_interactive');
+    const consultants = this.getConsultants(council);
+    const entries: LedgerEntry[] = [];
+
+    // Run consultants in parallel
+    const promises = consultants.map((c) =>
+      this.generateDeliberationResponse(council, c.id)
+    );
+
+    const results = await Promise.allSettled(promises);
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        entries.push(result.value);
+      }
+    }
+
+    // Check if round is complete
+    const updatedCouncil = councilStore.get(council.id);
+    if (updatedCouncil && councilStore.isRoundComplete(council.id)) {
+      this.transitionPhase(council.id, 'round_waiting_for_manager');
+    }
+
+    return entries;
+  }
+
+  /**
+   * Manager evaluates the round
+   */
+  async managerEvaluate(council: Council): Promise<ManagerEvaluation> {
+    this.validatePhase(council, 'round_waiting_for_manager');
+    const manager = this.getManager(council);
+
+    // Build context per Section 9.4
+    const evalContext = this.buildManagerEvalContext(council);
+    const pendingPatches = getPendingPatches(council.id);
+    const expectedOutput = council.deliberation?.expectedOutput;
+
+    // Build prompts
+    const systemPrompt = manager.predisposition.systemPrompt;
+    const userMessage = buildManagerEvaluationPrompt(evalContext, pendingPatches, expectedOutput);
+
+    const response = await this.invokeAgentSafe(
+      { personaId: manager.id, systemPrompt, userMessage },
+      manager,
+      'manager_evaluation'
+    );
+
+    // Parse structured response
+    const evaluation = this.parseManagerEvaluation(response.content);
+
+    // Process patch decisions
+    if (evaluation.patchDecisions) {
+      for (const decision of evaluation.patchDecisions) {
+        const patch = getPendingPatches(council.id).find((p) => p.id === decision.patchId);
+        if (!patch) {
+          console.warn(`[Deliberation] Patch not found: ${decision.patchId}`);
+          continue;
+        }
+
+        if (decision.accepted) {
+          const currentContext = getCurrentContext(council.id);
+
+          // Check for staleness - patch was proposed against an older context version
+          const isStale = currentContext ? patch.baseVersion < currentContext.version : false;
+
+          if (isStale) {
+            // For stale patches, we need to either:
+            // 1. Reject and ask for rebase
+            // 2. Apply with allowStale (if manager explicitly approves)
+            // For now, we log a warning and allow with explicit flag
+            console.warn(
+              `[Deliberation] Accepting stale patch ${patch.id}: ` +
+              `proposed against v${patch.baseVersion}, current is v${currentContext!.version}`
+            );
+          }
+
+          // Intelligently integrate the patch into the current context
+          // The patch.diff contains the proposed change/addition
+          // Instead of naive append, use the manager's decision reason as context
+          const integrationNote = isStale
+            ? `[Context change from ${this.getPersonaDisplayName(council, patch.authorPersonaId)}, ` +
+              `originally proposed against v${patch.baseVersion}, integrated at v${currentContext?.version || 1}]`
+            : `[Context change from ${this.getPersonaDisplayName(council, patch.authorPersonaId)}]`;
+
+          const newContent = currentContext
+            ? `${currentContext.content}\n\n${integrationNote}:\n${patch.diff}`
+            : patch.diff;
+
+          const result = acceptPatch(
+            council.id,
+            decision.patchId,
+            manager.id,
+            decision.reason,
+            newContent,
+            {
+              allowStale: true, // Manager made explicit decision to accept
+              changeSummary: `${patch.rationale}${isStale ? ' (applied to newer context)' : ''}`,
+            }
+          );
+
+          councilStore.removePendingPatch(council.id, decision.patchId);
+          councilStore.setActiveContext(council.id, result.newContext.id, result.newContext.version);
+
+          // Create acceptance ledger entry with staleness info
+          this.createEntry(
+            council.id,
+            'manager',
+            manager.id,
+            'context_acceptance',
+            'round_waiting_for_manager',
+            `Accepted context change: ${decision.reason}${result.wasStale ? ' (applied to newer context version)' : ''}`,
+            0, 0,
+            [{ artifactType: 'context', artifactId: result.newContext.id, version: result.newContext.version }]
+          );
+        } else {
+          rejectPatch(council.id, decision.patchId, manager.id, decision.reason);
+          councilStore.removePendingPatch(council.id, decision.patchId);
+
+          // Create rejection ledger entry
+          this.createEntry(
+            council.id,
+            'manager',
+            manager.id,
+            'context_rejection',
+            'round_waiting_for_manager',
+            `Rejected context change: ${decision.reason}`,
+            0, 0
+          );
+        }
+      }
+    }
+
+    // Store evaluation
+    councilStore.setManagerEvaluation(council.id, evaluation);
+
+    // Handle action
+    const currentRound = council.deliberationState?.currentRound || 1;
+    const maxRounds = council.deliberation?.maxRounds || 4;
+
+    if (evaluation.action === 'decide' || currentRound >= maxRounds) {
+      this.transitionPhase(council.id, 'deciding');
+    } else if (evaluation.action === 'continue' || evaluation.action === 'redirect') {
+      // Create question/redirect entry if provided
+      if (evaluation.question) {
+        const entryType: LedgerEntryType = evaluation.action === 'redirect' ? 'manager_redirect' : 'manager_question';
+        this.createEntry(
+          council.id,
+          'manager',
+          manager.id,
+          entryType,
+          'round_waiting_for_manager',
+          evaluation.question,
+          response.tokensUsed,
+          response.latencyMs,
+          undefined,
+          currentRound
+        );
+      }
+
+      // Generate summary if needed
+      if (this.shouldSummarize(council)) {
+        await this.generateRoundSummary(council);
+      }
+
+      // Advance to next round
+      councilStore.advanceRound(council.id);
+      this.transitionPhase(council.id, 'round_interactive');
+    }
+
+    return evaluation;
+  }
+
+  /**
+   * Generate round summary
+   */
+  async generateRoundSummary(council: Council): Promise<LedgerEntry> {
+    const manager = this.getManager(council);
+    const currentRound = council.deliberationState?.currentRound || 1;
+    const roundEntries = getEntriesForRound(council.id, currentRound);
+
+    let summaryContent: string;
+    let tokensUsed = 0;
+    let latencyMs = 0;
+
+    const summaryMode = council.deliberation?.summaryMode || 'manager';
+    const summarizeAfterRound = council.deliberation?.summarizeAfterRound || 2;
+
+    // Determine whether to use automatic or manager summary
+    const useAutomatic = summaryMode === 'automatic' ||
+      (summaryMode === 'hybrid' && currentRound <= summarizeAfterRound + 1);
+
+    if (useAutomatic) {
+      summaryContent = buildMechanicalSummary(roundEntries);
+    } else {
+      // Manager-generated summary
+      const systemPrompt = manager.predisposition.systemPrompt;
+      const userMessage = buildManagerRoundSummaryPrompt(roundEntries);
+
+      const response = await this.invokeAgentSafe(
+        { personaId: manager.id, systemPrompt, userMessage },
+        manager,
+        'round_summary'
+      );
+
+      summaryContent = response.content;
+      tokensUsed = response.tokensUsed;
+      latencyMs = response.latencyMs;
+    }
+
+    // Store summary
+    councilStore.setRoundSummary(council.id, currentRound, summaryContent);
+
+    // Create ledger entry
+    return this.createEntry(
+      council.id,
+      'manager',
+      manager.id,
+      'round_summary',
+      council.deliberationState?.currentPhase || 'round_waiting_for_manager',
+      summaryContent,
+      tokensUsed,
+      latencyMs,
+      undefined,
+      currentRound
+    );
+  }
+
+  // ==========================================================================
+  // Phase 3: Decision
+  // ==========================================================================
+
+  /**
+   * Manager makes final decision
+   */
+  async makeDecision(council: Council): Promise<LedgerEntry> {
+    this.validatePhase(council, 'deciding');
+    const manager = this.getManager(council);
+
+    // Build context per Section 9.5
+    const decisionContext = this.buildDecisionContext(council);
+    const decisionCriteria = council.deliberation?.decisionCriteria;
+    const expectedOutput = council.deliberation?.expectedOutput;
+
+    // Build prompts
+    const systemPrompt = manager.predisposition.systemPrompt;
+    const userMessage = buildManagerDecisionPrompt(decisionContext, decisionCriteria, expectedOutput);
+
+    const response = await this.invokeAgentSafe(
+      { personaId: manager.id, systemPrompt, userMessage },
+      manager,
+      'decision'
+    );
+
+    // Create decision artifact
+    const context = getCurrentContext(council.id);
+    const acceptanceCriteria = this.extractAcceptanceCriteria(response.content);
+
+    const decision = createDecision(
+      council.id,
+      response.content,
+      context?.version || 1,
+      acceptanceCriteria
+    );
+
+    // Update state
+    councilStore.setFinalDecision(council.id, decision.id);
+
+    // Create ledger entry
+    const entry = this.createEntry(
+      council.id,
+      'manager',
+      manager.id,
+      'decision',
+      'deciding',
+      response.content,
+      response.tokensUsed,
+      response.latencyMs,
+      [{ artifactType: 'decision', artifactId: decision.id }]
+    );
+
+    // Transition to planning or directing
+    const requirePlan = council.deliberation?.requirePlan || false;
+    this.transitionPhase(council.id, requirePlan ? 'planning' : 'directing');
+
+    return entry;
+  }
+
+  /**
+   * Manager creates execution plan (optional)
+   */
+  async createPlan(council: Council): Promise<LedgerEntry> {
+    this.validatePhase(council, 'planning');
+    const manager = this.getManager(council);
+    const decision = getDecision(council.id);
+
+    if (!decision) {
+      throw new Error('No decision found - must make decision first');
+    }
+
+    // Build prompts
+    const systemPrompt = manager.predisposition.systemPrompt;
+    const userMessage = buildManagerPlanPrompt(decision.content);
+
+    const response = await this.invokeAgentSafe(
+      { personaId: manager.id, systemPrompt, userMessage },
+      manager,
+      'plan'
+    );
+
+    // Create plan artifact
+    const plan = createPlan(council.id, response.content, decision.id);
+
+    // Create ledger entry
+    const entry = this.createEntry(
+      council.id,
+      'manager',
+      manager.id,
+      'plan',
+      'planning',
+      response.content,
+      response.tokensUsed,
+      response.latencyMs,
+      [{ artifactType: 'plan', artifactId: plan.id }]
+    );
+
+    this.transitionPhase(council.id, 'directing');
+    return entry;
+  }
+
+  // ==========================================================================
+  // Phase 4: Work Directive
+  // ==========================================================================
+
+  /**
+   * Manager issues work directive
+   */
+  async issueDirective(council: Council): Promise<LedgerEntry> {
+    this.validatePhase(council, 'directing');
+    const manager = this.getManager(council);
+    const decision = getDecision(council.id);
+    const plan = getPlan(council.id);
+
+    if (!decision) {
+      throw new Error('No decision found - must make decision first');
+    }
+
+    // Build prompts per Section 9.6
+    const systemPrompt = manager.predisposition.systemPrompt;
+    const userMessage = buildWorkDirectivePrompt(decision.content, plan?.content);
+
+    const response = await this.invokeAgentSafe(
+      { personaId: manager.id, systemPrompt, userMessage },
+      manager,
+      'directive'
+    );
+
+    // Create directive artifact
+    const directive = createDirective(
+      council.id,
+      response.content,
+      decision.id,
+      plan?.id
+    );
+
+    // Update state
+    councilStore.setWorkDirective(council.id, directive.id);
+
+    // Create ledger entry
+    const entry = this.createEntry(
+      council.id,
+      'manager',
+      manager.id,
+      'work_directive',
+      'directing',
+      response.content,
+      response.tokensUsed,
+      response.latencyMs,
+      [{ artifactType: 'directive', artifactId: directive.id }]
+    );
+
+    this.transitionPhase(council.id, 'executing');
+    return entry;
+  }
+
+  // ==========================================================================
+  // Phase 5: Execution
+  // ==========================================================================
+
+  /**
+   * Worker executes directive
+   */
+  async executeWork(council: Council): Promise<LedgerEntry> {
+    this.validatePhase(council, 'executing');
+    const worker = this.getWorker(council);
+    const directive = getDirective(council.id);
+
+    if (!directive) {
+      throw new Error('No directive found - must issue directive first');
+    }
+
+    // Get role assignment for suppress check
+    const assignment = getRoleAssignment(council, worker.id);
+    const suppressPersona = assignment?.suppressPersona !== false; // Default true for worker
+
+    // Build prompts per Section 9.7
+    const systemPrompt = suppressPersona
+      ? getMinimalWorkerSystemPrompt()
+      : worker.predisposition.systemPrompt;
+
+    const userMessage = buildWorkerExecutionPrompt(directive.content);
+
+    const response = await this.invokeAgentSafe(
+      { personaId: worker.id, systemPrompt, userMessage },
+      worker,
+      'execution'
+    );
+
+    // Create output artifact
+    const output = createOutput(council.id, response.content, directive.id);
+
+    // Update state
+    councilStore.setCurrentOutput(council.id, output.id);
+
+    // Create ledger entry
+    const entry = this.createEntry(
+      council.id,
+      'worker',
+      worker.id,
+      'work_output',
+      'executing',
+      response.content,
+      response.tokensUsed,
+      response.latencyMs,
+      [{ artifactType: 'output', artifactId: output.id, version: output.version }]
+    );
+
+    this.transitionPhase(council.id, 'reviewing');
+    return entry;
+  }
+
+  // ==========================================================================
+  // Phase 6: Review
+  // ==========================================================================
+
+  /**
+   * Manager reviews work output
+   */
+  async reviewWork(council: Council): Promise<{ entry: LedgerEntry; review: ManagerReview }> {
+    this.validatePhase(council, 'reviewing');
+    const manager = this.getManager(council);
+    const directive = getDirective(council.id);
+    const output = getLatestOutput(council.id);
+    const decision = getDecision(council.id);
+
+    if (!directive || !output) {
+      throw new Error('Missing directive or output for review');
+    }
+
+    // Build prompts per Section 9.8
+    const systemPrompt = manager.predisposition.systemPrompt;
+    const expectedOutput = council.deliberation?.expectedOutput;
+    const userMessage = buildManagerReviewPrompt(
+      output.content,
+      directive.content,
+      decision?.acceptanceCriteria,
+      expectedOutput
+    );
+
+    const response = await this.invokeAgentSafe(
+      { personaId: manager.id, systemPrompt, userMessage },
+      manager,
+      'review'
+    );
+
+    // Parse review
+    const review = this.parseManagerReview(response.content);
+
+    // Create ledger entry
+    const entry = this.createEntry(
+      council.id,
+      'manager',
+      manager.id,
+      'review',
+      'reviewing',
+      response.content,
+      response.tokensUsed,
+      response.latencyMs,
+      undefined,
+      undefined,
+      undefined,
+      review.verdict
+    );
+
+    // Handle verdict
+    if (review.verdict === 'accept') {
+      this.transitionPhase(council.id, 'completed');
+      councilStore.setStatus(council.id, 'resolved');
+    } else if (review.verdict === 'revise') {
+      const revisionCount = council.deliberationState?.revisionCount || 0;
+      const maxRevisions = council.deliberation?.maxRevisions || 3;
+
+      if (revisionCount >= maxRevisions) {
+        // Max revisions reached - complete with best effort
+        this.transitionPhase(council.id, 'completed');
+        councilStore.setStatus(council.id, 'resolved');
+      } else {
+        // Request revision
+        if (review.feedback) {
+          this.createEntry(
+            council.id,
+            'manager',
+            manager.id,
+            'revision_request',
+            'reviewing',
+            review.feedback,
+            0, 0
+          );
+        }
+        councilStore.incrementRevisionCount(council.id);
+        this.transitionPhase(council.id, 'revising');
+      }
+    } else if (review.verdict === 're_deliberate') {
+      // Start new deliberation round with new information
+      let newContextVersion: number | undefined;
+
+      if (review.newInformation) {
+        // Add new information to context
+        const currentContext = getCurrentContext(council.id);
+        if (currentContext) {
+          const updatedContext = createContextVersion(
+            council.id,
+            `${currentContext.content}\n\n[New Information from Review]:\n${review.newInformation}`,
+            'New information emerged during review - re-deliberation required',
+            'manager',
+            manager.id
+          );
+          newContextVersion = updatedContext.version;
+
+          // Update council's active context reference
+          councilStore.setActiveContext(council.id, updatedContext.id, updatedContext.version);
+        }
+      }
+
+      // Write ledger entry for re-deliberation decision
+      this.createEntry(
+        council.id,
+        'manager',
+        manager.id,
+        're_deliberation',
+        'reviewing',
+        `Re-deliberation requested: ${review.reasoning || 'New information requires additional deliberation'}${
+          review.newInformation ? `\n\nNew information:\n${review.newInformation}` : ''
+        }${newContextVersion ? `\n\n[Context updated to version ${newContextVersion}]` : ''}`,
+        0, 0
+      );
+
+      councilStore.advanceRound(council.id);
+      this.transitionPhase(council.id, 'round_interactive');
+    }
+
+    return { entry, review };
+  }
+
+  /**
+   * Worker revises output based on feedback
+   */
+  async requestRevision(council: Council): Promise<LedgerEntry> {
+    this.validatePhase(council, 'revising');
+    const worker = this.getWorker(council);
+    const directive = getDirective(council.id);
+    const previousOutput = getLatestOutput(council.id);
+
+    // Get latest revision request
+    const revisionRequest = getLatestOfType(council.id, 'revision_request');
+
+    if (!directive || !previousOutput || !revisionRequest) {
+      throw new Error('Missing directive, previous output, or revision feedback');
+    }
+
+    // Get role assignment for suppress check
+    const assignment = getRoleAssignment(council, worker.id);
+    const suppressPersona = assignment?.suppressPersona !== false;
+
+    // Build prompts per Section 9.7.1
+    const systemPrompt = suppressPersona
+      ? getMinimalWorkerSystemPrompt()
+      : worker.predisposition.systemPrompt;
+
+    const userMessage = buildWorkerRevisionPrompt(
+      directive.content,
+      previousOutput.content,
+      revisionRequest.content
+    );
+
+    const response = await this.invokeAgentSafe(
+      { personaId: worker.id, systemPrompt, userMessage },
+      worker,
+      'revision'
+    );
+
+    // Create revision output
+    const output = createRevisionOutput(
+      council.id,
+      response.content,
+      directive.id,
+      previousOutput.id
+    );
+
+    // Update state
+    councilStore.setCurrentOutput(council.id, output.id);
+
+    // Create ledger entry
+    const entry = this.createEntry(
+      council.id,
+      'worker',
+      worker.id,
+      'work_output',
+      'revising',
+      response.content,
+      response.tokensUsed,
+      response.latencyMs,
+      [{ artifactType: 'output', artifactId: output.id, version: output.version }]
+    );
+
+    this.transitionPhase(council.id, 'reviewing');
+    return entry;
+  }
+
+  // ==========================================================================
+  // Control Operations
+  // ==========================================================================
+
+  /**
+   * Pause deliberation
+   */
+  async pause(council: Council): Promise<void> {
+    const currentPhase = council.deliberationState?.currentPhase;
+    if (!currentPhase || PHASE_TRANSITIONS[currentPhase].terminal) {
+      throw new Error('Cannot pause - deliberation is in terminal state');
+    }
+
+    councilStore.setDeliberationPhase(council.id, 'paused', currentPhase);
+    councilStore.setStatus(council.id, 'paused');
+  }
+
+  /**
+   * Resume deliberation
+   */
+  async resume(council: Council): Promise<void> {
+    if (council.deliberationState?.currentPhase !== 'paused') {
+      throw new Error('Council is not paused');
+    }
+
+    const previousPhase = council.deliberationState.previousPhase;
+    if (!previousPhase) {
+      throw new Error('No previous phase to resume from');
+    }
+
+    councilStore.setDeliberationPhase(council.id, previousPhase);
+    councilStore.setStatus(council.id, 'active');
+  }
+
+  /**
+   * Cancel and force decision
+   */
+  async cancelAndForceDecision(council: Council): Promise<LedgerEntry> {
+    const manager = this.getManager(council);
+
+    // Create cancellation entry
+    this.createEntry(
+      council.id,
+      'manager',
+      manager.id,
+      'cancellation',
+      council.deliberationState?.currentPhase || 'created',
+      'Deliberation ended early by user - forcing decision',
+      0, 0
+    );
+
+    // Build forced decision context per Section 9.9
+    const contextContent = this.buildForcedDecisionContext(council);
+
+    const systemPrompt = manager.predisposition.systemPrompt;
+    const userMessage = buildManagerForcedDecisionPrompt(contextContent);
+
+    const response = await this.invokeAgentSafe(
+      { personaId: manager.id, systemPrompt, userMessage },
+      manager,
+      'forced_decision'
+    );
+
+    // Create decision artifact
+    const context = getCurrentContext(council.id);
+    const decision = createDecision(
+      council.id,
+      response.content,
+      context?.version || 1
+    );
+
+    councilStore.setFinalDecision(council.id, decision.id);
+
+    const entry = this.createEntry(
+      council.id,
+      'manager',
+      manager.id,
+      'decision',
+      'deciding',
+      response.content,
+      response.tokensUsed,
+      response.latencyMs,
+      [{ artifactType: 'decision', artifactId: decision.id }]
+    );
+
+    // Continue with normal flow
+    this.transitionPhase(council.id, 'directing');
+
+    return entry;
+  }
+
+  /**
+   * Abort deliberation
+   */
+  async abort(council: Council): Promise<void> {
+    const manager = this.getManager(council);
+
+    this.createEntry(
+      council.id,
+      'manager',
+      manager.id,
+      'cancellation',
+      council.deliberationState?.currentPhase || 'created',
+      'Deliberation aborted by user',
+      0, 0
+    );
+
+    this.transitionPhase(council.id, 'cancelled');
+    councilStore.setStatus(council.id, 'resolved');
+  }
+
+  // ==========================================================================
+  // Context Builders
+  // ==========================================================================
+
+  /**
+   * Build context for Round 1 (independent analysis) - Section 9.2
+   * ONLY context artifact, no other consultant output
+   */
+  buildRound1Context(council: Council): string {
+    const context = getCurrentContext(council.id);
+    if (!context) {
+      throw new Error('No context found');
+    }
+    return `SHARED CONTEXT (v${context.version}):\n${context.content}`;
+  }
+
+  /**
+   * Build context for Round 2+ (interactive deliberation) - Section 9.3
+   * Context artifact + prior rounds (full or summarized) + manager notes
+   */
+  buildRoundNContext(council: Council): string {
+    const context = getCurrentContext(council.id);
+    if (!context) {
+      throw new Error('No context found');
+    }
+
+    let result = `SHARED CONTEXT (v${context.version}):\n${context.content}\n\n---\n`;
+
+    const currentRound = council.deliberationState?.currentRound || 1;
+    const useSummaries = this.shouldSummarize(council);
+    const roundSummaries = council.deliberationState?.roundSummaries || {};
+
+    if (useSummaries) {
+      // OLD rounds: summaries only
+      for (let r = 1; r < currentRound - 1; r++) {
+        const summary = roundSummaries[r];
+        if (summary) {
+          result += `\nROUND ${r} SUMMARY:\n${summary}\n`;
+        }
+      }
+
+      // MOST RECENT prior round: full entries
+      if (currentRound > 1) {
+        const recentEntries = getEntriesForRound(council.id, currentRound - 1);
+        result += `\nROUND ${currentRound - 1}:\n`;
+        result += formatEntriesForContext(recentEntries);
+      }
+    } else {
+      // ALL prior rounds: full entries
+      for (let r = 1; r < currentRound; r++) {
+        const roundEntries = getEntriesForRound(council.id, r);
+        result += `\nROUND ${r}:\n`;
+        result += formatEntriesForContext(roundEntries);
+      }
+    }
+
+    // Manager notes: ALWAYS full, NEVER summarized
+    const managerNotes = getManagerNotes(council.id, currentRound);
+    if (managerNotes.length > 0) {
+      result += `\n---\nMANAGER NOTES:\n`;
+      result += formatEntriesForContext(managerNotes);
+    }
+
+    return result;
+  }
+
+  /**
+   * Build context for Manager evaluation - Section 9.4
+   * Full history for Manager (never summarized)
+   */
+  buildManagerEvalContext(council: Council): string {
+    const context = getCurrentContext(council.id);
+    const entries = getAllEntries(council.id);
+
+    let result = `SHARED CONTEXT (v${context?.version || 1}):\n${context?.content || ''}\n\n---\n`;
+    result += `FULL DELIBERATION HISTORY:\n`;
+    result += formatEntriesForContext(entries);
+
+    return result;
+  }
+
+  /**
+   * Build context for decision - Section 9.5
+   */
+  buildDecisionContext(council: Council): string {
+    return this.buildManagerEvalContext(council);
+  }
+
+  /**
+   * Build context for directive - Section 9.6
+   */
+  buildDirectiveContext(council: Council): string {
+    const decision = getDecision(council.id);
+    const plan = getPlan(council.id);
+
+    let result = `YOUR DECISION:\n${decision?.content || ''}\n`;
+
+    if (plan) {
+      result += `\nPLAN:\n${plan.content}\n`;
+    }
+
+    return result;
+  }
+
+  /**
+   * Build context for Worker - Section 9.7
+   * ONLY directive, no deliberation history
+   */
+  buildWorkerContext(council: Council): string {
+    const directive = getDirective(council.id);
+    return `DIRECTIVE:\n${directive?.content || ''}`;
+  }
+
+  /**
+   * Build context for revision - Section 9.7.1
+   */
+  buildRevisionContext(council: Council): string {
+    const directive = getDirective(council.id);
+    const previousOutput = getLatestOutput(council.id);
+    const revisionRequest = getLatestOfType(council.id, 'revision_request');
+
+    return `DIRECTIVE:\n${directive?.content || ''}\n\nYOUR PREVIOUS OUTPUT:\n${previousOutput?.content || ''}\n\nREVISION FEEDBACK:\n${revisionRequest?.content || ''}`;
+  }
+
+  /**
+   * Build context for review - Section 9.8
+   */
+  buildReviewContext(council: Council): string {
+    const directive = getDirective(council.id);
+    const output = getLatestOutput(council.id);
+    const decision = getDecision(council.id);
+
+    let result = `WORK DIRECTIVE:\n${directive?.content || ''}\n`;
+
+    if (decision?.acceptanceCriteria) {
+      result += `\nACCEPTANCE CRITERIA:\n${decision.acceptanceCriteria}\n`;
+    }
+
+    result += `\nWORKER OUTPUT:\n${output?.content || ''}`;
+
+    return result;
+  }
+
+  /**
+   * Build context for forced decision - Section 9.9
+   */
+  buildForcedDecisionContext(council: Council): string {
+    const context = getCurrentContext(council.id);
+    const entries = getAllEntries(council.id);
+
+    let result = `SHARED CONTEXT (v${context?.version || 1}):\n${context?.content || ''}\n\n---\n`;
+    result += `DELIBERATION SO FAR (incomplete):\n`;
+    result += formatEntriesForContext(entries);
+
+    return result;
+  }
+
+  // ==========================================================================
+  // Helper Methods
+  // ==========================================================================
+
+  /**
+   * Determine if summarization should be used
+   */
+  shouldSummarize(council: Council): boolean {
+    const config = council.deliberation;
+    if (!config) return false;
+
+    if (config.summaryMode === 'none') return false;
+
+    const currentRound = council.deliberationState?.currentRound || 1;
+    if (currentRound <= config.summarizeAfterRound) return false;
+
+    const tokenCount = getLedgerTokenCount(council.id);
+    return tokenCount > config.contextTokenBudget * 0.6;
+  }
+
+  /**
+   * Get the next valid phase based on current state and action
+   */
+  getNextPhase(
+    council: Council,
+    action?: 'continue' | 'decide' | 'redirect' | 'accept' | 'revise' | 're_deliberate'
+  ): DeliberationPhase {
+    const currentPhase = council.deliberationState?.currentPhase || 'created';
+    const validNext = PHASE_TRANSITIONS[currentPhase].validNext;
+
+    if (validNext.length === 0) {
+      return currentPhase; // Terminal state
+    }
+
+    // Determine next based on action
+    switch (currentPhase) {
+      case 'round_waiting_for_manager':
+        if (action === 'decide') return 'deciding';
+        if (action === 'continue' || action === 'redirect') return 'round_interactive';
+        return 'deciding';
+
+      case 'deciding':
+        return council.deliberation?.requirePlan ? 'planning' : 'directing';
+
+      case 'reviewing':
+        if (action === 'accept') return 'completed';
+        if (action === 'revise') return 'revising';
+        if (action === 're_deliberate') return 'round_interactive';
+        return 'completed';
+
+      default:
+        return validNext[0];
+    }
+  }
+
+  /**
+   * Check if current phase is complete and can transition
+   */
+  isPhaseComplete(council: Council): boolean {
+    const phase = council.deliberationState?.currentPhase;
+
+    switch (phase) {
+      case 'round_independent':
+      case 'round_interactive':
+        return councilStore.isRoundComplete(council.id);
+      default:
+        return true;
+    }
+  }
+
+  // ==========================================================================
+  // Private Helpers
+  // ==========================================================================
+
+  private getManager(council: Council): Persona {
+    const managers = getPersonaByRole(council, 'manager');
+    if (managers.length === 0) {
+      throw new Error('No manager assigned to council');
+    }
+    return managers[0];
+  }
+
+  private getConsultants(council: Council): Persona[] {
+    return getPersonaByRole(council, 'consultant');
+  }
+
+  private getWorker(council: Council): Persona {
+    const workers = getPersonaByRole(council, 'worker');
+    if (workers.length === 0) {
+      throw new Error('No worker assigned to council');
+    }
+    return workers[0];
+  }
+
+  private getPersonaDisplayName(council: Council, personaId: string): string {
+    const persona = council.personas.find((p) => p.id === personaId);
+    return persona?.name || personaId;
+  }
+
+  private validatePhase(council: Council, expected: DeliberationPhase): void {
+    // If deliberationState is undefined, treat as 'created'
+    const current = council.deliberationState?.currentPhase ?? 'created';
+    if (current !== expected) {
+      throw new Error(`Invalid phase: expected ${expected}, got ${current}`);
+    }
+  }
+
+  private transitionPhase(councilId: string, to: DeliberationPhase): void {
+    const council = councilStore.get(councilId);
+    const from = council?.deliberationState?.currentPhase || 'created';
+
+    // Validate transition
+    const validNext = PHASE_TRANSITIONS[from].validNext;
+    if (!validNext.includes(to) && from !== 'paused') {
+      console.warn(`[Orchestrator] Invalid phase transition: ${from} -> ${to}`);
+    }
+
+    councilStore.setDeliberationPhase(councilId, to, from);
+    this.config.onPhaseChange?.(from, to);
+
+    console.log(`[Orchestrator] Phase transition: ${from} -> ${to}`);
+  }
+
+  private async invokeAgentSafe(
+    invocation: AgentInvocation,
+    persona: Persona,
+    context: string
+  ): Promise<AgentResponse> {
+    try {
+      this.config.onAgentThinkingStart?.(persona);
+      const response = await this.config.invokeAgent(invocation, persona);
+      this.config.onAgentThinkingEnd?.(persona);
+      return response;
+    } catch (error) {
+      this.config.onAgentThinkingEnd?.(persona);
+      this.config.onError?.(error as Error, context);
+      throw error;
+    }
+  }
+
+  private createEntry(
+    councilId: string,
+    role: DeliberationRole,
+    authorId: string,
+    entryType: LedgerEntryType,
+    phase: DeliberationPhase,
+    content: string,
+    tokensUsed: number,
+    latencyMs: number,
+    artifactRefs?: ArtifactRef[],
+    roundNumber?: number,
+    referencedEntries?: string[],
+    reviewOutcome?: 'accept' | 'revise' | 're_deliberate'
+  ): LedgerEntry {
+    const entry: LedgerEntry = {
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      authorRole: role,
+      authorPersonaId: authorId,
+      entryType,
+      phase,
+      content,
+      tokensUsed,
+      latencyMs,
+      artifactRefs,
+      roundNumber,
+      referencedEntries,
+      reviewOutcome,
+    };
+
+    // Use ledgerStore.append to notify subscribers (enables real-time UI updates)
+    ledgerStore.append(councilId, entry);
+    this.config.onEntryAdded?.(entry);
+
+    return entry;
+  }
+
+  private extractContextProposal(content: string): { diff: string; rationale: string } | null {
+    const proposalMatch = content.match(/PROPOSED CONTEXT CHANGE:\s*\n*What:\s*(.+?)(?:\n+Why:\s*(.+))?$/is);
+
+    if (proposalMatch) {
+      return {
+        diff: proposalMatch[1].trim(),
+        rationale: proposalMatch[2]?.trim() || 'No rationale provided',
+      };
+    }
+    return null;
+  }
+
+  private extractAcceptanceCriteria(content: string): string | undefined {
+    const match = content.match(/ACCEPTANCE CRITERIA[:\s]*\n*([\s\S]*?)(?=\n\n|$)/i);
+    return match?.[1]?.trim();
+  }
+
+  private parseManagerEvaluation(content: string): ManagerEvaluation {
+    try {
+      // Try to extract JSON from the response
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          action: parsed.action || 'decide',
+          reasoning: parsed.reasoning || content,
+          confidence: parsed.confidence,
+          missingInformation: parsed.missingInformation,
+          question: parsed.question,
+          patchDecisions: parsed.patchDecisions,
+        };
+      }
+    } catch {
+      // Fall back to text parsing
+    }
+
+    // Default interpretation from text
+    const lowerContent = content.toLowerCase();
+    let action: 'continue' | 'decide' | 'redirect' = 'decide';
+
+    if (lowerContent.includes('continue') || lowerContent.includes('another round')) {
+      action = 'continue';
+    } else if (lowerContent.includes('redirect') || lowerContent.includes('refocus')) {
+      action = 'redirect';
+    }
+
+    return {
+      action,
+      reasoning: content,
+    };
+  }
+
+  private parseManagerReview(content: string): ManagerReview {
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          verdict: parsed.verdict || 'accept',
+          reasoning: parsed.reasoning || content,
+          feedback: parsed.feedback,
+          newInformation: parsed.newInformation,
+        };
+      }
+    } catch {
+      // Fall back to text parsing
+    }
+
+    // Default interpretation
+    const lowerContent = content.toLowerCase();
+    let verdict: 'accept' | 'revise' | 're_deliberate' = 'accept';
+
+    if (lowerContent.includes('revise') || lowerContent.includes('revision')) {
+      verdict = 'revise';
+    } else if (lowerContent.includes('re-deliberate') || lowerContent.includes('redeliberate')) {
+      verdict = 're_deliberate';
+    }
+
+    return {
+      verdict,
+      reasoning: content,
+    };
+  }
+
+  async handleConsultantError(
+    council: Council,
+    consultantId: string,
+    error: Error
+  ): Promise<'retried' | 'skipped' | 'failed'> {
+    const policy = council.deliberation?.consultantErrorPolicy || 'retry';
+    const maxRetries = council.deliberation?.maxRetries || 2;
+
+    councilStore.addError(council.id, `Consultant ${consultantId}: ${error.message}`);
+
+    if (policy === 'fail') {
+      this.transitionPhase(council.id, 'failed');
+      return 'failed';
+    }
+
+    if (policy === 'skip') {
+      return 'skipped';
+    }
+
+    // Retry policy - for now just skip after logging
+    // In a real implementation, this would track retry counts per consultant
+    return 'skipped';
+  }
+}

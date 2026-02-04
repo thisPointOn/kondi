@@ -1,5 +1,6 @@
 /**
  * CouncilView: Main Council interface component
+ * Routes to DeliberationView when mode === 'deliberation'
  */
 
 import { useState, useEffect, useRef, useMemo } from 'react';
@@ -8,6 +9,7 @@ import { councilStore, createPersonaFromTemplate, allTemplates, templateCategori
 import PersonaSidebar from './PersonaSidebar';
 import AddPersonaModal from './AddPersonaModal';
 import CouncilMessageComponent from './CouncilMessage';
+import DeliberationView from './DeliberationView';
 import './CouncilView.css';
 
 interface CouncilViewProps {
@@ -17,6 +19,31 @@ interface CouncilViewProps {
   onGenerateRound?: (council: Council) => Promise<void>;
   onGenerateSynthesis?: (council: Council) => Promise<void>;
   onResolve?: (council: Council) => Promise<void>;
+  // Deliberation handlers
+  onFrameProblem?: (council: Council, rawProblem: string) => Promise<void>;
+  onRunRound?: (council: Council) => Promise<void>;
+  onEvaluateRound?: (council: Council) => Promise<void>;
+  onMakeDecision?: (council: Council) => Promise<void>;
+  onCreatePlan?: (council: Council) => Promise<void>;
+  onIssueDirective?: (council: Council) => Promise<void>;
+  onExecuteWork?: (council: Council) => Promise<void>;
+  onReviewWork?: (council: Council) => Promise<void>;
+  onPauseDeliberation?: (council: Council) => Promise<void>;
+  onResumeDeliberation?: (council: Council) => Promise<void>;
+  onForceDecision?: (council: Council) => Promise<void>;
+  onAbortDeliberation?: (council: Council) => Promise<void>;
+  /** Called when user sends a message while paused */
+  onUserMessage?: (council: Council, message: string, lastResponderId: string) => Promise<void>;
+  /** Configured providers for model selection */
+  configuredProviders?: {
+    'anthropic-cli': boolean;
+    'anthropic-api': boolean;
+    'openai-cli': boolean;
+    'openai-api': boolean;
+    deepseek: boolean;
+  };
+  /** Personas currently thinking/generating responses */
+  thinkingPersonas?: Persona[];
 }
 
 export default function CouncilView({
@@ -26,6 +53,28 @@ export default function CouncilView({
   onGenerateRound,
   onGenerateSynthesis,
   onResolve,
+  // Deliberation handlers
+  onFrameProblem,
+  onRunRound,
+  onEvaluateRound,
+  onMakeDecision,
+  onCreatePlan,
+  onIssueDirective,
+  onExecuteWork,
+  onReviewWork,
+  onPauseDeliberation,
+  onResumeDeliberation,
+  onForceDecision,
+  onAbortDeliberation,
+  onUserMessage,
+  configuredProviders = {
+    'anthropic-cli': true,
+    'anthropic-api': true,
+    'openai-cli': true,
+    'openai-api': true,
+    deepseek: true
+  },
+  thinkingPersonas = [],
 }: CouncilViewProps) {
   const [council, setCouncil] = useState<Council | null>(null);
   const [inputValue, setInputValue] = useState('');
@@ -62,6 +111,31 @@ export default function CouncilView({
       <div className="council-view council-loading">
         <p>Loading council...</p>
       </div>
+    );
+  }
+
+  // Route to DeliberationView for deliberation mode
+  if (council.orchestration.mode === 'deliberation') {
+    return (
+      <DeliberationView
+        councilId={councilId}
+        onBack={onBack}
+        onFrameProblem={onFrameProblem}
+        onRunRound={onRunRound}
+        onEvaluateRound={onEvaluateRound}
+        onMakeDecision={onMakeDecision}
+        onCreatePlan={onCreatePlan}
+        onIssueDirective={onIssueDirective}
+        onExecuteWork={onExecuteWork}
+        onReviewWork={onReviewWork}
+        onPause={onPauseDeliberation}
+        onResume={onResumeDeliberation}
+        onForceDecision={onForceDecision}
+        onAbort={onAbortDeliberation}
+        onUserMessage={onUserMessage}
+        configuredProviders={configuredProviders}
+        thinkingPersonas={thinkingPersonas}
+      />
     );
   }
 
@@ -177,7 +251,7 @@ export default function CouncilView({
         <div className="council-header-right">
           <span className="council-mode">Mode: {council.orchestration.mode}</span>
           <span className="council-stats">
-            Tokens: {council.totalTokensUsed.toLocaleString()} | Cost: ${council.estimatedCost.toFixed(2)}
+            Tokens: {council.totalTokensUsed.toLocaleString()}
           </span>
         </div>
       </div>

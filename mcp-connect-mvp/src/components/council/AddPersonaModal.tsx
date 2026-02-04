@@ -1,9 +1,11 @@
 /**
  * AddPersonaModal: Modal for adding personas from templates or custom
+ * Supports deliberation mode with role/focus/stance/suppress options
  */
 
 import { useState } from 'react';
-import type { PresetPersona, Persona } from '../../council/types';
+import type { PresetPersona, Persona, DeliberationRole, DeliberationRoleAssignment } from '../../council/types';
+import { getModelsForPersonaSelector } from '../../config/models';
 import './AddPersonaModal.css';
 
 interface AddPersonaModalProps {
@@ -12,16 +14,50 @@ interface AddPersonaModalProps {
   existingPersonas: Persona[];
   onAdd: (template: PresetPersona, overrides?: Partial<Persona>) => void;
   onClose: () => void;
+  /** Whether the council is in deliberation mode */
+  isDeliberationMode?: boolean;
+  /** Existing role assignments (to show role availability) */
+  existingRoleAssignments?: DeliberationRoleAssignment[];
+  /** Callback for adding role assignment along with persona */
+  onAddWithRole?: (
+    template: PresetPersona,
+    overrides: Partial<Persona> | undefined,
+    roleAssignment: DeliberationRoleAssignment
+  ) => void;
+  /** Persona being edited (if editing mode) */
+  editingPersona?: Persona | null;
+  /** Existing role assignment for the persona being edited */
+  existingRoleAssignment?: DeliberationRoleAssignment;
+  /** Callback for updating an existing persona */
+  onUpdate?: (personaId: string, updates: Partial<Persona>, roleUpdates?: Partial<DeliberationRoleAssignment>) => void;
 }
 
-const AVAILABLE_MODELS = [
-  { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', provider: 'anthropic', cost: '~$0.02/msg' },
-  { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', provider: 'anthropic', cost: '~$0.005/msg' },
-  { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai', cost: '~$0.01/msg' },
-  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openai', cost: '~$0.001/msg' },
-  { id: 'deepseek-reasoner', name: 'DeepSeek R1', provider: 'deepseek', cost: '~$0.002/msg' },
-  { id: 'deepseek-chat', name: 'DeepSeek Chat', provider: 'deepseek', cost: '~$0.0003/msg' },
-];
+// Get available models from central config
+const AVAILABLE_MODELS = getModelsForPersonaSelector();
+
+// Group models by provider for display
+const MODELS_BY_PROVIDER = AVAILABLE_MODELS.reduce((acc, model) => {
+  const providerName = getProviderDisplayName(model.provider);
+  if (!acc[providerName]) {
+    acc[providerName] = [];
+  }
+  acc[providerName].push(model);
+  return acc;
+}, {} as Record<string, typeof AVAILABLE_MODELS>);
+
+// Provider display order
+const PROVIDER_ORDER = ['Anthropic (CLI)', 'Anthropic (API)', 'OpenAI (CLI)', 'OpenAI (API)', 'DeepSeek'];
+
+function getProviderDisplayName(provider: string): string {
+  switch (provider) {
+    case 'anthropic-cli': return 'Anthropic (CLI)';
+    case 'anthropic': return 'Anthropic (API)';
+    case 'openai-cli': return 'OpenAI (CLI)';
+    case 'openai': return 'OpenAI (API)';
+    case 'deepseek': return 'DeepSeek';
+    default: return provider;
+  }
+}
 
 export default function AddPersonaModal({
   templates,
@@ -29,14 +65,34 @@ export default function AddPersonaModal({
   existingPersonas,
   onAdd,
   onClose,
+  isDeliberationMode = false,
+  existingRoleAssignments = [],
+  onAddWithRole,
+  editingPersona,
+  existingRoleAssignment,
+  onUpdate,
 }: AddPersonaModalProps) {
+  const isEditMode = !!editingPersona;
+
   const [activeCategory, setActiveCategory] = useState(categories[0]?.id || '');
   const [selectedTemplate, setSelectedTemplate] = useState<PresetPersona | null>(null);
-  const [customName, setCustomName] = useState('');
-  const [selectedModel, setSelectedModel] = useState('');
-  const [customPrompt, setCustomPrompt] = useState('');
-  const [temperature, setTemperature] = useState(0.7);
-  const [verbosity, setVerbosity] = useState<'concise' | 'balanced' | 'thorough'>('balanced');
+  const [customName, setCustomName] = useState(editingPersona?.name || '');
+  const [selectedModel, setSelectedModel] = useState(editingPersona?.model || '');
+  const [customPrompt, setCustomPrompt] = useState(editingPersona?.predisposition?.systemPrompt || '');
+  const [temperature, setTemperature] = useState(editingPersona?.temperature || 0.7);
+  const [verbosity, setVerbosity] = useState<'concise' | 'balanced' | 'thorough'>(editingPersona?.verbosity || 'balanced');
+
+  // Deliberation mode fields
+  const [selectedRole, setSelectedRole] = useState<DeliberationRole>(
+    existingRoleAssignment?.role || editingPersona?.preferredDeliberationRole || 'consultant'
+  );
+  const [focusArea, setFocusArea] = useState(existingRoleAssignment?.focusArea || '');
+  const [stance, setStance] = useState(existingRoleAssignment?.stance || '');
+  const [suppressPersona, setSuppressPersona] = useState(existingRoleAssignment?.suppressPersona ?? true);
+
+  // Check role availability (allow the role if it's the persona being edited)
+  const hasManager = existingRoleAssignments.some((r) => r.role === 'manager' && r.personaId !== editingPersona?.id);
+  const hasWorker = existingRoleAssignments.some((r) => r.role === 'worker' && r.personaId !== editingPersona?.id);
 
   const filteredTemplates = templates.filter((t) => {
     // Filter by category based on template characteristics
@@ -72,6 +128,45 @@ export default function AddPersonaModal({
   };
 
   const handleAdd = () => {
+    console.log('[AddPersonaModal] handleAdd called', { isEditMode, editingPersona: !!editingPersona, onUpdate: !!onUpdate });
+
+    // Handle edit mode
+    if (isEditMode && editingPersona && onUpdate) {
+      const name = customName.trim() || editingPersona.name;
+      // Check name isn't taken by another persona
+      if (name !== editingPersona.name && isNameTaken(name)) {
+        alert(`A persona named "${name}" already exists in this council.`);
+        return;
+      }
+
+      const modelInfo = AVAILABLE_MODELS.find((m) => m.id === selectedModel);
+
+      const updates: Partial<Persona> = {
+        name,
+        model: selectedModel || editingPersona.model,
+        provider: modelInfo?.provider || editingPersona.provider,
+        temperature,
+        verbosity,
+        preferredDeliberationRole: selectedRole,
+        predisposition: {
+          ...editingPersona.predisposition,
+          systemPrompt: customPrompt || editingPersona.predisposition.systemPrompt,
+        },
+      };
+
+      const roleUpdates: Partial<DeliberationRoleAssignment> = {
+        role: selectedRole,
+        ...(selectedRole === 'consultant' && { focusArea: focusArea.trim() || undefined }),
+        ...(selectedRole === 'consultant' && { stance: stance.trim() || undefined }),
+        suppressPersona: selectedRole === 'manager' || selectedRole === 'worker' ? suppressPersona : undefined,
+      };
+
+      console.log('[AddPersonaModal] Calling onUpdate', { personaId: editingPersona.id, updates, roleUpdates });
+      onUpdate(editingPersona.id, updates, roleUpdates);
+      return;
+    }
+
+    // Handle add mode
     if (!selectedTemplate) return;
 
     const name = customName.trim() || selectedTemplate.name;
@@ -82,12 +177,29 @@ export default function AddPersonaModal({
 
     const modelInfo = AVAILABLE_MODELS.find((m) => m.id === selectedModel);
 
-    onAdd(selectedTemplate, {
+    const overrides: Partial<Persona> = {
       provider: modelInfo?.provider || selectedTemplate.defaultProvider,
       model: selectedModel || selectedTemplate.defaultModel,
       temperature,
       verbosity,
-    });
+      // Store preferred deliberation role on persona
+      preferredDeliberationRole: isDeliberationMode ? selectedRole : undefined,
+    };
+
+    if (isDeliberationMode && onAddWithRole) {
+      // Create role assignment
+      const roleAssignment: DeliberationRoleAssignment = {
+        personaId: '', // Will be set by the parent after persona is created
+        role: selectedRole,
+        ...(selectedRole === 'consultant' && focusArea.trim() && { focusArea: focusArea.trim() }),
+        ...(selectedRole === 'consultant' && stance.trim() && { stance: stance.trim() }),
+        ...(selectedRole === 'worker' && { suppressPersona }),
+      };
+
+      onAddWithRole(selectedTemplate, overrides, roleAssignment);
+    } else {
+      onAdd(selectedTemplate, overrides);
+    }
   };
 
   const getStanceColor = (stance: string) => {
@@ -109,25 +221,28 @@ export default function AddPersonaModal({
     <div className="modal-overlay" onClick={onClose}>
       <div className="add-persona-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Add Persona to Council</h2>
+          <h2>{isEditMode ? `Edit ${editingPersona?.name}` : 'Add Persona to Council'}</h2>
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
 
         <div className="modal-body">
-          {/* Category Tabs */}
-          <div className="category-tabs">
-            {categories.map((cat) => (
-              <button
-                key={cat.id}
-                className={`category-tab ${activeCategory === cat.id ? 'active' : ''}`}
-                onClick={() => setActiveCategory(cat.id)}
-              >
-                {cat.name}
-              </button>
-            ))}
-          </div>
+          {/* Category Tabs - only show when adding */}
+          {!isEditMode && (
+            <div className="category-tabs">
+              {categories.map((cat) => (
+                <button
+                  key={cat.id}
+                  className={`category-tab ${activeCategory === cat.id ? 'active' : ''}`}
+                  onClick={() => setActiveCategory(cat.id)}
+                >
+                  {cat.name}
+                </button>
+              ))}
+            </div>
+          )}
 
-          {/* Template Grid */}
+          {/* Template Grid - only show when adding */}
+          {!isEditMode && (
           <div className="template-grid">
             {filteredTemplates.map((template) => {
               const isSelected = selectedTemplate?.name === template.name;
@@ -160,9 +275,10 @@ export default function AddPersonaModal({
               );
             })}
           </div>
+          )}
 
-          {/* Configuration (shown when template selected) */}
-          {selectedTemplate && (
+          {/* Configuration (shown when template selected or editing) */}
+          {(selectedTemplate || isEditMode) && (
             <div className="persona-config">
               <div className="config-section">
                 <label>Name</label>
@@ -170,28 +286,40 @@ export default function AddPersonaModal({
                   type="text"
                   value={customName}
                   onChange={(e) => setCustomName(e.target.value)}
-                  placeholder={selectedTemplate.name}
+                  placeholder={selectedTemplate?.name || editingPersona?.name || 'Persona name'}
                 />
               </div>
 
               <div className="config-section">
                 <label>Model</label>
-                <div className="model-options">
-                  {AVAILABLE_MODELS.map((model) => (
-                    <label
-                      key={model.id}
-                      className={`model-option ${selectedModel === model.id ? 'selected' : ''}`}
-                    >
-                      <input
-                        type="radio"
-                        name="model"
-                        value={model.id}
-                        checked={selectedModel === model.id}
-                        onChange={() => setSelectedModel(model.id)}
-                      />
-                      <span className="model-name">{model.name}</span>
-                      <span className="model-cost">{model.cost}</span>
-                    </label>
+                <div className="model-groups">
+                  {PROVIDER_ORDER.filter(p => MODELS_BY_PROVIDER[p]).map((providerName) => (
+                    <div key={providerName} className="model-provider-group">
+                      <div className="provider-header">{providerName}</div>
+                      <div className="model-options">
+                        {MODELS_BY_PROVIDER[providerName].map((model) => (
+                          <div
+                            key={model.id}
+                            className={`model-option ${selectedModel === model.id ? 'selected' : ''}`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setSelectedModel(model.id);
+                            }}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                setSelectedModel(model.id);
+                              }
+                            }}
+                          >
+                            <span className="model-name">{model.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -219,8 +347,13 @@ export default function AddPersonaModal({
                   {(['concise', 'balanced', 'thorough'] as const).map((v) => (
                     <button
                       key={v}
+                      type="button"
                       className={`verbosity-btn ${verbosity === v ? 'active' : ''}`}
-                      onClick={() => setVerbosity(v)}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setVerbosity(v);
+                      }}
                     >
                       {v}
                     </button>
@@ -236,20 +369,134 @@ export default function AddPersonaModal({
                   rows={4}
                 />
               </div>
+
+              {/* Deliberation Mode Fields */}
+              {isDeliberationMode && (
+                <>
+                  <div className="config-divider">
+                    <span>Deliberation Role</span>
+                  </div>
+
+                  <div className="config-section">
+                    <label>Role</label>
+                    <div className="role-options">
+                      <button
+                        type="button"
+                        className={`role-option ${selectedRole === 'manager' ? 'selected' : ''} ${hasManager ? 'disabled' : ''}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (!hasManager) setSelectedRole('manager');
+                        }}
+                        disabled={hasManager}
+                      >
+                        <span className="role-icon">👔</span>
+                        <span className="role-label">Manager</span>
+                        {hasManager && <span className="role-status">Assigned</span>}
+                      </button>
+                      <button
+                        type="button"
+                        className={`role-option ${selectedRole === 'consultant' ? 'selected' : ''}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSelectedRole('consultant');
+                        }}
+                      >
+                        <span className="role-icon">🎓</span>
+                        <span className="role-label">Consultant</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`role-option ${selectedRole === 'worker' ? 'selected' : ''} ${hasWorker ? 'disabled' : ''}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (!hasWorker) setSelectedRole('worker');
+                        }}
+                        disabled={hasWorker}
+                      >
+                        <span className="role-icon">🔧</span>
+                        <span className="role-label">Worker</span>
+                        {hasWorker && <span className="role-status">Assigned</span>}
+                      </button>
+                    </div>
+                    <p className="role-hint">
+                      {selectedRole === 'manager' && 'Frames problems, evaluates rounds, makes decisions, and reviews output.'}
+                      {selectedRole === 'consultant' && 'Analyzes problems, proposes changes, and engages in discussion.'}
+                      {selectedRole === 'worker' && 'Executes directives and produces deliverables.'}
+                    </p>
+                  </div>
+
+                  {/* Consultant-specific fields */}
+                  {selectedRole === 'consultant' && (
+                    <>
+                      <div className="config-section">
+                        <label>Focus Area (optional)</label>
+                        <input
+                          type="text"
+                          value={focusArea}
+                          onChange={(e) => setFocusArea(e.target.value)}
+                          placeholder="e.g., security, UX, performance"
+                        />
+                        <p className="field-hint">
+                          The area this consultant should emphasize in their analysis.
+                        </p>
+                      </div>
+
+                      <div className="config-section">
+                        <label>Starting Stance (optional)</label>
+                        <input
+                          type="text"
+                          value={stance}
+                          onChange={(e) => setStance(e.target.value)}
+                          placeholder="e.g., favors simplicity, skeptical of new tech"
+                        />
+                        <p className="field-hint">
+                          An initial position or bias for this consultant to take.
+                        </p>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Worker-specific fields */}
+                  {selectedRole === 'worker' && (
+                    <div className="config-section">
+                      <label className="checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={suppressPersona}
+                          onChange={(e) => setSuppressPersona(e.target.checked)}
+                        />
+                        <span>Suppress persona (recommended)</span>
+                      </label>
+                      <p className="field-hint">
+                        When checked, the worker uses a minimal prompt and follows directives precisely
+                        without personality influence.
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>
 
         <div className="modal-footer">
-          <button className="modal-cancel-btn" onClick={onClose}>
+          <button type="button" className="modal-cancel-btn" onClick={onClose}>
             Cancel
           </button>
           <button
+            type="button"
             className="modal-add-btn"
-            onClick={handleAdd}
-            disabled={!selectedTemplate}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              handleAdd();
+            }}
+            disabled={!isEditMode && !selectedTemplate}
           >
-            Add to Council
+            {isEditMode ? 'Save Changes' : 'Add to Council'}
           </button>
         </div>
       </div>

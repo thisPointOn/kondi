@@ -358,7 +358,7 @@ const StepCard: FC<StepCardProps> = ({
           )}
 
           {/* Approval request */}
-          {step.status === 'waiting_approval' && onApprove && (
+          {step.status === 'waiting_approval' && onApprove !== undefined && (
             <div className="step-approval">
               <p className="approval-message">
                 {step.approvalMessage || 'This step requires your approval to continue.'}
@@ -391,7 +391,7 @@ const StepCard: FC<StepCardProps> = ({
           )}
 
           {/* Output preview */}
-          {step.output && step.status === 'completed' && (
+          {step.output !== undefined && step.status === 'completed' && (
             <div className="step-output">
               <div className="output-header">
                 <span>Output</span>

@@ -83,8 +83,8 @@ export class MCPClient {
     let authAttempts = 0;
 
     while (authAttempts < maxAuthAttempts) {
-      // Give proxy a moment to connect
-      await this.sleep(500);
+      // Give proxy time to start and read fresh config after OAuth
+      await this.sleep(2000);
 
       try {
         health = await proxyService.getProxyHealth(proxyId);
@@ -112,15 +112,32 @@ export class MCPClient {
           const authResult = await proxyService.reauthenticateProxy(proxyId);
           console.log(`[MCP Proxy] Reauthenticate result:`, authResult);
 
+          // Check if reauthenticate already succeeded (returned with token)
+          if (authResult.status === 'connected' || authResult.access_token) {
+            console.log(`[MCP Proxy] Auth completed via reauthenticate call`);
+            // Update server with new token
+            if (authResult.access_token) {
+              server.accessToken = authResult.access_token;
+              this.servers.set(server.id, server);
+            }
+            // Re-check health to confirm (give proxy time to reconnect)
+            await this.sleep(2000);
+            health = await proxyService.getProxyHealth(proxyId);
+            if (health.status === 'connected') {
+              break;
+            }
+          }
+
           // Wait for auth to complete (user will complete in browser)
           // Poll health until status changes
-          const authTimeout = 120000; // 2 minutes
+          const authTimeout = 180000; // 3 minutes (increased from 2)
           const startTime = Date.now();
 
           while (Date.now() - startTime < authTimeout) {
-            await this.sleep(2000);
+            await this.sleep(1500); // Poll slightly more frequently
             try {
               health = await proxyService.getProxyHealth(proxyId);
+              console.log(`[MCP Proxy] Polling health: ${health.status}`);
               if (health.status === 'connected') {
                 console.log(`[MCP Proxy] Auth completed successfully`);
 
@@ -141,13 +158,35 @@ export class MCPClient {
               if (health.status === 'error') {
                 throw new Error(health.error || 'Authentication failed');
               }
-            } catch {
-              // Continue polling
+            } catch (pollErr) {
+              // Continue polling but log
+              console.log(`[MCP Proxy] Poll error (continuing):`, pollErr);
             }
           }
 
+          // After timeout, do a final check - the proxy config may have tokens even if health isn't updated
           if (health.status !== 'connected') {
-            throw new Error('Authentication timed out');
+            console.log(`[MCP Proxy] Polling timed out, checking proxy config for tokens...`);
+            try {
+              const proxyConfig = await proxyService.getProxyConfig(proxyId);
+              if (proxyConfig.oauth?.accessToken) {
+                console.log(`[MCP Proxy] Found tokens in proxy config, attempting to proceed...`);
+                server.accessToken = proxyConfig.oauth.accessToken;
+                server.clientId = proxyConfig.oauth.clientId;
+                server.clientSecret = proxyConfig.oauth.clientSecret;
+                this.servers.set(server.id, server);
+                // Give proxy one more moment to update health
+                await this.sleep(1000);
+                health = await proxyService.getProxyHealth(proxyId);
+                if (health.status === 'connected') {
+                  console.log(`[MCP Proxy] Connected after final config check`);
+                  break;
+                }
+              }
+            } catch {
+              // Ignore config errors
+            }
+            throw new Error('Authentication timed out - please try reconnecting');
           }
         } catch (authErr) {
           if (authAttempts >= maxAuthAttempts) {
@@ -611,7 +650,40 @@ export class MCPClient {
         // STDIO transport for local MCP servers (GitHub sidecar)
         console.log('[MCP stdio] Connecting to:', server.id, 'type:', server.type, 'metadata:', server.metadata);
 
-        const manifest = server.metadata?.manifest as McpManifest | undefined;
+        let manifest = server.metadata?.manifest as McpManifest | undefined;
+
+        // Special handling for built-in search server - regenerate config if missing
+        if (!manifest && server.id === 'kondi-search') {
+          console.log('[MCP stdio] Regenerating manifest for built-in search server');
+          const searchManifest: McpManifest = {
+            name: 'kondi-search-mcp',
+            version: '1.0.0',
+            description: 'Web search via local SearXNG metasearch engine',
+            runtime: 'node',
+            entrypoint: 'dist/index.js',
+            run: {
+              command: 'node',
+              args: ['dist/index.js'],
+              env: {
+                KONDI_SEARCH_SEARXNG_URL: 'http://localhost:8888',
+              },
+            },
+          };
+          // Update server with regenerated metadata
+          server.metadata = {
+            ...server.metadata,
+            serverPath: server.metadata?.serverPath || '/home/erik/Documents/MCP_Connector_App/kondi-search-mcp',
+            manifest: searchManifest,
+            managed: true,
+            autoStart: true,
+            requiresDocker: true,
+            dockerService: 'kondi-searxng',
+          };
+          manifest = searchManifest;
+          this.servers.set(server.id, server);
+          void this.persistServer(server);
+        }
+
         if (!manifest) {
           throw new Error('No manifest found for this server. Please delete and re-add the server.');
         }
@@ -960,6 +1032,7 @@ export class MCPClient {
           message_endpoint: server.messageEndpoint || null,
           type: server.type || null,
           metadata: server.metadata || null,
+          auto_connect: server.autoConnect ?? false,
         },
       });
 

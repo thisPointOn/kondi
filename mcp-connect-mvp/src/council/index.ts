@@ -49,6 +49,28 @@ export {
   duplicateCouncil,
   councilStore,
   CouncilStore,
+  // Deliberation state operations
+  initializeDeliberationState,
+  updateDeliberationState,
+  setDeliberationPhase,
+  advanceDeliberationRound,
+  recordRoundSubmission,
+  isRoundComplete,
+  setRoleAssignments,
+  addPendingPatch,
+  removePendingPatch,
+  setRoundSummary,
+  setActiveContext,
+  setManagerEvaluation,
+  setFinalDecision,
+  setWorkDirective,
+  setCurrentOutput,
+  incrementRevisionCount,
+  addErrorToLog,
+  getPersonaByRole,
+  getRoleAssignment,
+  isDeliberationMode,
+  deleteCouncilWithData,
 } from './store';
 
 // Prompts
@@ -62,12 +84,26 @@ export {
   buildAskPrompt,
   buildVotePrompt,
   extractOpenQuestions,
+  // Deliberation prompts
+  getMinimalWorkerSystemPrompt,
+  buildManagerFramingPrompt,
+  buildManagerEvaluationPrompt,
+  buildManagerDecisionPrompt,
+  buildManagerForcedDecisionPrompt,
+  buildManagerPlanPrompt,
+  buildWorkDirectivePrompt,
+  buildManagerReviewPrompt,
+  buildManagerRoundSummaryPrompt,
+  buildIndependentAnalysisPrompt,
+  buildDeliberationResponsePrompt,
+  buildWorkerExecutionPrompt,
+  buildWorkerRevisionPrompt,
 } from './prompts';
 
 // Turn Strategies
 export {
   selectNextSpeaker,
-  isRoundComplete,
+  isRoundComplete as isRoundCompleteForCouncil,
   getUnheardPersonas,
   selectDebateOpponents,
   calculateRoundOrder,
@@ -95,3 +131,65 @@ export {
   type LLMProvider,
   type OrchestratorConfig,
 } from './orchestrator';
+
+// Ledger Store
+export {
+  appendEntry,
+  getEntries,
+  getAllEntries,
+  getEntry,
+  getLatestOfType,
+  getEntriesForRound,
+  getEntriesByAuthor,
+  getLedgerTokenCount,
+  getManagerNotes,
+  formatEntriesForContext,
+  buildMechanicalSummary,
+  ledgerStore,
+  LedgerStore,
+} from './ledger-store';
+
+// Context Store
+export {
+  // Context operations
+  getCurrentContext,
+  getContextHistory,
+  getContextVersion,
+  createInitialContext,
+  createContextVersion,
+  getContextDiff,
+  // Patch operations
+  getAllPatches,
+  getPendingPatches,
+  getPatch,
+  createPatch,
+  acceptPatch,
+  rejectPatch,
+  isPatchStale,
+  // Decision
+  getDecision,
+  createDecision,
+  // Plan
+  getPlan,
+  createPlan,
+  // Directive
+  getDirective,
+  createDirective,
+  // Output
+  getAllOutputs,
+  getLatestOutput,
+  getOutput,
+  createOutput,
+  createRevisionOutput,
+  // Cleanup
+  deleteAllArtifacts,
+  hasArtifacts,
+  // Class & instance
+  contextStore,
+  ContextStore,
+} from './context-store';
+
+// Deliberation Orchestrator
+export {
+  DeliberationOrchestrator,
+} from './deliberation-orchestrator';

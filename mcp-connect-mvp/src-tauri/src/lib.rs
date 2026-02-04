@@ -88,6 +88,16 @@ pub fn run() {
             commands::sync_proxy_to_codex_config,
             commands::remove_proxy_from_codex_config,
             commands::sync_all_proxies_to_llm_configs,
+            // Docker Management (for SearXNG and other services)
+            commands::is_docker_available,
+            commands::docker_container_status,
+            commands::docker_start_container,
+            commands::docker_stop_container,
+            commands::docker_compose_up,
+            commands::docker_compose_down,
+            commands::check_searxng_health,
+            commands::get_kondi_data_dir,
+            commands::ensure_searxng_files,
         ])
         .setup(|app| {
             // Set window icon for Linux
@@ -111,10 +121,11 @@ pub fn run() {
     // Run with event handler for cleanup
     app.run(|app_handle, event| {
         if let RunEvent::Exit = event {
-            println!("[App] Cleaning up proxy processes...");
-            // Get the AppState and stop all proxies
+            println!("[App] Cleaning up processes...");
+            // Get the AppState and stop all processes
             if let Some(state) = app_handle.try_state::<commands::AppState>() {
                 commands::stop_all_proxies(&state);
+                commands::stop_all_mcp_processes(&state);
             }
         }
     });

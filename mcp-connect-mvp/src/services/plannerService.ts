@@ -73,6 +73,10 @@ export interface PlannerResponse {
   message: string;
   specUpdate?: Partial<WorkflowSpec>;
   isComplete?: boolean;
+  /** The provider that generated this response */
+  provider: 'anthropic' | 'openai';
+  /** The model that generated this response */
+  model: string;
 }
 
 // ============================================================================
@@ -90,6 +94,13 @@ Your job is to:
    - What tools or services are available?
 3. Once you understand the problem, propose a workflow with clear steps
 4. Refine based on feedback until the user is satisfied
+
+CRITICAL RULES:
+- NEVER re-ask a question that has already been answered in the conversation
+- ALWAYS read the full conversation history before responding
+- If information was already provided, acknowledge it and use it - don't ask for it again
+- Keep track of what you know: input data, output goals, constraints, tools mentioned
+- If you're unsure whether something was answered, summarize what you know and ask if it's correct
 
 IMPORTANT: Do NOT assume what the user wants. Listen carefully to their description and ask relevant questions about THEIR specific use case. Never default to generic templates.
 
@@ -168,8 +179,8 @@ class PlannerService {
     const sessionId = crypto.randomUUID();
     const now = new Date().toISOString();
 
-    // Default models per provider
-    const defaultModel = model || (provider === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o');
+    // Default models per provider - use best available
+    const defaultModel = model || (provider === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-5.2-codex');
 
     const session: PlanningSession = {
       id: sessionId,
@@ -280,6 +291,8 @@ Tell me what you'd like to automate - describe your use case, the data involved,
         message: assistantContent,
         specUpdate: session.currentSpec,
         isComplete,
+        provider: session.provider,
+        model: session.model,
       };
     } catch (error) {
       console.error('[Planner] LLM call failed:', error);
@@ -357,6 +370,24 @@ Tell me what you'd like to automate - describe your use case, the data involved,
   private buildLLMMessages(session: PlanningSession): Message[] {
     const messages: Message[] = [];
 
+    // Add context summary at the start if we have any info established
+    const contextSummary = this.buildContextSummary(session);
+    if (contextSummary) {
+      messages.push({
+        id: 'context-summary',
+        role: 'user',
+        content: contextSummary,
+        timestamp: new Date(session.createdAt),
+      });
+      messages.push({
+        id: 'context-ack',
+        role: 'assistant',
+        content: 'I understand. I have the context from our conversation and will continue from where we left off.',
+        timestamp: new Date(session.createdAt),
+      });
+    }
+
+    // Add all conversation messages
     for (const msg of session.messages) {
       if (msg.role === 'system') continue;
       messages.push({
@@ -367,17 +398,62 @@ Tell me what you'd like to automate - describe your use case, the data involved,
       });
     }
 
-    // Add current spec context if exists
-    if (session.currentSpec && Object.keys(session.currentSpec).length > 0) {
-      messages.push({
-        id: crypto.randomUUID(),
-        role: 'user',
-        content: `[Current workflow spec:\n${JSON.stringify(session.currentSpec, null, 2)}\n]`,
-        timestamp: new Date(),
-      });
+    return messages;
+  }
+
+  /**
+   * Build a summary of established context to prevent re-asking questions
+   */
+  private buildContextSummary(session: PlanningSession): string | null {
+    const facts: string[] = [];
+
+    // Extract key information from the current spec
+    if (session.currentSpec) {
+      if (session.currentSpec.name) {
+        facts.push(`Workflow name: "${session.currentSpec.name}"`);
+      }
+      if (session.currentSpec.description) {
+        facts.push(`Description: ${session.currentSpec.description}`);
+      }
+      if (session.currentSpec.inputs && session.currentSpec.inputs.length > 0) {
+        facts.push(`Inputs defined: ${session.currentSpec.inputs.map(i => i.name).join(', ')}`);
+      }
+      if (session.currentSpec.outputs && session.currentSpec.outputs.length > 0) {
+        facts.push(`Outputs defined: ${session.currentSpec.outputs.map(o => o.name).join(', ')}`);
+      }
+      if (session.currentSpec.steps && session.currentSpec.steps.length > 0) {
+        facts.push(`Steps defined (${session.currentSpec.steps.length}): ${session.currentSpec.steps.map(s => s.name).join(', ')}`);
+      }
     }
 
-    return messages;
+    // Scan messages for key information patterns
+    for (const msg of session.messages) {
+      if (msg.role !== 'user') continue;
+
+      // Look for data source mentions
+      if (/spreadsheet|csv|excel|google sheets/i.test(msg.content)) {
+        facts.push(`Data source mentioned: spreadsheet/CSV`);
+      }
+      if (/database|sql|postgres|mysql/i.test(msg.content)) {
+        facts.push(`Data source mentioned: database`);
+      }
+      if (/api|endpoint|rest/i.test(msg.content)) {
+        facts.push(`Data source mentioned: API`);
+      }
+
+      // Look for scale mentions
+      const scaleMatch = msg.content.match(/(\d+(?:,\d+)*(?:\.\d+)?)\s*(?:rows?|records?|items?|entries|leads?|contacts?)/i);
+      if (scaleMatch) {
+        facts.push(`Scale mentioned: ${scaleMatch[0]}`);
+      }
+    }
+
+    if (facts.length === 0) return null;
+
+    return `[CONTEXT - Information already established in this conversation. DO NOT re-ask about these topics:]
+${facts.map(f => `• ${f}`).join('\n')}
+
+Continue the conversation naturally, building on this context.`;
   }
 
   private extractSpec(content: string): Partial<WorkflowSpec> | undefined {

@@ -7,8 +7,11 @@ import WorkflowLibrary from './components/WorkflowLibrary';
 import PlannerChat from './components/PlannerChat';
 import ExecutionMonitor from './components/ExecutionMonitor';
 import ProviderSettings from './components/ProviderSettings';
+import SearchServicePanel from './components/SearchServicePanel';
+import { initializeSearchService, getSearchServiceStatus } from './services/searchService';
 import { CouncilLibrary, CouncilView } from './components/council';
-import { createOrchestrator, type Council } from './council';
+import { createOrchestrator, type Council, DeliberationOrchestrator, councilStore } from './council';
+import { ledgerStore } from './council/ledger-store';
 import { llmAdapter } from './council/llm-adapter';
 import { mcpClient } from './services/mcpClient';
 import { openaiClient } from './services/openaiClient';
@@ -20,6 +23,7 @@ import { startupValidator, type StartupValidationReport } from './services/start
 import * as proxyService from './services/proxyService';
 import { loginCodexCli } from './services/cliCredentials';
 import type { MCPServer, MCPTool, Message } from './types/mcp';
+import { getModelsForProviderSettings } from './config/models';
 import './App.css';
 import { invoke } from '@tauri-apps/api/core';
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -65,6 +69,11 @@ function App() {
     const saved = localStorage.getItem('kondi-provider');
     return (saved === 'chatgpt' ? 'chatgpt' : 'claude') as 'claude' | 'chatgpt';
   });
+  // Track the specific provider ID (e.g., 'anthropic-cli', 'openai-api')
+  const [selectedProviderId, setSelectedProviderId] = useState<string>(() => {
+    const saved = localStorage.getItem('kondi-provider-id');
+    return saved || 'anthropic-cli';
+  });
   const [showToolsPanel, setShowToolsPanel] = useState(true);
   const [messageCountToday, setMessageCountToday] = useState(0);
   const [currentPlan, setCurrentPlan] = useState<SubscriptionPlan>('free');
@@ -74,13 +83,18 @@ function App() {
   const [openaiKeyError, setOpenaiKeyError] = useState<string | null>(null);
   const [anthropicKeyError, setAnthropicKeyError] = useState<string | null>(null);
   const [openaiModel, setOpenaiModel] = useState(() => {
-    return localStorage.getItem('kondi-openai-model') || 'gpt-4o';
+    return localStorage.getItem('kondi-openai-model') || 'gpt-5.2-codex';
   });
   const [openaiModels, setOpenaiModels] = useState<string[]>([]);
   const [anthropicModel, setAnthropicModel] = useState(() => {
-    return localStorage.getItem('kondi-anthropic-model') || 'claude-3-5-sonnet-latest';
+    return localStorage.getItem('kondi-anthropic-model') || 'claude-sonnet-4-20250514';
   });
   const [anthropicModels, setAnthropicModels] = useState<string[]>([]);
+
+  // Debug: Log when default model state changes
+  useEffect(() => {
+    console.log('[App] State changed - selectedProviderId:', selectedProviderId, 'anthropicModel:', anthropicModel, 'openaiModel:', openaiModel);
+  }, [selectedProviderId, anthropicModel, openaiModel]);
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
   const [updateMessage, setUpdateMessage] = useState<string>('Not checked yet.');
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -101,6 +115,7 @@ function App() {
 
   // Council state
   const [currentCouncilId, setCurrentCouncilId] = useState<string | null>(null);
+  const [thinkingPersonas, setThinkingPersonas] = useState<import('./council/types').Persona[]>([]);
 
   // CLI OAuth credentials state
   const [cliCredentials, setCLICredentials] = useState<{
@@ -405,7 +420,7 @@ function App() {
     }));
     setServers(withTools);
     // Persist to localStorage for quick restore across restarts
-    const configsToSave = withTools.map(({ id, name, url, transport, icon, accessToken, clientId, clientSecret }) => ({
+    const configsToSave = withTools.map(({ id, name, url, transport, icon, accessToken, clientId, clientSecret, autoConnect, type, metadata }) => ({
       id,
       name,
       url,
@@ -414,6 +429,9 @@ function App() {
       accessToken,
       clientId,
       clientSecret,
+      autoConnect,
+      type,
+      metadata,
       authHint: undefined as string | undefined, // transient UI hint, not persisted
     }));
     try {
@@ -546,9 +564,8 @@ function App() {
             clientSecret: config.clientSecret,
           };
           mcpClient.addServer(server);
-          // If the server was previously connected (check localStorage flag), add to auto-connect list
-          const wasConnected = localStorage.getItem(`mcp-server-connected-${config.id}`);
-          if (wasConnected === 'true') {
+          // Only auto-connect if explicitly enabled
+          if (config.autoConnect === true) {
             serversToAutoConnect.push(server);
           }
         });
@@ -568,9 +585,18 @@ function App() {
             await mcpClient.connectServer(server);
             refreshServers();
           } catch (err) {
-            console.warn('[App] Failed to auto-reconnect server:', server.name, err);
-            // Mark as error so user sees it
-            mcpClient.setServerStatus(server.id, 'error', 'Auto-reconnect failed');
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.warn('[App] Failed to auto-reconnect server:', server.name, errMsg);
+            // Provide more specific error message based on the failure type
+            let displayError = 'Auto-reconnect failed';
+            if (errMsg.includes('timed out') || errMsg.includes('timeout')) {
+              displayError = 'Auth timed out - click to reconnect';
+            } else if (errMsg.includes('Authentication failed')) {
+              displayError = 'Auth failed - click to reconnect';
+            } else if (errMsg.includes('unreachable') || errMsg.includes('not responding')) {
+              displayError = 'Server unreachable';
+            }
+            mcpClient.setServerStatus(server.id, 'error', displayError);
             refreshServers();
           }
         }
@@ -598,7 +624,7 @@ function App() {
       // Load server configs
       try {
         const configs = await invoke<
-          { id: string; name: string; url: string; transport: string; access_token?: string; client_id?: string; client_secret?: string; message_endpoint?: string; type?: string; metadata?: Record<string, any> }[]
+          { id: string; name: string; url: string; transport: string; access_token?: string; client_id?: string; client_secret?: string; message_endpoint?: string; type?: string; metadata?: Record<string, any>; auto_connect?: boolean }[]
         >('get_server_configs');
         configs.forEach((config: any) => {
           // Infer type from transport if not set (for backwards compatibility)
@@ -618,6 +644,7 @@ function App() {
             messageEndpoint: config.message_endpoint || undefined,
             type: serverType,
             metadata: config.metadata || undefined,
+            autoConnect: config.auto_connect ?? false,
           });
         });
         refreshServers();
@@ -649,6 +676,47 @@ function App() {
 
     refreshServers();
   }, []);
+
+  // Auto-start search service on app launch
+  useEffect(() => {
+    if (!hasLoadedKeys) return;
+
+    const autoStartSearchService = async () => {
+      try {
+        // Check if search service is already set up (Docker container exists)
+        const status = await getSearchServiceStatus(mcpClient);
+
+        // Only auto-start if Docker is available and the service was previously set up
+        if (status.dockerAvailable && status.searxngStatus !== 'not_found' && status.searxngStatus !== 'unknown') {
+          console.log('[App] Auto-starting search service...');
+          const success = await initializeSearchService(mcpClient, (msg) => {
+            console.log('[App] Search service:', msg);
+          });
+
+          if (success) {
+            // Sync the search server to the servers state
+            const searchServer = mcpClient.getAllServers().find(s => s.id === 'kondi-search');
+            if (searchServer) {
+              const tools = mcpClient.getTools('kondi-search');
+              setServers(prev => {
+                const exists = prev.some(s => s.id === 'kondi-search');
+                const serverWithTools = { ...searchServer, name: 'Web Search (Built-in)', tools };
+                if (exists) {
+                  return prev.map(s => s.id === 'kondi-search' ? serverWithTools : s);
+                } else {
+                  return [...prev, serverWithTools];
+                }
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[App] Failed to auto-start search service:', err);
+      }
+    };
+
+    autoStartSearchService();
+  }, [hasLoadedKeys]);
 
   // Persist chats (keep only last MAX_CHATS by recency, only after initial load)
   useEffect(() => {
@@ -1331,6 +1399,23 @@ function App() {
           <PlannerChat
             provider={provider === 'claude' ? 'anthropic' : 'openai'}
             model={provider === 'claude' ? anthropicModel : openaiModel}
+            initialWorkflow={editingWorkflowId ? (() => {
+              const w = workflows.find((wf) => wf.id === editingWorkflowId);
+              if (!w) return undefined;
+              return {
+                name: w.name,
+                description: w.description,
+                steps: w.steps?.map((s) => ({
+                  id: s.id,
+                  name: s.name,
+                  type: (s.type || 'tool') as 'llm' | 'tool' | 'human' | 'conditional' | 'parallel',
+                  description: s.description,
+                })),
+                inputs: w.inputs,
+                outputs: w.outputs,
+                status: w.status as 'draft' | 'ready',
+              };
+            })() : undefined}
             onComplete={(spec) => {
               const now = new Date().toISOString();
               if (editingWorkflowId) {
@@ -1381,6 +1466,7 @@ function App() {
             <CouncilView
               councilId={currentCouncilId}
               onBack={() => setCurrentCouncilId(null)}
+              // Legacy freeform handlers
               onGenerateTurn={async (council, personaId, instruction) => {
                 const orchestrator = createOrchestrator({
                   llmProvider: llmAdapter,
@@ -1413,6 +1499,327 @@ function App() {
                 });
                 await orchestrator.resolve(council);
               }}
+              // Deliberation handlers
+              onFrameProblem={async (council, rawProblem) => {
+                console.log('[App] onFrameProblem called - starting full deliberation', { councilId: council.id, rawProblem });
+                setThinkingPersonas([]); // Clear any previous thinking state
+                try {
+                  const deliberator = new DeliberationOrchestrator({
+                    invokeAgent: async (invocation, persona) => {
+                      console.log('[App] invokeAgent called', { personaName: persona.name, model: persona.model });
+                      const result = await llmAdapter.complete({
+                        model: persona.model,
+                        provider: persona.provider,
+                        systemPrompt: invocation.systemPrompt,
+                        userMessage: invocation.userMessage,
+                        temperature: persona.temperature,
+                      });
+                      console.log('[App] invokeAgent completed', { personaName: persona.name });
+                      return result;
+                    },
+                    onPhaseChange: (from, to) => console.log(`[Deliberation] Phase: ${from} → ${to}`),
+                    onError: (err, ctx) => console.error(`[Deliberation Error] ${ctx}:`, err),
+                    onAgentThinkingStart: (persona) => {
+                      console.log(`[Deliberation] ${persona.name} started thinking`);
+                      setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+                    },
+                    onAgentThinkingEnd: (persona) => {
+                      console.log(`[Deliberation] ${persona.name} finished thinking`);
+                      setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+                    },
+                  });
+                  console.log('[App] Starting full deliberation...');
+                  await deliberator.runFullDeliberation(council, rawProblem);
+                  console.log('[App] Full deliberation completed');
+                } catch (error) {
+                  console.error('[App] Error in deliberation:', error);
+                  throw error;
+                } finally {
+                  setThinkingPersonas([]); // Clear thinking state when done
+                }
+              }}
+              onRunRound={async (council) => {
+                const deliberator = new DeliberationOrchestrator({
+                  invokeAgent: async (invocation, persona) => {
+                    const result = await llmAdapter.complete({
+                      model: persona.model,
+                      provider: persona.provider,
+                      systemPrompt: invocation.systemPrompt,
+                      userMessage: invocation.userMessage,
+                      temperature: persona.temperature,
+                    });
+                    return result;
+                  },
+                  onAgentThinkingStart: (persona) => {
+                    setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+                  },
+                  onAgentThinkingEnd: (persona) => {
+                    setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+                  },
+                });
+                const phase = council.deliberationState?.currentPhase;
+                if (phase === 'round_independent') {
+                  await deliberator.runIndependentRound(council);
+                } else if (phase === 'round_interactive') {
+                  await deliberator.runInteractiveRound(council);
+                }
+                setThinkingPersonas([]);
+              }}
+              onEvaluateRound={async (council) => {
+                const deliberator = new DeliberationOrchestrator({
+                  invokeAgent: async (invocation, persona) => {
+                    const result = await llmAdapter.complete({
+                      model: persona.model,
+                      provider: persona.provider,
+                      systemPrompt: invocation.systemPrompt,
+                      userMessage: invocation.userMessage,
+                      temperature: persona.temperature,
+                    });
+                    return result;
+                  },
+                  onAgentThinkingStart: (persona) => {
+                    setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+                  },
+                  onAgentThinkingEnd: (persona) => {
+                    setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+                  },
+                });
+                await deliberator.managerEvaluate(council);
+                setThinkingPersonas([]);
+              }}
+              onMakeDecision={async (council) => {
+                const deliberator = new DeliberationOrchestrator({
+                  invokeAgent: async (invocation, persona) => {
+                    const result = await llmAdapter.complete({
+                      model: persona.model,
+                      provider: persona.provider,
+                      systemPrompt: invocation.systemPrompt,
+                      userMessage: invocation.userMessage,
+                      temperature: persona.temperature,
+                    });
+                    return result;
+                  },
+                  onAgentThinkingStart: (persona) => {
+                    setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+                  },
+                  onAgentThinkingEnd: (persona) => {
+                    setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+                  },
+                });
+                await deliberator.makeDecision(council);
+                setThinkingPersonas([]);
+              }}
+              onCreatePlan={async (council) => {
+                const deliberator = new DeliberationOrchestrator({
+                  invokeAgent: async (invocation, persona) => {
+                    const result = await llmAdapter.complete({
+                      model: persona.model,
+                      provider: persona.provider,
+                      systemPrompt: invocation.systemPrompt,
+                      userMessage: invocation.userMessage,
+                      temperature: persona.temperature,
+                    });
+                    return result;
+                  },
+                  onAgentThinkingStart: (persona) => {
+                    setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+                  },
+                  onAgentThinkingEnd: (persona) => {
+                    setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+                  },
+                });
+                await deliberator.createPlan(council);
+                setThinkingPersonas([]);
+              }}
+              onIssueDirective={async (council) => {
+                const deliberator = new DeliberationOrchestrator({
+                  invokeAgent: async (invocation, persona) => {
+                    const result = await llmAdapter.complete({
+                      model: persona.model,
+                      provider: persona.provider,
+                      systemPrompt: invocation.systemPrompt,
+                      userMessage: invocation.userMessage,
+                      temperature: persona.temperature,
+                    });
+                    return result;
+                  },
+                  onAgentThinkingStart: (persona) => {
+                    setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+                  },
+                  onAgentThinkingEnd: (persona) => {
+                    setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+                  },
+                });
+                await deliberator.issueDirective(council);
+                setThinkingPersonas([]);
+              }}
+              onExecuteWork={async (council) => {
+                const deliberator = new DeliberationOrchestrator({
+                  invokeAgent: async (invocation, persona) => {
+                    const result = await llmAdapter.complete({
+                      model: persona.model,
+                      provider: persona.provider,
+                      systemPrompt: invocation.systemPrompt,
+                      userMessage: invocation.userMessage,
+                      temperature: persona.temperature,
+                    });
+                    return result;
+                  },
+                  onAgentThinkingStart: (persona) => {
+                    setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+                  },
+                  onAgentThinkingEnd: (persona) => {
+                    setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+                  },
+                });
+                await deliberator.executeWork(council);
+                setThinkingPersonas([]);
+              }}
+              onReviewWork={async (council) => {
+                const deliberator = new DeliberationOrchestrator({
+                  invokeAgent: async (invocation, persona) => {
+                    const result = await llmAdapter.complete({
+                      model: persona.model,
+                      provider: persona.provider,
+                      systemPrompt: invocation.systemPrompt,
+                      userMessage: invocation.userMessage,
+                      temperature: persona.temperature,
+                    });
+                    return result;
+                  },
+                  onAgentThinkingStart: (persona) => {
+                    setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+                  },
+                  onAgentThinkingEnd: (persona) => {
+                    setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+                  },
+                });
+                await deliberator.reviewWork(council);
+                setThinkingPersonas([]);
+              }}
+              onPauseDeliberation={async (council) => {
+                const deliberator = new DeliberationOrchestrator({
+                  invokeAgent: async (invocation, persona) => {
+                    const result = await llmAdapter.complete({
+                      model: persona.model,
+                      provider: persona.provider,
+                      systemPrompt: invocation.systemPrompt,
+                      userMessage: invocation.userMessage,
+                      temperature: persona.temperature,
+                    });
+                    return result;
+                  },
+                });
+                await deliberator.pause(council);
+              }}
+              onResumeDeliberation={async (council) => {
+                const deliberator = new DeliberationOrchestrator({
+                  invokeAgent: async (invocation, persona) => {
+                    const result = await llmAdapter.complete({
+                      model: persona.model,
+                      provider: persona.provider,
+                      systemPrompt: invocation.systemPrompt,
+                      userMessage: invocation.userMessage,
+                      temperature: persona.temperature,
+                    });
+                    return result;
+                  },
+                });
+                await deliberator.resume(council);
+              }}
+              onForceDecision={async (council) => {
+                const deliberator = new DeliberationOrchestrator({
+                  invokeAgent: async (invocation, persona) => {
+                    const result = await llmAdapter.complete({
+                      model: persona.model,
+                      provider: persona.provider,
+                      systemPrompt: invocation.systemPrompt,
+                      userMessage: invocation.userMessage,
+                      temperature: persona.temperature,
+                    });
+                    return result;
+                  },
+                  onAgentThinkingStart: (persona) => {
+                    setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+                  },
+                  onAgentThinkingEnd: (persona) => {
+                    setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+                  },
+                });
+                await deliberator.cancelAndForceDecision(council);
+                setThinkingPersonas([]);
+              }}
+              onAbortDeliberation={async (council) => {
+                setThinkingPersonas([]); // Clear any thinking state when aborting
+                const deliberator = new DeliberationOrchestrator({
+                  invokeAgent: async (invocation, persona) => {
+                    const result = await llmAdapter.complete({
+                      model: persona.model,
+                      provider: persona.provider,
+                      systemPrompt: invocation.systemPrompt,
+                      userMessage: invocation.userMessage,
+                      temperature: persona.temperature,
+                    });
+                    return result;
+                  },
+                });
+                await deliberator.abort(council);
+              }}
+              onUserMessage={async (council, message, lastResponderId) => {
+                // Find the persona who should respond
+                const responder = council.personas.find(p => p.id === lastResponderId);
+                if (!responder) return;
+
+                // Add user message to ledger
+                const userEntry = {
+                  id: crypto.randomUUID(),
+                  timestamp: new Date().toISOString(),
+                  authorRole: 'manager' as const,
+                  authorPersonaId: 'user',
+                  entryType: 'manager_question' as const,
+                  phase: council.deliberationState?.currentPhase || 'paused',
+                  content: message,
+                  tokensUsed: 0,
+                  latencyMs: 0,
+                };
+                ledgerStore.append(council.id, userEntry);
+
+                // Have the last responder reply
+                setThinkingPersonas([responder]);
+                try {
+                  const result = await llmAdapter.complete({
+                    model: responder.model,
+                    provider: responder.provider,
+                    systemPrompt: responder.predisposition.systemPrompt,
+                    userMessage: `The user has paused the deliberation to ask you a question or make a comment:\n\n"${message}"\n\nPlease respond helpfully, keeping in mind the context of the ongoing deliberation.`,
+                    temperature: responder.temperature,
+                  });
+
+                  // Add response to ledger
+                  const responseEntry = {
+                    id: crypto.randomUUID(),
+                    timestamp: new Date().toISOString(),
+                    authorRole: council.deliberation?.roleAssignments?.find(r => r.personaId === responder.id)?.role || 'consultant' as const,
+                    authorPersonaId: responder.id,
+                    entryType: 'response' as const,
+                    phase: council.deliberationState?.currentPhase || 'paused',
+                    content: result.content,
+                    tokensUsed: result.tokensUsed,
+                    latencyMs: result.latencyMs,
+                  };
+                  ledgerStore.append(council.id, responseEntry);
+                } finally {
+                  setThinkingPersonas([]);
+                }
+              }}
+              configuredProviders={{
+                'anthropic-cli': cliCredentials.claude.available,
+                'anthropic-api': !!anthropicKey,
+                'openai-cli': cliCredentials.codex.available,
+                'openai-api': !!openaiKey,
+                deepseek: false, // DeepSeek not yet configured - needs API key support
+              }}
+              thinkingPersonas={thinkingPersonas}
             />
           ) : (
             <CouncilLibrary
@@ -1423,22 +1830,45 @@ function App() {
         ) : currentView === 'providers' ? (
           <ProviderSettings
             providers={[
-              // Primary Providers (API Key + OAuth)
+              // CLI Providers (Subscription-based - access to latest models)
               {
-                id: 'anthropic',
-                name: 'Anthropic',
-                description: 'Claude models with advanced reasoning',
-                status: (() => {
-                  // Check validation result first - it's the source of truth
-                  const result = validationReport?.llmProviders.find(r => r.provider.includes('Anthropic'));
-                  if (result?.status === 'error') return 'error';
-                  if (result?.status === 'ok') return 'active';
-                  // No validation result yet - check if credentials exist
-                  return (anthropicKey || cliCredentials.claude.available) ? 'inactive' : 'inactive';
-                })(),
+                id: 'anthropic-cli',
+                name: 'Claude CLI',
+                description: 'Claude Code subscription - latest Claude 4+ models',
+                status: cliCredentials.claude.available ? 'active' : 'inactive',
                 cliTool: 'claude',
                 oauthAvailable: cliCredentials.claude.available,
-                activeAuthMethod: anthropicAuthMethod,
+                activeAuthMethod: cliCredentials.claude.available ? 'oauth' : undefined,
+                config: {
+                  expiresAt: cliCredentials.claude.expiresAt,
+                },
+                models: getModelsForProviderSettings('anthropic-cli'),
+              },
+              {
+                id: 'openai-cli',
+                name: 'Codex CLI',
+                description: 'OpenAI Codex subscription - latest GPT-5+ models',
+                status: cliCredentials.codex.available ? 'active' : 'inactive',
+                cliTool: 'codex',
+                oauthAvailable: cliCredentials.codex.available,
+                activeAuthMethod: cliCredentials.codex.available ? 'oauth' : undefined,
+                config: {
+                  expiresAt: cliCredentials.codex.expiresAt,
+                },
+                models: getModelsForProviderSettings('openai-cli'),
+              },
+              // API Providers (Direct API key access)
+              {
+                id: 'anthropic-api',
+                name: 'Anthropic API',
+                description: 'Direct API access - Claude 3.5 models',
+                status: (() => {
+                  const result = validationReport?.llmProviders.find(r => r.provider.includes('Anthropic'));
+                  if (result?.status === 'error') return 'error';
+                  if (result?.status === 'ok' && anthropicAuthMethod === 'api_key') return 'active';
+                  return anthropicKey ? 'inactive' : 'inactive';
+                })(),
+                activeAuthMethod: anthropicKey ? 'api_key' : undefined,
                 validationError: (() => {
                   const err = validationReport?.llmProviders.find(
                     (r) => r.provider.includes('Anthropic') && r.status === 'error'
@@ -1447,29 +1877,20 @@ function App() {
                 })(),
                 config: {
                   apiKey: anthropicKey,
-                  expiresAt: cliCredentials.claude.expiresAt,
                 },
-                models: [
-                  { id: 'claude-3-5-sonnet-latest', name: 'Claude 3.5 Sonnet', contextWindow: 200000, capabilities: ['text', 'vision', 'code'] },
-                  { id: 'claude-3-5-haiku-latest', name: 'Claude 3.5 Haiku', contextWindow: 200000, capabilities: ['text', 'code'] },
-                  { id: 'claude-3-opus-latest', name: 'Claude 3 Opus', contextWindow: 200000, capabilities: ['text', 'vision', 'code', 'reasoning'] },
-                ],
+                models: getModelsForProviderSettings('anthropic-api'),
               },
               {
-                id: 'openai',
-                name: 'OpenAI',
-                description: 'GPT-4 and o1 models via API key or Codex CLI',
+                id: 'openai-api',
+                name: 'OpenAI API',
+                description: 'Direct API access - GPT-4o, o1 models',
                 status: (() => {
-                  // Check validation result first - it's the source of truth
                   const result = validationReport?.llmProviders.find(r => r.provider.includes('OpenAI'));
                   if (result?.status === 'error') return 'error';
-                  if (result?.status === 'ok') return 'active';
-                  // No validation result yet - check if credentials exist
-                  return (openaiKey || cliCredentials.codex.available) ? 'inactive' : 'inactive';
+                  if (result?.status === 'ok' && openaiAuthMethod === 'api_key') return 'active';
+                  return openaiKey ? 'inactive' : 'inactive';
                 })(),
-                cliTool: 'codex',
-                oauthAvailable: cliCredentials.codex.available,
-                activeAuthMethod: openaiAuthMethod,
+                activeAuthMethod: openaiKey ? 'api_key' : undefined,
                 validationError: (() => {
                   const err = validationReport?.llmProviders.find(
                     (r) => r.provider.includes('OpenAI') && r.status === 'error'
@@ -1478,19 +1899,8 @@ function App() {
                 })(),
                 config: {
                   apiKey: openaiKey,
-                  expiresAt: cliCredentials.codex.expiresAt,
                 },
-                models: [
-                  // API models
-                  { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000, capabilities: ['text', 'vision', 'code'] },
-                  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', contextWindow: 128000, capabilities: ['text', 'code'] },
-                  { id: 'o1-preview', name: 'o1 Preview', contextWindow: 128000, capabilities: ['text', 'code', 'reasoning'] },
-                  // Codex CLI models (ChatGPT subscription)
-                  { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex (Latest)', contextWindow: 192000, capabilities: ['text', 'code', 'reasoning'] },
-                  { id: 'gpt-5.1-codex-max', name: 'GPT-5.1 Codex Max', contextWindow: 192000, capabilities: ['text', 'code', 'reasoning'] },
-                  { id: 'gpt-5.1-codex-mini', name: 'GPT-5.1 Codex Mini (4x usage)', contextWindow: 128000, capabilities: ['text', 'code'] },
-                  { id: 'gpt-5-codex-mini', name: 'GPT-5 Codex Mini', contextWindow: 128000, capabilities: ['text', 'code'] },
-                ],
+                models: getModelsForProviderSettings('openai-api'),
               },
               {
                 id: 'gemini',
@@ -1503,11 +1913,7 @@ function App() {
                 config: {
                   expiresAt: cliCredentials.gemini.expiresAt,
                 },
-                models: [
-                  { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash', contextWindow: 1048576, capabilities: ['text', 'vision', 'code'] },
-                  { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', contextWindow: 2097152, capabilities: ['text', 'vision', 'code'] },
-                  { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', contextWindow: 1048576, capabilities: ['text', 'vision', 'code'] },
-                ],
+                models: getModelsForProviderSettings('google'),
               },
               // OAuth Providers
               {
@@ -1563,11 +1969,7 @@ function App() {
                 description: 'DeepSeek Chat and Coder models',
                 status: 'inactive',
                 config: {},
-                models: [
-                  { id: 'deepseek-chat', name: 'DeepSeek Chat', contextWindow: 64000, capabilities: ['text'] },
-                  { id: 'deepseek-coder', name: 'DeepSeek Coder', contextWindow: 64000, capabilities: ['text', 'code'] },
-                  { id: 'deepseek-reasoner', name: 'DeepSeek R1', contextWindow: 64000, capabilities: ['text', 'reasoning'] },
-                ],
+                models: getModelsForProviderSettings('deepseek'),
               },
               {
                 id: 'qwen',
@@ -1653,34 +2055,61 @@ function App() {
                 ],
               },
             ]}
-            defaultProvider={provider === 'claude' ? 'anthropic' : 'openai'}
-            defaultModel={provider === 'claude' ? anthropicModel : openaiModel}
+            defaultProvider={selectedProviderId}
+            defaultModel={selectedProviderId.startsWith('anthropic') ? anthropicModel : openaiModel}
             onProviderUpdate={(providerId, config) => {
-              if (providerId === 'anthropic' && config.apiKey !== undefined) {
+              if (providerId.startsWith('anthropic') && config.apiKey !== undefined) {
                 setAnthropicKey(config.apiKey || '');
-              } else if (providerId === 'openai' && config.apiKey !== undefined) {
+              } else if (providerId.startsWith('openai') && config.apiKey !== undefined) {
                 setOpenaiKey(config.apiKey || '');
               }
               // TODO: Store other provider keys
               console.log('Provider update:', providerId, config);
             }}
             onDefaultChange={(providerId, modelId) => {
-              if (providerId === 'anthropic') {
+              console.log('[App] onDefaultChange called:', { providerId, modelId });
+              // Store the full provider ID
+              setSelectedProviderId(providerId);
+              localStorage.setItem('kondi-provider-id', providerId);
+
+              if (providerId.startsWith('anthropic')) {
+                console.log('[App] Setting Anthropic provider/model to:', providerId, modelId);
                 setProvider('claude');
                 setAnthropicModel(modelId);
-              } else if (providerId === 'openai') {
+                localStorage.setItem('kondi-provider', 'claude');
+                localStorage.setItem('kondi-anthropic-model', modelId);
+                // Force save to Tauri store
+                invoke('save_api_keys', {
+                  keys: {
+                    openai: openaiKey || null,
+                    openaiModel: openaiModel || null,
+                    anthropic: anthropicKey || null,
+                    anthropicModel: modelId,
+                  }
+                }).catch(() => {});
+              } else if (providerId.startsWith('openai')) {
+                console.log('[App] Setting OpenAI provider/model to:', providerId, modelId);
                 setProvider('chatgpt');
                 setOpenaiModel(modelId);
+                localStorage.setItem('kondi-provider', 'chatgpt');
+                localStorage.setItem('kondi-openai-model', modelId);
+                // Force save to Tauri store
+                invoke('save_api_keys', {
+                  keys: {
+                    openai: openaiKey || null,
+                    openaiModel: modelId,
+                    anthropic: anthropicKey || null,
+                    anthropicModel: anthropicModel || null,
+                  }
+                }).catch(() => {});
               }
-              // Note: MCP servers are connected through the app's mcpClient
-              // Tool execution is handled by the app, not by CLI-native MCP
-              console.log('Default change:', providerId, modelId);
+              console.log('[App] Default change complete');
             }}
             onValidateCredentials={async (providerId) => {
-              if (providerId === 'anthropic') {
+              if (providerId.startsWith('anthropic')) {
                 const { ok } = await anthropicClient.validateKey(anthropicKey);
                 return ok;
-              } else if (providerId === 'openai') {
+              } else if (providerId.startsWith('openai')) {
                 const { ok } = await openaiClient.validateKey(openaiKey);
                 return ok;
               }
@@ -1741,9 +2170,9 @@ function App() {
               }
             }}
             onAuthMethodChange={(providerId, method) => {
-              if (providerId === 'anthropic') {
+              if (providerId.startsWith('anthropic')) {
                 setAnthropicAuthMethod(method);
-              } else if (providerId === 'openai') {
+              } else if (providerId.startsWith('openai')) {
                 setOpenaiAuthMethod(method);
               } else if (providerId === 'gemini') {
                 setGeminiAuthMethod(method);
@@ -1758,7 +2187,7 @@ function App() {
               console.log('[App] Disconnecting OAuth for:', providerId);
 
               // Clear OAuth token and CLI wrapper mode from the appropriate client
-              if (providerId === 'anthropic') {
+              if (providerId.startsWith('anthropic')) {
                 anthropicClient.setOAuthToken(null);
                 anthropicClient.setUseOAuth(false);
                 anthropicClient.setUseCliWrapper(false);
@@ -1769,7 +2198,7 @@ function App() {
                   ...prev,
                   claude: { available: false, expiresAt: undefined }
                 }));
-              } else if (providerId === 'openai') {
+              } else if (providerId.startsWith('openai')) {
                 openaiClient.setOAuthToken(null);
                 openaiClient.setUseOAuth(false);
                 openaiClient.setUseCliWrapper(false);
@@ -1801,9 +2230,9 @@ function App() {
               }
 
               // Also disconnect from oauthService
-              if (providerId === 'anthropic') {
+              if (providerId.startsWith('anthropic')) {
                 oauthService.disconnect('anthropic');
-              } else if (providerId === 'openai') {
+              } else if (providerId.startsWith('openai')) {
                 oauthService.disconnect('openai');
               }
 
@@ -1821,7 +2250,7 @@ function App() {
             onStartOAuthLogin={async (providerId) => {
               console.log('[App] Starting OAuth login for:', providerId);
               try {
-                if (providerId === 'anthropic') {
+                if (providerId.startsWith('anthropic')) {
                   // Use Claude Code CLI wrapper approach
                   // Check if Claude Code is installed and authenticated
                   const cliStatus = await anthropicClient.checkCliAvailable();
@@ -1875,7 +2304,7 @@ function App() {
                     alert('Claude subscription connected but validation failed. Check the status for details.');
                   }
                   return true;
-                } else if (providerId === 'openai') {
+                } else if (providerId.startsWith('openai')) {
                   // Use Codex CLI wrapper approach
                   // Check if Codex is installed and authenticated
                   const cliStatus = await openaiClient.checkCliAvailable();
@@ -1980,6 +2409,48 @@ function App() {
             }}
             isCodexLoggingIn={isCodexLoggingIn}
           />
+        ) : currentView === 'services' ? (
+          <div className="services-pane">
+            <h2>Built-in Services</h2>
+            <p className="services-description">
+              Manage built-in services that extend Kondi's capabilities. These services run locally
+              and provide tools for your AI agents.
+            </p>
+            <SearchServicePanel
+              mcpClient={mcpClient}
+              onStatusChange={(status) => {
+                console.log('[App] Search service status changed:', status);
+                // Sync search server to the servers state for ToolsPanel
+                if (status.mcpServerStatus === 'connected') {
+                  const searchServer = mcpClient.getAllServers().find(s => s.id === 'kondi-search');
+                  if (searchServer) {
+                    // Get tools from mcpClient
+                    const tools = mcpClient.getTools('kondi-search');
+                    const serverWithTools = {
+                      ...searchServer,
+                      name: 'Web Search (Built-in)',
+                      tools,
+                    };
+                    setServers(prev => {
+                      const exists = prev.some(s => s.id === 'kondi-search');
+                      if (exists) {
+                        // Update existing
+                        return prev.map(s => s.id === 'kondi-search' ? serverWithTools : s);
+                      } else {
+                        // Add new
+                        return [...prev, serverWithTools];
+                      }
+                    });
+                  }
+                } else if (status.mcpServerStatus === 'disconnected') {
+                  // Update status to disconnected
+                  setServers(prev => prev.map(s =>
+                    s.id === 'kondi-search' ? { ...s, status: 'disconnected', tools: [] } : s
+                  ));
+                }
+              }}
+            />
+          </div>
         ) : currentView === 'settings' ? (
           <div className="settings-pane">
             <h2>Settings</h2>
@@ -2021,6 +2492,7 @@ function App() {
               </div>
             </CollapsibleSection>
 
+{/* Billing section hidden for now
             <CollapsibleSection title="Billing" defaultOpen>
               <div className="billing-content">
                 <div className="plan-options">
@@ -2048,6 +2520,7 @@ function App() {
                 </div>
               </div>
             </CollapsibleSection>
+*/}
 
             <CollapsibleSection title="Updates" defaultOpen>
               <div className="updates-block">

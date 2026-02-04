@@ -27,6 +27,8 @@ pub struct ServerConfig {
     #[serde(rename = "type")]
     pub server_type: Option<String>,
     pub metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    pub auto_connect: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -168,6 +170,14 @@ pub struct McpProcess {
     pub child: Child,
     pub stdin: Option<ChildStdin>,
     pub stdout_reader: Option<BufReader<ChildStdout>>,
+}
+
+impl Drop for McpProcess {
+    fn drop(&mut self) {
+        println!("[MCP] Dropping MCP process");
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 impl Default for AppState {
@@ -757,6 +767,7 @@ pub async fn start_oauth(
 pub struct OAuthResult {
     pub access_token: String,
     pub refresh_token: Option<String>,
+    pub expires_at: Option<i64>,
     pub client_id: String,
     pub client_secret: String,
     pub authorization_endpoint: String,
@@ -873,7 +884,8 @@ pub async fn start_oauth_full(
             .append_pair("redirect_uri", &redirect_uri)
             .append_pair("code_challenge", &code_challenge)
             .append_pair("code_challenge_method", "S256")
-            .append_pair("state", &state);
+            .append_pair("state", &state)
+            .append_pair("scope", "openid profile offline_access");
     }
 
     println!("[OAuth] Opening browser for authorization");
@@ -975,11 +987,18 @@ pub async fn start_oauth_full(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    println!("[OAuth] Successfully obtained access token");
+    // Calculate expires_at from expires_in (seconds from now)
+    let expires_at = json
+        .get("expires_in")
+        .and_then(|v| v.as_i64())
+        .map(|expires_in| chrono::Utc::now().timestamp() + expires_in);
+
+    println!("[OAuth] Successfully obtained access token (expires_at: {:?})", expires_at);
 
     Ok(OAuthResult {
         access_token,
         refresh_token,
+        expires_at,
         client_id,
         client_secret,
         authorization_endpoint,
@@ -4253,16 +4272,20 @@ pub async fn reauthenticate_proxy(
     if let Some(ref mut oauth) = config.oauth {
         oauth.access_token = Some(oauth_result.access_token.clone());
         oauth.refresh_token = oauth_result.refresh_token.clone();
-        oauth.token_expires_at = None;
+        oauth.token_expires_at = oauth_result.expires_at;
         oauth.client_id = oauth_result.client_id.clone();
         oauth.client_secret = oauth_result.client_secret.clone();
         oauth.auth_url = oauth_result.authorization_endpoint.clone();
         oauth.token_url = oauth_result.token_endpoint.clone();
-        println!("[Proxy] Updated OAuth config with new credentials");
+        println!("[Proxy] Updated OAuth config with new credentials (expires_at: {:?})", oauth_result.expires_at);
     }
 
     // Save the updated config with new credentials
     save_proxy_config(config.clone())?;
+
+    // Give the filesystem time to fully flush the config file
+    // This prevents race conditions where proxy reads stale config
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // Restart the proxy with fresh credentials
     let port = start_proxy(proxy_id.clone(), state)?;
@@ -4493,4 +4516,336 @@ pub fn sync_all_proxies_to_llm_configs(state: State<AppState>) -> Result<serde_j
         "synced": synced,
         "errors": errors
     }))
+}
+
+// ============================================================================
+// Docker Management Commands (for SearXNG and other containerized services)
+// ============================================================================
+
+/// Check if Docker is available on the system
+#[tauri::command]
+pub async fn is_docker_available() -> Result<bool, String> {
+    let output = StdCommand::new("docker")
+        .args(["info"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+
+    match output {
+        Ok(o) => Ok(o.status.success()),
+        Err(_) => Ok(false),
+    }
+}
+
+/// Get the status of a Docker container
+/// Returns: "running", "stopped", "exited", "not_found", or "docker_unavailable"
+#[tauri::command]
+pub async fn docker_container_status(container_name: String) -> Result<String, String> {
+    let output = StdCommand::new("docker")
+        .args(["inspect", "--format", "{{.State.Status}}", &container_name])
+        .output();
+
+    match output {
+        Ok(o) => {
+            if o.status.success() {
+                Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                if stderr.contains("No such object") || stderr.contains("not found") {
+                    Ok("not_found".to_string())
+                } else {
+                    Ok("not_found".to_string())
+                }
+            }
+        }
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Ok("docker_unavailable".to_string())
+            } else {
+                Err(e.to_string())
+            }
+        }
+    }
+}
+
+/// Start a stopped Docker container
+#[tauri::command]
+pub async fn docker_start_container(container_name: String) -> Result<(), String> {
+    println!("[Docker] Starting container: {}", container_name);
+    let output = StdCommand::new("docker")
+        .args(["start", &container_name])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        println!("[Docker] Container started: {}", container_name);
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Failed to start container: {}", stderr.trim()))
+    }
+}
+
+/// Stop a running Docker container
+#[tauri::command]
+pub async fn docker_stop_container(container_name: String) -> Result<(), String> {
+    println!("[Docker] Stopping container: {}", container_name);
+    let output = StdCommand::new("docker")
+        .args(["stop", &container_name])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        println!("[Docker] Container stopped: {}", container_name);
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Failed to stop container: {}", stderr.trim()))
+    }
+}
+
+/// Run docker compose up for a compose file
+#[tauri::command]
+pub async fn docker_compose_up(
+    compose_file: String,
+    service_name: Option<String>,
+) -> Result<(), String> {
+    // Expand ~ to home directory
+    let expanded_path = if compose_file.starts_with("~") {
+        if let Some(home) = dirs::home_dir() {
+            compose_file.replacen("~", home.to_string_lossy().as_ref(), 1)
+        } else {
+            compose_file
+        }
+    } else {
+        compose_file
+    };
+
+    println!("[Docker] Running compose up for: {}", expanded_path);
+
+    let mut args = vec!["compose", "-f", &expanded_path, "up", "-d"];
+    if let Some(ref svc) = service_name {
+        args.push(svc);
+    }
+
+    let output = StdCommand::new("docker")
+        .args(&args)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        println!("[Docker] Compose up succeeded");
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Err(format!(
+            "Docker compose up failed:\nstderr: {}\nstdout: {}",
+            stderr.trim(),
+            stdout.trim()
+        ))
+    }
+}
+
+/// Run docker compose down for a compose file
+#[tauri::command]
+pub async fn docker_compose_down(compose_file: String) -> Result<(), String> {
+    // Expand ~ to home directory
+    let expanded_path = if compose_file.starts_with("~") {
+        if let Some(home) = dirs::home_dir() {
+            compose_file.replacen("~", home.to_string_lossy().as_ref(), 1)
+        } else {
+            compose_file
+        }
+    } else {
+        compose_file
+    };
+
+    println!("[Docker] Running compose down for: {}", expanded_path);
+
+    let output = StdCommand::new("docker")
+        .args(["compose", "-f", &expanded_path, "down"])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        println!("[Docker] Compose down succeeded");
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Docker compose down failed: {}", stderr.trim()))
+    }
+}
+
+/// Check SearXNG health by making a test search request
+#[tauri::command]
+pub async fn check_searxng_health(url: String) -> Result<bool, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let test_url = format!("{}/search?q=test&format=json", url.trim_end_matches('/'));
+
+    match client.get(&test_url).send().await {
+        Ok(resp) => Ok(resp.status().is_success()),
+        Err(_) => Ok(false),
+    }
+}
+
+/// Get the Kondi data directory path
+#[tauri::command]
+pub fn get_kondi_data_dir() -> Result<String, String> {
+    data_dir()
+        .map(|mut dir| {
+            dir.push("kondi");
+            let _ = fs::create_dir_all(&dir);
+            dir.to_string_lossy().to_string()
+        })
+        .ok_or_else(|| "Could not determine data directory".to_string())
+}
+
+/// Ensure SearXNG Docker files exist in Kondi data directory
+#[tauri::command]
+pub async fn ensure_searxng_files() -> Result<String, String> {
+    let data_dir = data_dir()
+        .ok_or_else(|| "Could not determine data directory".to_string())?;
+
+    let docker_dir = data_dir.join("kondi").join("docker").join("searxng");
+    let config_dir = docker_dir.join("searxng-config");
+
+    // Create directories
+    fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Failed to create directories: {}", e))?;
+
+    // Write docker-compose.yml
+    let compose_content = r#"version: '3'
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: kondi-searxng
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./searxng-config:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+"#;
+
+    let compose_path = docker_dir.join("docker-compose.yml");
+    fs::write(&compose_path, compose_content)
+        .map_err(|e| format!("Failed to write docker-compose.yml: {}", e))?;
+
+    // Write settings.yml
+    let settings_content = r#"# SearXNG settings for Kondi Search MCP Server
+use_default_settings: true
+
+general:
+  instance_name: "Kondi Search"
+  privacypolicy_url: false
+  donation_url: false
+  contact_url: false
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "kondi-search-secret-key-change-in-production"
+  bind_address: "0.0.0.0:8080"
+  method: "GET"
+  limiter: false
+  image_proxy: false
+
+ui:
+  static_use_hash: true
+  default_theme: simple
+  theme_args:
+    simple_style: dark
+
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+  useragent_suffix: "KondiSearch"
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: w
+    disabled: false
+
+  - name: github
+    engine: github
+    shortcut: gh
+    disabled: false
+
+  - name: stackoverflow
+    engine: stackoverflow
+    shortcut: so
+    disabled: false
+"#;
+
+    let settings_path = config_dir.join("settings.yml");
+    fs::write(&settings_path, settings_content)
+        .map_err(|e| format!("Failed to write settings.yml: {}", e))?;
+
+    println!("[Docker] SearXNG files created at: {:?}", docker_dir);
+    Ok(compose_path.to_string_lossy().to_string())
+}
+
+// ============================================================================
+// MCP Process Cleanup (for app exit)
+// ============================================================================
+
+/// Stop all running MCP processes (called on app exit)
+pub fn stop_all_mcp_processes(state: &AppState) {
+    if let Ok(mut processes) = state.mcp_processes.lock() {
+        let server_ids: Vec<String> = processes.keys().cloned().collect();
+        for server_id in server_ids {
+            if let Some(mut process) = processes.remove(&server_id) {
+                println!("[MCP] Stopping MCP process on exit: {}", server_id);
+                let _ = process.child.kill();
+                let _ = process.child.wait();
+            }
+        }
+        println!("[MCP] All MCP processes stopped");
+    }
 }

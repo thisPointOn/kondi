@@ -15,6 +15,7 @@ export interface MCPServer {
   messageEndpoint?: string; // For SSE transport - the endpoint to POST JSON-RPC commands to
   type?: 'remote' | 'github_mcp_local';
   metadata?: Record<string, any>;
+  autoConnect?: boolean; // If true, attempt to connect automatically on app startup
 }
 
 export interface MCPTool {
