@@ -4283,9 +4283,15 @@ pub async fn reauthenticate_proxy(
     // Save the updated config with new credentials
     save_proxy_config(config.clone())?;
 
+    // Verify config was written correctly by reading it back
+    let verify_config = get_proxy_config(proxy_id.clone())?;
+    if verify_config.oauth.as_ref().and_then(|o| o.access_token.as_ref()).is_none() {
+        return Err("Config verification failed: access_token not found after write".into());
+    }
+    println!("[Proxy] Config write verified - access_token present");
+
     // Give the filesystem time to fully flush the config file
-    // This prevents race conditions where proxy reads stale config
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Restart the proxy with fresh credentials
     let port = start_proxy(proxy_id.clone(), state)?;

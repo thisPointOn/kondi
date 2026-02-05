@@ -10,11 +10,14 @@ import './CouncilLibrary.css';
 interface CouncilLibraryProps {
   onCouncilSelect: (id: string) => void;
   onCouncilCreate: (council: Council) => void;
+  /** Global default working directory from app settings */
+  defaultWorkingDirectory?: string;
 }
 
 export default function CouncilLibrary({
   onCouncilSelect,
   onCouncilCreate,
+  defaultWorkingDirectory,
 }: CouncilLibraryProps) {
   const [councils, setCouncils] = useState<Council[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -127,6 +130,8 @@ export default function CouncilLibrary({
         maxRetries: 2,
         requirePlan: false,
         consultantExecution: 'sequential',  // Consultants see each other's responses
+        workingDirectory: defaultWorkingDirectory || undefined,
+        directoryConstrained: true,
       },
     });
 
@@ -277,6 +282,35 @@ export default function CouncilLibrary({
                     }).length - 4}
                   </span>
                 )}
+              </div>
+
+              {/* Save Output */}
+              <div className="council-save-output" onClick={(e) => e.stopPropagation()}>
+                <span className="save-output-label">Save output:</span>
+                <select
+                  className="save-output-select"
+                  value={
+                    !council.deliberation?.saveDeliberation ? 'none'
+                      : council.deliberation.saveDeliberationMode === 'abbreviated' ? 'abbreviated'
+                      : 'full'
+                  }
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (council.deliberation) {
+                      councilStore.update(council.id, {
+                        deliberation: {
+                          ...council.deliberation,
+                          saveDeliberation: val !== 'none',
+                          saveDeliberationMode: val === 'abbreviated' ? 'abbreviated' : 'full',
+                        },
+                      });
+                    }
+                  }}
+                >
+                  <option value="none">None</option>
+                  <option value="abbreviated">Summary</option>
+                  <option value="full">Full</option>
+                </select>
               </div>
 
               <div className="council-card-footer">

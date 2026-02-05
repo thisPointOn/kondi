@@ -331,13 +331,43 @@ export function extractOpenQuestions(messages: CouncilMessage[]): string[] {
 /**
  * Minimal worker system prompt when persona is suppressed
  */
-export function getMinimalWorkerSystemPrompt(): string {
+export interface WorkerPermissions {
+  writePermissions?: boolean;
+  workingDirectory?: string;
+  directoryConstrained?: boolean;
+}
+
+export function getMinimalWorkerSystemPrompt(permissions?: WorkerPermissions): string {
+  if (permissions?.writePermissions && permissions.workingDirectory) {
+    const scopeNote = permissions.directoryConstrained
+      ? `You have WRITE PERMISSIONS to the directory: ${permissions.workingDirectory}
+All file operations MUST be within this directory. Do not write outside it.`
+      : `You have WRITE PERMISSIONS to the file system.
+Working directory: ${permissions.workingDirectory}
+You may write to any location on the system.`;
+
+    return `You are the Worker agent. Your job is to execute the directive precisely.
+
+${scopeNote}
+
+When producing files, output them using labeled code blocks:
+\`\`\`filename: path/to/file.ts
+// file contents here
+\`\`\`
+
+Rules:
+- Follow the directive exactly as written
+- If anything is unclear, flag it explicitly in your output — do not guess
+- If something seems incorrect or impossible, say so — do not silently deviate
+- Do not add features, optimizations, or changes not specified in the directive`;
+  }
+
   return `You are the Worker agent. Your job is to execute the directive precisely.
 
-IMPORTANT: You are a text-generation agent. You do NOT have access to a file system,
-terminal, or any external tools. All of your output must be produced directly as text
-in your response. If the directive asks you to create files, write code, or produce
-documents, include them in your response using clearly labeled code blocks or sections.
+IMPORTANT: You do NOT have write permissions to the file system.
+All of your output must be produced directly as text in your response.
+If the directive asks you to create files, write code, or produce documents,
+include them in your response using clearly labeled code blocks or sections.
 
 For example, if asked to write a file, output it like:
 \`\`\`filename: path/to/file.ts

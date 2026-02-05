@@ -226,6 +226,35 @@
   color: var(--text-secondary, #999);
 }
 
+/* Save Output on Card */
+.council-save-output {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  font-size: 0.8125rem;
+}
+
+.council-save-output .save-output-label {
+  color: var(--text-secondary, #999);
+  font-size: 0.75rem;
+}
+
+.council-save-output .save-output-select {
+  padding: 0.25rem 0.5rem;
+  background: var(--bg-tertiary, #252525);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  color: var(--text-primary, #e5e5e5);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.council-save-output .save-output-select:focus {
+  outline: none;
+  border-color: var(--accent-color, #6366f1);
+}
+
 .council-card-footer {
   display: flex;
   justify-content: space-between;

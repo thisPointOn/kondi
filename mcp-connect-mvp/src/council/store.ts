@@ -160,6 +160,11 @@ export function createCouncil(params: {
       consultantErrorPolicy: params.deliberation?.consultantErrorPolicy ?? 'retry',
       maxRetries: params.deliberation?.maxRetries ?? 2,
       requirePlan: params.deliberation?.requirePlan ?? false,
+      consultantExecution: params.deliberation?.consultantExecution ?? 'sequential',
+      workingDirectory: params.deliberation?.workingDirectory,
+      directoryConstrained: params.deliberation?.directoryConstrained ?? true,
+      saveDeliberation: params.deliberation?.saveDeliberation ?? false,
+      saveDeliberationMode: params.deliberation?.saveDeliberationMode ?? 'full',
     } : undefined,
     // Deliberation state (initialized when deliberation starts)
     deliberationState: undefined,

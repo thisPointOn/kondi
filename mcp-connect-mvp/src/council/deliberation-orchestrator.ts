@@ -77,6 +77,7 @@ import {
   buildWorkerExecutionPrompt,
   buildWorkerRevisionPrompt,
   getMinimalWorkerSystemPrompt,
+  type WorkerPermissions,
 } from './prompts';
 
 // ============================================================================
@@ -878,9 +879,16 @@ export class DeliberationOrchestrator {
     const assignment = getRoleAssignment(council, worker.id);
     const suppressPersona = assignment?.suppressPersona !== false; // Default true for worker
 
+    // Build worker permissions from role assignment + deliberation config
+    const workerPermissions: WorkerPermissions = {
+      writePermissions: assignment?.writePermissions,
+      workingDirectory: council.deliberation?.workingDirectory,
+      directoryConstrained: council.deliberation?.directoryConstrained,
+    };
+
     // Build prompts per Section 9.7
     const systemPrompt = suppressPersona
-      ? getMinimalWorkerSystemPrompt()
+      ? getMinimalWorkerSystemPrompt(workerPermissions)
       : worker.predisposition.systemPrompt;
 
     const userMessage = buildWorkerExecutionPrompt(directive.content);
@@ -1057,9 +1065,16 @@ export class DeliberationOrchestrator {
     const assignment = getRoleAssignment(council, worker.id);
     const suppressPersona = assignment?.suppressPersona !== false;
 
+    // Build worker permissions from role assignment + deliberation config
+    const workerPermissions: WorkerPermissions = {
+      writePermissions: assignment?.writePermissions,
+      workingDirectory: council.deliberation?.workingDirectory,
+      directoryConstrained: council.deliberation?.directoryConstrained,
+    };
+
     // Build prompts per Section 9.7.1
     const systemPrompt = suppressPersona
-      ? getMinimalWorkerSystemPrompt()
+      ? getMinimalWorkerSystemPrompt(workerPermissions)
       : worker.predisposition.systemPrompt;
 
     const userMessage = buildWorkerRevisionPrompt(

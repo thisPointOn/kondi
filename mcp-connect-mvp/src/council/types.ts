@@ -591,6 +591,7 @@ export interface DeliberationRoleAssignment {
   focusArea?: string;            // Consultant specialization (e.g., "security", "UX")
   stance?: string;               // Optional: Consultant's starting position or bias
   suppressPersona?: boolean;     // Default: true for Worker, false for others
+  writePermissions?: boolean;    // Worker: allow disk write operations
 }
 
 /**
@@ -667,6 +668,12 @@ export interface DeliberationConfig {
    * - 'sequential': Each consultant sees previous consultants' responses
    */
   consultantExecution: 'parallel' | 'sequential';  // Default: 'sequential'
+
+  /** Whether to save deliberation output to .kondi/outputs */
+  saveDeliberation?: boolean;
+
+  /** Save mode: 'full' writes 3 files, 'abbreviated' writes 1 summary file */
+  saveDeliberationMode?: 'full' | 'abbreviated';
 }
 
 /**
@@ -696,6 +703,9 @@ export interface DeliberationState {
   currentOutputId?: string;           // Current output artifact ID
 
   errorLog: string[];
+
+  /** Summary generated on completion for the Decision panel */
+  completionSummary?: string;
 }
 
 /**

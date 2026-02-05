@@ -2,11 +2,19 @@ import { useEffect, useMemo, useRef, useState, useCallback, type FC } from 'reac
 import type React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Paperclip, X } from 'lucide-react';
-import type { MCPServer, MCPTool, Message, ToolCall, CollaborationMode } from '../types/mcp';
+import { Paperclip, X, ChevronDown } from 'lucide-react';
+import type { MCPServer, MCPTool, Message, ToolCall } from '../types/mcp';
 import { openaiClient } from '../services/openaiClient';
 import { anthropicClient } from '../services/anthropicClient';
 import { LOCAL_TOOLS, LOCAL_SERVER_ID, localToolsService } from '../services/localTools';
+import {
+  ANTHROPIC_CLI_MODELS,
+  ANTHROPIC_API_MODELS,
+  OPENAI_CLI_MODELS,
+  OPENAI_API_MODELS,
+  DEEPSEEK_MODELS,
+  type ModelDefinition,
+} from '../config/models';
 import './ChatArea.css';
 
 interface AttachedFile {
@@ -83,6 +91,59 @@ const formatFileSize = (bytes: number): string => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+// Provider metadata for display
+interface ProviderMeta {
+  id: string;
+  label: string;
+  shortLabel: string;
+  color: string;
+  legacyId: 'claude' | 'chatgpt';
+  models: ModelDefinition[];
+}
+
+const PROVIDER_META: ProviderMeta[] = [
+  {
+    id: 'anthropic-cli',
+    label: 'Claude CLI (Subscription)',
+    shortLabel: 'Claude CLI',
+    color: '#f97316',
+    legacyId: 'claude',
+    models: ANTHROPIC_CLI_MODELS,
+  },
+  {
+    id: 'anthropic-api',
+    label: 'Anthropic API',
+    shortLabel: 'Anthropic',
+    color: '#f97316',
+    legacyId: 'claude',
+    models: ANTHROPIC_API_MODELS,
+  },
+  {
+    id: 'openai-cli',
+    label: 'Codex CLI (Subscription)',
+    shortLabel: 'Codex CLI',
+    color: '#10a37f',
+    legacyId: 'chatgpt',
+    models: OPENAI_CLI_MODELS,
+  },
+  {
+    id: 'openai-api',
+    label: 'OpenAI API',
+    shortLabel: 'OpenAI',
+    color: '#10a37f',
+    legacyId: 'chatgpt',
+    models: OPENAI_API_MODELS,
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    shortLabel: 'DeepSeek',
+    color: '#6366f1',
+    legacyId: 'chatgpt', // Uses OpenAI-compatible API
+    models: DEEPSEEK_MODELS,
+  },
+];
+
 interface ChatAreaProps {
   chatId: string | null;
   messages: Message[];
@@ -97,27 +158,19 @@ interface ChatAreaProps {
   provider: 'claude' | 'chatgpt';
   anthropicModel?: string;
   openaiModel?: string;
+  /** Which providers are configured/available */
+  configuredProviders?: {
+    'anthropic-cli': boolean;
+    'anthropic-api': boolean;
+    'openai-cli': boolean;
+    'openai-api': boolean;
+    deepseek: boolean;
+  };
+  /** Currently selected provider ID (e.g., 'anthropic-cli', 'openai-api') */
+  selectedProviderId?: string;
+  /** Called when user switches provider/model from the chat header */
+  onProviderModelChange?: (provider: 'claude' | 'chatgpt', providerId: string, modelId: string) => void;
 }
-
-const COLLAB_SYSTEM_PROMPT = `You are collaborating with another AI assistant on ANY topic the user asks about. You are a general-purpose AI - engage with questions on politics, philosophy, technology, science, culture, or anything else.
-
-IMPORTANT RULES:
-- You MUST always provide a substantive response - never end your turn without contributing
-- Build on the other assistant's work constructively
-- If they wrote code, review it and suggest specific improvements
-- If they made suggestions, consider them carefully and either incorporate them or explain why not
-- Be constructive and specific`;
-
-const DEBATE_SYSTEM_PROMPT = `You are in a debate with another AI assistant on ANY topic the user asks about. You are a general-purpose AI - engage with debates on politics, philosophy, technology, ethics, science, culture, or anything else the user wants to discuss.
-
-IMPORTANT RULES:
-- You MUST always provide a substantive response - never end your turn without contributing
-- Keep your responses brief (2-3 paragraphs max)
-- Present your perspective clearly and respond to the other's points
-- Be respectful but don't just agree - challenge ideas constructively
-- Take a clear position, even if you acknowledge nuance`;
-
-const DEFAULT_TURNS = 3;
 
 const ChatArea: FC<ChatAreaProps> = ({
   chatId,
@@ -133,19 +186,37 @@ const ChatArea: FC<ChatAreaProps> = ({
   provider,
   anthropicModel = 'claude-sonnet-4-20250514',
   openaiModel = 'gpt-5.2-codex',
+  configuredProviders = {
+    'anthropic-cli': true,
+    'anthropic-api': true,
+    'openai-cli': true,
+    'openai-api': true,
+    deepseek: false,
+  },
+  selectedProviderId = 'anthropic-cli',
+  onProviderModelChange,
 }) => {
   const [inputValue, setInputValue] = useState('');
   const [showToolAutocomplete, setShowToolAutocomplete] = useState(false);
   const [sending, setSending] = useState(false);
-  const [collaborationMode, setCollaborationMode] = useState<CollaborationMode>('single');
-  const [currentTurn, setCurrentTurn] = useState(0);
-  const [maxTurns, setMaxTurns] = useState(DEFAULT_TURNS);
   const [activeProvider, setActiveProvider] = useState<'claude' | 'chatgpt' | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
   const stopRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+
+  // Get current model name for display
+  const currentModel = provider === 'claude' ? anthropicModel : openaiModel;
+  const activeProviderMeta = PROVIDER_META.find((p) => p.id === selectedProviderId);
+  const activeModelDef = activeProviderMeta?.models.find((m) => m.id === currentModel);
+
+  // Available (configured) providers
+  const availableProviders = PROVIDER_META.filter(
+    (p) => configuredProviders[p.id as keyof typeof configuredProviders]
+  );
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -166,6 +237,18 @@ const ChatArea: FC<ChatAreaProps> = ({
       setShowToolAutocomplete(false);
     }
   }, [chatId]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!showModelDropdown) return;
+    const handleClick = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowModelDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showModelDropdown]);
 
   // Tools computed for autocomplete are handled in ToolAutocomplete component
   const _allTools = useMemo(
@@ -336,17 +419,9 @@ const ChatArea: FC<ChatAreaProps> = ({
   const handleSendMessage = async () => {
     if (!inputValue.trim() || sending || !chatId) return;
 
-    // Check API keys based on mode
-    if (collaborationMode === 'single') {
-      if (!apiKey) {
-        alert(`Please set your ${provider === 'chatgpt' ? 'OpenAI' : 'Anthropic'} API key in settings.`);
-        return;
-      }
-    } else {
-      if (!anthropicKey || !openaiKey) {
-        alert('Collaboration modes require both OpenAI and Anthropic API keys. Please set them in settings.');
-        return;
-      }
+    if (!apiKey) {
+      alert(`Please set your ${provider === 'chatgpt' ? 'OpenAI' : 'Anthropic'} API key or configure CLI auth in settings.`);
+      return;
     }
 
     // Build message content including attached files
@@ -373,66 +448,10 @@ const ChatArea: FC<ChatAreaProps> = ({
     setShowToolAutocomplete(false);
     setSending(true);
     stopRef.current = false;
-    setCurrentTurn(0);
 
     try {
-      if (collaborationMode === 'single') {
-        // Single mode - just one provider responds
-        const message = await callProvider(provider, currentMessages);
-        onMessagesChange([...currentMessages, message]);
-      } else {
-        // Collaboration or Debate mode
-        const modePrompt = collaborationMode === 'collaborate' ? COLLAB_SYSTEM_PROMPT : DEBATE_SYSTEM_PROMPT;
-
-        // Determine starting provider and order
-        const providers: ('claude' | 'chatgpt')[] =
-          collaborationMode === 'collaborate'
-            ? ['claude', 'chatgpt', 'claude'] // Claude drafts, ChatGPT reviews, Claude refines
-            : ['claude', 'chatgpt']; // Alternate for debate
-
-        for (let turn = 0; turn < maxTurns * 2 && !stopRef.current; turn++) {
-          const currentProvider = providers[turn % providers.length];
-          setCurrentTurn(turn + 1);
-
-          // Add context about the turn for the AI
-          let turnContext = modePrompt;
-          if (collaborationMode === 'collaborate') {
-            if (turn === 0) {
-              turnContext += '\n\nYou are starting. Provide your initial response or solution.';
-            } else if (turn % 3 === 1) {
-              turnContext += '\n\nReview the previous response and suggest specific improvements.';
-            } else {
-              turnContext += '\n\nConsider the suggestions and provide a refined response. Accept good suggestions, explain if you disagree with any.';
-            }
-          } else {
-            // Debate mode
-            if (turn === 0) {
-              turnContext += '\n\nYou are starting the debate. Present your perspective.';
-            } else {
-              turnContext += '\n\nRespond to the previous points. Keep it brief.';
-            }
-          }
-
-          const message = await callProvider(currentProvider, currentMessages, turnContext);
-          currentMessages = [...currentMessages, message];
-          onMessagesChange(currentMessages);
-
-          // In collaborate mode, stop after 3 turns (draft, review, refine)
-          if (collaborationMode === 'collaborate' && turn >= 2) {
-            break;
-          }
-
-          // In debate mode, continue until max turns or stopped
-          if (collaborationMode === 'debate' && turn >= maxTurns * 2 - 1) {
-            break;
-          }
-
-          // Small delay between turns for readability
-          if (!stopRef.current) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-          }
-        }
-      }
+      const message = await callProvider(provider, currentMessages);
+      onMessagesChange([...currentMessages, message]);
     } catch (error) {
       const errMessage: Message = {
         id: crypto.randomUUID(),
@@ -451,56 +470,77 @@ const ChatArea: FC<ChatAreaProps> = ({
     } finally {
       setSending(false);
       setActiveProvider(null);
-      setCurrentTurn(0);
+    }
+  };
+
+  // Handle provider/model switch
+  const handleSelectModel = (providerMeta: ProviderMeta, modelId: string) => {
+    setShowModelDropdown(false);
+    if (onProviderModelChange) {
+      onProviderModelChange(providerMeta.legacyId, providerMeta.id, modelId);
     }
   };
 
   return (
     <main className="chat-area">
-      {/* Mode selector header */}
-      <div className="mode-selector">
-        <div className="mode-buttons">
-          <button
-            className={`mode-btn ${collaborationMode === 'single' ? 'active' : ''}`}
-            onClick={() => setCollaborationMode('single')}
-            disabled={sending}
-          >
-            Single
-          </button>
-          <button
-            className={`mode-btn ${collaborationMode === 'collaborate' ? 'active' : ''}`}
-            onClick={() => setCollaborationMode('collaborate')}
-            disabled={sending}
-          >
-            Collaborate
-          </button>
-          <button
-            className={`mode-btn ${collaborationMode === 'debate' ? 'active' : ''}`}
-            onClick={() => setCollaborationMode('debate')}
-            disabled={sending}
-          >
-            Debate
-          </button>
-        </div>
-        {collaborationMode === 'debate' && (
-          <div className="turns-selector">
-            <label>Rounds:</label>
-            <select
-              value={maxTurns}
-              onChange={(e) => setMaxTurns(Number(e.target.value))}
-              disabled={sending}
-            >
-              <option value={2}>2</option>
-              <option value={3}>3</option>
-              <option value={5}>5</option>
-            </select>
-          </div>
-        )}
-        {sending && collaborationMode !== 'single' && (
-          <div className="turn-indicator">
-            <span className={`provider-dot ${activeProvider}`} />
-            <span>Turn {currentTurn}{collaborationMode === 'debate' ? ` / ${maxTurns * 2}` : ''}</span>
-            <button className="stop-btn" onClick={handleStop}>Stop</button>
+      {/* Provider/Model selector header */}
+      <div className="model-selector-bar" ref={dropdownRef}>
+        <button
+          className="active-model-btn"
+          onClick={() => setShowModelDropdown(!showModelDropdown)}
+          disabled={sending}
+        >
+          <span
+            className="provider-color-dot"
+            style={{ backgroundColor: activeProviderMeta?.color || '#888' }}
+          />
+          <span className="active-model-name">
+            {activeModelDef?.name || currentModel}
+          </span>
+          <span className="active-provider-name">
+            {activeProviderMeta?.shortLabel || selectedProviderId}
+          </span>
+          <ChevronDown size={14} className={`model-chevron ${showModelDropdown ? 'open' : ''}`} />
+        </button>
+
+        {showModelDropdown && (
+          <div className="provider-model-dropdown">
+            {availableProviders.map((pm) => {
+              const isActiveProvider = pm.id === selectedProviderId;
+              return (
+                <div
+                  key={pm.id}
+                  className={`provider-tile ${isActiveProvider ? 'active' : ''}`}
+                >
+                  <div className="provider-tile-header">
+                    <span
+                      className="provider-tile-dot"
+                      style={{ backgroundColor: pm.color }}
+                    />
+                    <span className="provider-tile-name">{pm.label}</span>
+                  </div>
+                  <div className="provider-tile-models">
+                    {pm.models.map((model) => {
+                      const isCurrentModel = isActiveProvider && model.id === currentModel;
+                      return (
+                        <button
+                          key={model.id}
+                          className={`model-option-btn ${isCurrentModel ? 'current' : ''}`}
+                          onClick={() => handleSelectModel(pm, model.id)}
+                        >
+                          <span className="model-option-name">{model.name}</span>
+                          <span className="model-option-cost">{model.costDisplay}</span>
+                          {isCurrentModel && <span className="model-check">&#10003;</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+            {availableProviders.length === 0 && (
+              <div className="no-providers">No providers configured. Set up API keys or CLI auth in Settings.</div>
+            )}
           </div>
         )}
       </div>
@@ -527,14 +567,8 @@ const ChatArea: FC<ChatAreaProps> = ({
 
         {messages.length === 0 && (
           <div className="empty-chat">
-            <div className="empty-icon">👋</div>
-            <div>
-              {collaborationMode === 'single'
-                ? 'Start a conversation with your MCP-enabled assistant'
-                : collaborationMode === 'collaborate'
-                  ? 'Ask a question and watch Claude & ChatGPT collaborate'
-                  : 'Start a debate between Claude & ChatGPT'}
-            </div>
+            <div className="empty-icon">&#128075;</div>
+            <div>Start a conversation with your MCP-enabled assistant</div>
           </div>
         )}
         <div ref={bottomRef} />
@@ -586,13 +620,7 @@ const ChatArea: FC<ChatAreaProps> = ({
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder={
-              collaborationMode === 'single'
-                ? 'Type @ to mention tools...'
-                : collaborationMode === 'collaborate'
-                  ? 'Ask something for Claude & ChatGPT to work on together...'
-                  : 'Give a topic for Claude & ChatGPT to debate...'
-            }
+            placeholder="Type @ to mention tools..."
             className="chat-input"
             rows={1}
           />
@@ -614,7 +642,7 @@ const ChatArea: FC<ChatAreaProps> = ({
             onClick={handleSendMessage}
             disabled={(!inputValue.trim() && attachedFiles.length === 0) || sending}
           >
-            ↑
+            &#8593;
           </button>
         </div>
       </div>
@@ -705,9 +733,9 @@ const ToolCallBadge: FC<{ toolCall: ToolCall; serverName: string }> = ({
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="tool-call-badge" onClick={() => setExpanded((p) => !p)}>
-      <span>⚡</span>
+      <span>&#9889;</span>
       <span>{toolCall.toolName}</span>
-      <span className="server-name">• {serverName}</span>
+      <span className="server-name">&bull; {serverName}</span>
       <span className={`tool-status ${toolCall.status}`}>[{toolCall.status}]</span>
 
       {expanded && toolCall.result && (

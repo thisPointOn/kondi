@@ -1,4 +1,4 @@
-import { Plus, Settings, ChevronDown, Check, Zap, MessageSquare, PanelLeftClose, PanelLeft, Workflow, Sparkles, Cpu, Play, Users, AlertCircle, Server } from 'lucide-react';
+import { Plus, Settings, ChevronDown, Check, Zap, MessageSquare, PanelLeftClose, PanelLeft, Workflow, Cpu, Users, AlertCircle, Server } from 'lucide-react';
 import { useEffect, useState, type FC } from 'react';
 import './Sidebar.css';
 
@@ -8,7 +8,7 @@ type SidebarChat = {
   timestamp?: string;
 };
 
-export type AppView = 'chat' | 'settings' | 'workflows' | 'planner' | 'executions' | 'providers' | 'services' | 'council';
+export type AppView = 'chat' | 'settings' | 'pipelines' | 'providers' | 'services' | 'council';
 
 interface SidebarProps {
   currentView: AppView;
@@ -169,30 +169,12 @@ const Sidebar: FC<SidebarProps> = ({
       )}
 
       <button
-        className={`nav-btn ${currentView === 'workflows' ? 'active' : ''}`}
-        onClick={() => onViewChange('workflows')}
-        title="Workflows"
+        className={`nav-btn ${currentView === 'pipelines' ? 'active' : ''}`}
+        onClick={() => onViewChange('pipelines')}
+        title="Pipelines"
       >
         <Workflow size={18} />
-        {!collapsed && <span>Workflows</span>}
-      </button>
-
-      <button
-        className={`nav-btn ${currentView === 'planner' ? 'active' : ''}`}
-        onClick={() => onViewChange('planner')}
-        title="Workflow Designer"
-      >
-        <Sparkles size={18} />
-        {!collapsed && <span>Workflow Designer</span>}
-      </button>
-
-      <button
-        className={`nav-btn ${currentView === 'executions' ? 'active' : ''}`}
-        onClick={() => onViewChange('executions')}
-        title="Executions"
-      >
-        <Play size={18} />
-        {!collapsed && <span>Executions</span>}
+        {!collapsed && <span>Pipelines</span>}
       </button>
 
       <button

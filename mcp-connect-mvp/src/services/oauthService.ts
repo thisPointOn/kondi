@@ -224,8 +224,19 @@ class OAuthService {
     const profile = this.profiles.get(provider);
     if (!profile?.tokens?.access_token) return false;
     if (profile.status !== 'active') return false;
-    // Also check if token is expired (with a small buffer)
-    // Tokens that need refresh within the buffer are still "connected" since refresh will happen
+    // Check if token is fully expired (past expiry, not just needs refresh)
+    // Tokens that need refresh are still "connected" since refresh will happen in getAccessToken()
+    // But fully expired tokens with no refresh_token are not connected
+    if (profile.tokens.expires_at && Date.now() >= profile.tokens.expires_at) {
+      // Token is expired — only still "connected" if we have a refresh token to recover
+      if (!profile.tokens.refresh_token) {
+        console.log(`[OAuth] ${provider} token expired with no refresh token — marking disconnected`);
+        profile.status = 'expired';
+        this.saveToStorage();
+        return false;
+      }
+      // Has refresh token — still considered connected (refresh will happen on next getAccessToken call)
+    }
     return true;
   }
 

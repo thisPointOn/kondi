@@ -3,10 +3,9 @@ import { ChevronDown } from 'lucide-react';
 import Sidebar, { type AppView } from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import ToolsPanel from './components/ToolsPanel';
-import WorkflowLibrary from './components/WorkflowLibrary';
-import PlannerChat from './components/PlannerChat';
-import ExecutionMonitor from './components/ExecutionMonitor';
 import ProviderSettings from './components/ProviderSettings';
+import { PipelineLibrary, PipelineBuilder, PipelineExecutionView } from './components/pipeline';
+import { pipelineStore, PipelineExecutor, type PipelineExecutorCallbacks } from './pipeline';
 import SearchServicePanel from './components/SearchServicePanel';
 import { initializeSearchService, getSearchServiceStatus } from './services/searchService';
 import { CouncilLibrary, CouncilView } from './components/council';
@@ -26,6 +25,7 @@ import type { MCPServer, MCPTool, Message } from './types/mcp';
 import { getModelsForProviderSettings } from './config/models';
 import './App.css';
 import { invoke } from '@tauri-apps/api/core';
+import { open as tauriOpen } from '@tauri-apps/plugin-dialog';
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 import pkg from '../package.json';
@@ -35,27 +35,6 @@ type SubscriptionPlan = 'free' | 'pro' | 'lifetime';
 const APP_VERSION = (pkg?.version as string) || '0.0.0';
 const MAX_CHATS = 20;
 const CHAT_STORAGE_KEY = 'mcp-chats';
-const WORKFLOW_STORAGE_KEY = 'mcp-workflows';
-
-// Workflow types
-interface WorkflowStep {
-  id: string;
-  name: string;
-  type: string;
-  description?: string;
-}
-
-interface WorkflowSpec {
-  id: string;
-  name: string;
-  description?: string;
-  status: 'draft' | 'ready';
-  steps: WorkflowStep[];
-  inputs?: Array<{ name: string; type: string; required?: boolean }>;
-  outputs?: Array<{ name: string; type: string }>;
-  createdAt: string;
-  updatedAt: string;
-}
 
 function App() {
   const [currentView, setCurrentView] = useState<AppView>('chat');
@@ -105,17 +84,20 @@ function App() {
     return saved === 'light' ? 'light' : 'dark';
   });
   const [hasLoadedChats, setHasLoadedChats] = useState(false);
-  const [currentExecutionId, setCurrentExecutionId] = useState<string | null>(null);
-
-  // Workflow state
-  const [workflows, setWorkflows] = useState<WorkflowSpec[]>([]);
-  const [hasLoadedWorkflows, setHasLoadedWorkflows] = useState(false);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
-  const [editingWorkflowId, setEditingWorkflowId] = useState<string | null>(null);
+  // Pipeline state
+  const [currentPipelineId, setCurrentPipelineId] = useState<string | null>(null);
+  const [pipelineMode, setPipelineMode] = useState<'library' | 'builder' | 'execution'>('library');
+  const [gateResolvers, setGateResolvers] = useState<Map<string, (approved: boolean) => void>>(new Map());
+  const [pipelineExecutor, setPipelineExecutor] = useState<PipelineExecutor | null>(null);
 
   // Council state
   const [currentCouncilId, setCurrentCouncilId] = useState<string | null>(null);
   const [thinkingPersonas, setThinkingPersonas] = useState<import('./council/types').Persona[]>([]);
+
+  // Global working directory (default for all councils)
+  const [globalWorkingDirectory, setGlobalWorkingDirectory] = useState(() => {
+    return localStorage.getItem('kondi-global-working-directory') || '';
+  });
 
   // CLI OAuth credentials state
   const [cliCredentials, setCLICredentials] = useState<{
@@ -204,11 +186,23 @@ function App() {
             console.log('[App] Claude CLI wrapper mode restored, version:', cliStatus.version);
           } else {
             console.warn('[App] Claude CLI no longer available, disabling wrapper mode');
+            anthropicClient.setUseCliWrapper(false);
             localStorage.removeItem('anthropic-use-cli-wrapper');
+            // Fall through to try other OAuth methods below
           }
-        } else if (savedAnthropicAuth === 'oauth') {
-          // Fallback to other auth methods
-          if (anthropicOAuth.connected) {
+        }
+
+        // If CLI wrapper is NOT active (either never was, or just disabled above), try other OAuth methods
+        if (!anthropicClient.getAuthMethod().startsWith('cli') && savedAnthropicAuth === 'oauth') {
+          // Try proactive token refresh first
+          if (anthropicOAuth.status === 'active' || oauthService.needsRefresh('anthropic')) {
+            const refreshResult = await oauthService.tryRefresh('anthropic');
+            if (!refreshResult.success && refreshResult.error) {
+              console.warn('[App] Anthropic OAuth token refresh failed at startup:', refreshResult.error);
+            }
+          }
+
+          if (oauthService.isConnected('anthropic')) {
             anthropicClient.setUseOAuth(true);
             console.log('[App] Anthropic OAuth enabled via oauthService');
           } else if (creds.claude?.available) {
@@ -219,10 +213,18 @@ function App() {
                 anthropicClient.setOAuthToken(token);
                 anthropicClient.setUseOAuth(true);
                 console.log('[App] Claude OAuth token loaded from CLI (fallback)');
+              } else {
+                console.warn('[App] Claude CLI token unavailable, clearing OAuth mode');
+                anthropicClient.setUseOAuth(false);
               }
             } catch (err) {
               console.warn('[App] Failed to get Claude OAuth token:', err);
+              anthropicClient.setUseOAuth(false);
             }
+          } else {
+            // No OAuth source available — explicitly disable OAuth mode
+            console.warn('[App] No Anthropic OAuth credentials found, disabling OAuth mode');
+            anthropicClient.setUseOAuth(false);
           }
         }
 
@@ -239,12 +241,23 @@ function App() {
             console.log('[App] Codex CLI wrapper mode restored, version:', cliStatus.version);
           } else {
             console.warn('[App] Codex CLI no longer available, disabling wrapper mode');
+            openaiClient.setUseCliWrapper(false);
             localStorage.removeItem('openai-use-cli-wrapper');
+            // Fall through to try other OAuth methods below
           }
-        } else if (savedOpenAIAuth === 'oauth') {
-          // Fallback to other auth methods
-          if (openaiOAuth.connected) {
-            // Use oauthService tokens (proper OAuth implementation)
+        }
+
+        // If CLI wrapper is NOT active (either never was, or just disabled above), try other OAuth methods
+        if (!openaiClient.getAuthMethod().startsWith('cli') && savedOpenAIAuth === 'oauth') {
+          // Try proactive token refresh first
+          if (openaiOAuth.status === 'active' || oauthService.needsRefresh('openai')) {
+            const refreshResult = await oauthService.tryRefresh('openai');
+            if (!refreshResult.success && refreshResult.error) {
+              console.warn('[App] OpenAI OAuth token refresh failed at startup:', refreshResult.error);
+            }
+          }
+
+          if (oauthService.isConnected('openai')) {
             openaiClient.setUseOAuth(true);
             console.log('[App] OpenAI OAuth enabled via oauthService');
           } else if (creds.codex?.available) {
@@ -255,10 +268,18 @@ function App() {
                 openaiClient.setOAuthToken(token);
                 openaiClient.setUseOAuth(true);
                 console.log('[App] Codex OAuth token loaded from CLI (fallback)');
+              } else {
+                console.warn('[App] Codex CLI token unavailable, clearing OAuth mode');
+                openaiClient.setUseOAuth(false);
               }
             } catch (err) {
               console.warn('[App] Failed to get Codex OAuth token:', err);
+              openaiClient.setUseOAuth(false);
             }
+          } else {
+            // No OAuth source available — explicitly disable OAuth mode
+            console.warn('[App] No OpenAI OAuth credentials found, disabling OAuth mode');
+            openaiClient.setUseOAuth(false);
           }
         }
 
@@ -381,34 +402,13 @@ function App() {
     localStorage.setItem('kondi-anthropic-model', anthropicModel);
   }, [anthropicModel]);
 
-  // Load workflows from storage on mount
   useEffect(() => {
-    (async () => {
-      try {
-        // Try localStorage first
-        const saved = localStorage.getItem(WORKFLOW_STORAGE_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved) as WorkflowSpec[];
-          console.log('[App] Loaded', parsed.length, 'workflows from storage');
-          setWorkflows(parsed);
-        }
-      } catch (e) {
-        console.warn('[App] Failed to load workflows:', e);
-      }
-      setHasLoadedWorkflows(true);
-    })();
-  }, []);
-
-  // Persist workflows when they change
-  useEffect(() => {
-    if (!hasLoadedWorkflows) return;
-    try {
-      localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(workflows));
-      console.log('[App] Saved', workflows.length, 'workflows to storage');
-    } catch (e) {
-      console.warn('[App] Failed to save workflows:', e);
+    if (globalWorkingDirectory) {
+      localStorage.setItem('kondi-global-working-directory', globalWorkingDirectory);
+    } else {
+      localStorage.removeItem('kondi-global-working-directory');
     }
-  }, [workflows, hasLoadedWorkflows]);
+  }, [globalWorkingDirectory]);
 
   // Load existing server state from the MCP client
   const refreshServers = () => {
@@ -1329,138 +1329,104 @@ function App() {
 
       <div className="main-column">
         {/* Validation errors now shown in Provider Settings instead of banner */}
-        {currentView === 'workflows' ? (
-          <WorkflowLibrary
-            workflows={workflows.map((w) => ({
-              id: w.id,
-              name: w.name,
-              description: w.description,
-              status: w.status,
-              stepCount: w.steps?.length || 0,
-              createdAt: w.createdAt,
-              updatedAt: w.updatedAt,
-            }))}
-            selectedWorkflowId={selectedWorkflowId}
-            onWorkflowSelect={(id) => {
-              setSelectedWorkflowId(id);
-            }}
-            onWorkflowCreate={() => {
-              setEditingWorkflowId(null);
-              setCurrentView('planner');
-            }}
-            onWorkflowDelete={(id) => {
-              setWorkflows((prev) => prev.filter((w) => w.id !== id));
-              if (selectedWorkflowId === id) setSelectedWorkflowId(null);
-            }}
-            onWorkflowDuplicate={(id) => {
-              const workflow = workflows.find((w) => w.id === id);
-              if (workflow) {
-                const newId = crypto.randomUUID();
-                const duplicate: WorkflowSpec = {
-                  ...workflow,
-                  id: newId,
-                  name: `${workflow.name} (Copy)`,
-                  status: 'draft',
-                  createdAt: new Date().toISOString(),
-                  updatedAt: new Date().toISOString(),
-                };
-                setWorkflows((prev) => [duplicate, ...prev]);
-                setSelectedWorkflowId(newId);
-              }
-            }}
-            onWorkflowEdit={(id) => {
-              setEditingWorkflowId(id);
-              setCurrentView('planner');
-            }}
-            onWorkflowRun={(id) => {
-              setCurrentExecutionId(id);
-              setCurrentView('executions');
-            }}
-            onStartPlanning={() => {
-              setEditingWorkflowId(null);
-              setCurrentView('planner');
-            }}
-          />
-        ) : currentView === 'executions' ? (
-          <ExecutionMonitor
-            execution={null}
-            onRetry={() => {
-              console.log('Retry execution');
-            }}
-            onApprove={(stepId, approved) => {
-              console.log('Approve step:', stepId, approved);
-            }}
-            onAbort={() => {
-              console.log('Abort execution');
-              setCurrentView('workflows');
-            }}
-          />
-        ) : currentView === 'planner' ? (
-          <PlannerChat
-            provider={provider === 'claude' ? 'anthropic' : 'openai'}
-            model={provider === 'claude' ? anthropicModel : openaiModel}
-            initialWorkflow={editingWorkflowId ? (() => {
-              const w = workflows.find((wf) => wf.id === editingWorkflowId);
-              if (!w) return undefined;
-              return {
-                name: w.name,
-                description: w.description,
-                steps: w.steps?.map((s) => ({
-                  id: s.id,
-                  name: s.name,
-                  type: (s.type || 'tool') as 'llm' | 'tool' | 'human' | 'conditional' | 'parallel',
-                  description: s.description,
-                })),
-                inputs: w.inputs,
-                outputs: w.outputs,
-                status: w.status as 'draft' | 'ready',
-              };
-            })() : undefined}
-            onComplete={(spec) => {
-              const now = new Date().toISOString();
-              if (editingWorkflowId) {
-                // Update existing workflow
-                setWorkflows((prev) =>
-                  prev.map((w) =>
-                    w.id === editingWorkflowId
-                      ? {
-                          ...w,
-                          name: spec.name || w.name,
-                          description: spec.description,
-                          steps: spec.steps || [],
-                          inputs: spec.inputs,
-                          outputs: spec.outputs,
-                          status: (spec as any).status || 'draft',
-                          updatedAt: now,
-                        }
-                      : w
-                  )
-                );
-                setSelectedWorkflowId(editingWorkflowId);
-              } else {
-                // Create new workflow
-                const newWorkflow: WorkflowSpec = {
-                  id: crypto.randomUUID(),
-                  name: spec.name || 'Untitled Workflow',
-                  description: spec.description,
-                  status: (spec as any).status || 'draft',
-                  steps: spec.steps || [],
-                  inputs: spec.inputs,
-                  outputs: spec.outputs,
-                  createdAt: now,
-                  updatedAt: now,
-                };
-                setWorkflows((prev) => [newWorkflow, ...prev]);
-                setSelectedWorkflowId(newWorkflow.id);
-              }
-              setEditingWorkflowId(null);
-              setCurrentView('workflows');
-            }}
-            onCancel={() => {
-              setEditingWorkflowId(null);
-              setCurrentView('workflows');
-            }}
-          />
+        {currentView === 'pipelines' ? (
+          pipelineMode === 'execution' && currentPipelineId ? (
+            <PipelineExecutionView
+              pipelineId={currentPipelineId}
+              onBack={() => {
+                setPipelineMode('builder');
+              }}
+              onAbort={() => {
+                pipelineExecutor?.abort();
+                setPipelineMode('builder');
+              }}
+              gateResolvers={gateResolvers}
+              onCouncilDrillDown={(councilId) => {
+                setCurrentCouncilId(councilId);
+                setCurrentView('council');
+              }}
+            />
+          ) : pipelineMode === 'builder' && currentPipelineId ? (
+            <PipelineBuilder
+              pipelineId={currentPipelineId}
+              onBack={() => {
+                setCurrentPipelineId(null);
+                setPipelineMode('library');
+              }}
+              onRun={(id) => {
+                // Create and run the executor
+                const resolverMap = new Map<string, (approved: boolean) => void>();
+                setGateResolvers(resolverMap);
+
+                const executor = new PipelineExecutor({
+                  invokeAgent: async (invocation, persona) => {
+                    const result = await llmAdapter.complete({
+                      model: persona.model,
+                      provider: persona.provider,
+                      systemPrompt: invocation.systemPrompt,
+                      userMessage: invocation.userMessage,
+                      temperature: persona.temperature,
+                    });
+                    return result;
+                  },
+                  llmComplete: async (params) => {
+                    const result = await llmAdapter.complete({
+                      model: params.model,
+                      provider: params.provider,
+                      systemPrompt: params.systemPrompt,
+                      userMessage: params.userMessage,
+                    });
+                    return { content: result.content, tokensUsed: result.tokensUsed };
+                  },
+                  onStageStart: (idx) => console.log(`[Pipeline] Stage ${idx} started`),
+                  onStageComplete: (idx) => console.log(`[Pipeline] Stage ${idx} completed`),
+                  onStepStart: (stepId) => console.log(`[Pipeline] Step ${stepId} started`),
+                  onStepComplete: (stepId) => console.log(`[Pipeline] Step ${stepId} completed`),
+                  onStepError: (stepId, error) => console.error(`[Pipeline] Step ${stepId} failed:`, error),
+                  onGateWaiting: (stepId, prompt) => {
+                    return new Promise<boolean>((resolve) => {
+                      setGateResolvers((prev) => {
+                        const next = new Map(prev);
+                        next.set(stepId, resolve);
+                        return next;
+                      });
+                    });
+                  },
+                  onCouncilCreated: (stepId, councilId) =>
+                    console.log(`[Pipeline] Council ${councilId} created for step ${stepId}`),
+                  onAgentThinkingStart: (persona) => {
+                    setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+                  },
+                  onAgentThinkingEnd: (persona) => {
+                    setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+                  },
+                });
+
+                setPipelineExecutor(executor);
+                setPipelineMode('execution');
+
+                // Run asynchronously
+                executor.run(id).then(() => {
+                  console.log('[Pipeline] Execution completed');
+                  setThinkingPersonas([]);
+                }).catch((err) => {
+                  console.error('[Pipeline] Execution failed:', err);
+                  setThinkingPersonas([]);
+                });
+              }}
+            />
+          ) : (
+            <PipelineLibrary
+              onPipelineSelect={(id) => {
+                setCurrentPipelineId(id);
+                setPipelineMode('builder');
+              }}
+              onPipelineCreate={(pipeline) => {
+                setCurrentPipelineId(pipeline.id);
+                setPipelineMode('builder');
+              }}
+            />
+          )
         ) : currentView === 'council' ? (
           currentCouncilId ? (
             <CouncilView
@@ -1825,6 +1791,7 @@ function App() {
             <CouncilLibrary
               onCouncilSelect={(id) => setCurrentCouncilId(id)}
               onCouncilCreate={(council) => setCurrentCouncilId(council.id)}
+              defaultWorkingDirectory={globalWorkingDirectory}
             />
           )
         ) : currentView === 'providers' ? (
@@ -2492,6 +2459,42 @@ function App() {
               </div>
             </CollapsibleSection>
 
+            <CollapsibleSection title="Working Directory" defaultOpen>
+              <div className="global-directory-setting">
+                <p className="settings-hint">Default working directory for new councils. Each council can override this in its Setup.</p>
+                <div className="directory-input-row">
+                  <input
+                    type="text"
+                    className="directory-input"
+                    placeholder="/path/to/projects"
+                    value={globalWorkingDirectory}
+                    onChange={(e) => setGlobalWorkingDirectory(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="directory-browse-btn"
+                    onClick={async () => {
+                      try {
+                        const selected = await tauriOpen({
+                          directory: true,
+                          multiple: false,
+                          title: 'Select Default Working Directory',
+                          defaultPath: globalWorkingDirectory || undefined,
+                        });
+                        if (selected && typeof selected === 'string') {
+                          setGlobalWorkingDirectory(selected);
+                        }
+                      } catch (err) {
+                        console.error('[Settings] Error selecting directory:', err);
+                      }
+                    }}
+                  >
+                    Browse...
+                  </button>
+                </div>
+              </div>
+            </CollapsibleSection>
+
 {/* Billing section hidden for now
             <CollapsibleSection title="Billing" defaultOpen>
               <div className="billing-content">
@@ -2571,6 +2574,27 @@ function App() {
             provider={provider}
             openaiModel={openaiModel}
             anthropicModel={activeAnthropicModel}
+            configuredProviders={{
+              'anthropic-cli': cliCredentials.claude.available,
+              'anthropic-api': !!anthropicKey,
+              'openai-cli': cliCredentials.codex.available,
+              'openai-api': !!openaiKey,
+              deepseek: false,
+            }}
+            selectedProviderId={selectedProviderId}
+            onProviderModelChange={(legacyId, providerId, modelId) => {
+              setProvider(legacyId);
+              setSelectedProviderId(providerId);
+              localStorage.setItem('kondi-provider', legacyId);
+              localStorage.setItem('kondi-provider-id', providerId);
+              if (legacyId === 'claude') {
+                setAnthropicModel(modelId);
+                localStorage.setItem('kondi-anthropic-model', modelId);
+              } else {
+                setOpenaiModel(modelId);
+                localStorage.setItem('kondi-openai-model', modelId);
+              }
+            }}
           />
         )}
       </div>

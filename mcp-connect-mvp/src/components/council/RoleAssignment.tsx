@@ -18,7 +18,11 @@ import './RoleAssignment.css';
 interface RoleAssignmentProps {
   council: Council;
   onClose: () => void;
-  onSave: (assignments: DeliberationRoleAssignment[], personaUpdates?: Array<{ id: string; model: string; provider: string }>) => void;
+  onSave: (
+    assignments: DeliberationRoleAssignment[],
+    personaUpdates?: Array<{ id: string; model: string; provider: string }>,
+    saveOptions?: { saveDeliberation: boolean; saveDeliberationMode: 'full' | 'abbreviated' }
+  ) => void;
   /** Configured providers with their status */
   configuredProviders?: {
     'anthropic-cli': boolean;
@@ -174,6 +178,7 @@ export default function RoleAssignment({
   // Track model changes per persona
   const [modelChanges, setModelChanges] = useState<Record<string, { model: string; provider: string }>>({});
 
+
   // Track if configuration is saved (starts as true if there are existing assignments)
   const [saved, setSaved] = useState(() => existingAssignments.length > 0);
 
@@ -266,6 +271,15 @@ export default function RoleAssignment({
     setSaved(false);
   };
 
+  const setWritePermissions = (personaId: string, writePermissions: boolean) => {
+    setAssignments((prev) =>
+      prev.map((a) =>
+        a.personaId === personaId ? { ...a, writePermissions } : a
+      )
+    );
+    setSaved(false);
+  };
+
 
   const getRoleCount = (role: DeliberationRole) =>
     assignments.filter((a) => a.role === role).length;
@@ -306,7 +320,10 @@ export default function RoleAssignment({
       provider,
     }));
 
-    onSave(assignments, personaUpdates.length > 0 ? personaUpdates : undefined);
+    onSave(
+      assignments,
+      personaUpdates.length > 0 ? personaUpdates : undefined,
+    );
     setSaved(true);
   };
 
@@ -488,16 +505,50 @@ export default function RoleAssignment({
                 </div>
               )}
 
-              {/* Worker/Manager note about suppression */}
-              {(isWorker || assignment?.role === 'manager') && (
-                <div className="suppress-note">
-                  <span className="suppress-badge">Persona Suppressed</span>
-                  <p className="suppress-hint">
-                    {isWorker
-                      ? 'Worker uses a minimal prompt and follows directives precisely without personality influence.'
-                      : 'Manager uses a minimal prompt focused on evaluation and decision-making.'
-                    }
-                  </p>
+              {/* Worker options */}
+              {isWorker && (
+                <div className="worker-options">
+                  <div className="suppress-note">
+                    <span className="suppress-badge">Persona Suppressed</span>
+                    <p className="suppress-hint">
+                      Worker uses a minimal prompt and follows directives precisely without personality influence.
+                    </p>
+                  </div>
+                  <div className="write-permissions-section">
+                    <label className="write-permissions-toggle">
+                      <input
+                        type="checkbox"
+                        checked={assignment?.writePermissions ?? false}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          setWritePermissions(persona.id, e.target.checked);
+                        }}
+                      />
+                      <span className="write-permissions-label">Write Permissions</span>
+                    </label>
+                    {assignment?.writePermissions && (
+                      <p className="write-permissions-hint">
+                        Worker can produce file writes. Scope is controlled by the Working Directory &amp; Constrained settings in Setup.
+                      </p>
+                    )}
+                    {!assignment?.writePermissions && (
+                      <p className="write-permissions-hint">
+                        Worker output is text-only — no file system access.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Manager options */}
+              {assignment?.role === 'manager' && (
+                <div className="manager-options">
+                  <div className="suppress-note">
+                    <span className="suppress-badge">Persona Suppressed</span>
+                    <p className="suppress-hint">
+                      Manager uses a minimal prompt focused on evaluation and decision-making.
+                    </p>
+                  </div>
                 </div>
               )}
 

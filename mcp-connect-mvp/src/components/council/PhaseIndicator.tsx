@@ -112,25 +112,12 @@ export default function PhaseIndicator({
       </div>
 
       <div className="phase-current">
-        <div className={`phase-badge phase-badge-${phaseInfo.group}`}>
-          {phaseInfo.label}
-        </div>
-        <span className="phase-description">{phaseInfo.description}</span>
         {phaseInfo.group === 'deliberation' && (
           <span className="phase-round">
             Round {currentRound} of {maxRounds}
           </span>
         )}
       </div>
-
-      {isTerminal && (
-        <div className={`phase-terminal-status phase-terminal-${currentPhase}`}>
-          {currentPhase === 'completed' && 'Deliberation completed successfully'}
-          {currentPhase === 'cancelled' && 'Deliberation was cancelled'}
-          {currentPhase === 'failed' && 'Deliberation encountered an error'}
-          {currentPhase === 'paused' && 'Deliberation is paused - click Resume to continue'}
-        </div>
-      )}
     </div>
   );
 }

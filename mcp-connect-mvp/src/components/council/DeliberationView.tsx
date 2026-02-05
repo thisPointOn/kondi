@@ -13,11 +13,15 @@ import type {
   ContextArtifact,
   ContextPatch,
   DeliberationRoleAssignment,
+  DecisionArtifact,
+  PlanArtifact,
+  DirectiveArtifact,
+  OutputArtifact,
 } from '../../council/types';
 import { councilStore, createPersonaFromTemplate, allTemplates, templateCategories } from '../../council';
 import { localToolsService } from '../../services/localTools';
 import { ledgerStore, getAllEntries } from '../../council/ledger-store';
-import { contextStore, getCurrentContext, getPendingPatches, getContextHistory } from '../../council/context-store';
+import { contextStore, getCurrentContext, getPendingPatches, getContextHistory, getDecision, getPlan, getDirective, getLatestOutput, getAllOutputs } from '../../council/context-store';
 import PhaseIndicator from './PhaseIndicator';
 import LedgerEntryCard from './LedgerEntryCard';
 import LedgerTimeline from './LedgerTimeline';
@@ -27,6 +31,7 @@ import PatchReviewPanel from './PatchReviewPanel';
 import ArtifactPanel from './ArtifactPanel';
 import AddPersonaModal from './AddPersonaModal';
 import { acceptPatch, rejectPatch } from '../../council/context-store';
+import { buildAbbreviatedSummary, saveDeliberationOutput } from '../../services/deliberationSaveService';
 import type { PresetPersona } from '../../council/types';
 import './DeliberationView.css';
 
@@ -112,6 +117,11 @@ export default function DeliberationView({
   });
   const [councilName, setCouncilName] = useState('');
   const [councilTopic, setCouncilTopic] = useState('');
+  const [saveMode, setSaveMode] = useState<'none' | 'full' | 'abbreviated'>(() => {
+    const c = councilStore.get(councilId);
+    if (!c?.deliberation?.saveDeliberation) return 'none';
+    return c.deliberation.saveDeliberationMode ?? 'full';
+  });
   const [isAddingPersona, setIsAddingPersona] = useState(false);
   const [editingPersona, setEditingPersona] = useState<Persona | null>(null);
   const ledgerEndRef = useRef<HTMLDivElement>(null);
@@ -134,10 +144,15 @@ export default function DeliberationView({
       if (c?.deliberation?.workingDirectory !== undefined) {
         setWorkingDirectory(c.deliberation.workingDirectory);
       } else if (!workingDirectory) {
-        // Initialize from local tools service if council has no directory set
-        const localDir = localToolsService.getWorkingDirectory();
-        if (localDir) {
-          setWorkingDirectory(localDir);
+        // Fall back to global working directory, then local tools service
+        const globalDir = localStorage.getItem('kondi-global-working-directory');
+        if (globalDir) {
+          setWorkingDirectory(globalDir);
+        } else {
+          const localDir = localToolsService.getWorkingDirectory();
+          if (localDir) {
+            setWorkingDirectory(localDir);
+          }
         }
       }
       if (c?.deliberation?.directoryConstrained !== undefined) {
@@ -178,6 +193,27 @@ export default function DeliberationView({
   useEffect(() => {
     ledgerEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [entries.length]);
+
+  // Auto-save on completion and generate summary
+  useEffect(() => {
+    if (!council) return;
+    const phase = council.deliberationState?.currentPhase;
+    if (phase !== 'completed') return;
+    // Guard against re-triggers
+    if (council.deliberationState?.completionSummary) return;
+
+    // Generate and store abbreviated summary
+    const summary = buildAbbreviatedSummary(council);
+    councilStore.updateDeliberationState(councilId, { completionSummary: summary });
+
+    // If save is enabled, write files
+    if (council.deliberation?.saveDeliberation) {
+      const mode = council.deliberation.saveDeliberationMode ?? 'full';
+      saveDeliberationOutput(council, mode).catch((err) => {
+        console.error('[DeliberationView] Failed to save deliberation output:', err);
+      });
+    }
+  }, [council?.deliberationState?.currentPhase]);
 
   // Get persona by ID
   const getPersona = (personaId: string): Persona | undefined => {
@@ -368,8 +404,20 @@ export default function DeliberationView({
           )}
           <div className="deliberation-title-section">
             <h2>{council.name}</h2>
-            <span className={`deliberation-status deliberation-status-${council.status}`}>
-              {council.status}
+            <span className={`deliberation-status deliberation-status-${
+              currentPhase === 'completed' ? 'completed'
+                : currentPhase === 'failed' ? 'failed'
+                : currentPhase === 'cancelled' ? 'cancelled'
+                : currentPhase === 'paused' ? 'paused'
+                : currentPhase === 'created' || currentPhase === 'problem_framing' ? 'planning'
+                : 'running'
+            }`}>
+              {currentPhase === 'completed' ? 'completed'
+                : currentPhase === 'failed' ? 'failed'
+                : currentPhase === 'cancelled' ? 'cancelled'
+                : currentPhase === 'paused' ? 'paused'
+                : currentPhase === 'created' || currentPhase === 'problem_framing' ? 'planning'
+                : 'running'}
             </span>
           </div>
         </div>
@@ -418,15 +466,24 @@ export default function DeliberationView({
       />
 
       {/* Inline Phase Panel - shown below timeline for Deliberation/Decision/Execution */}
-      {activePanel && activePanel !== 'setup' && activePanel !== 'task' && (
-        <div className={`inline-phase-panel ${panelCollapsed ? 'collapsed' : ''}`}>
-          <div className="inline-phase-header">
-            <h3>
-              {activePanel === 'deliberation' && 'Deliberation'}
-              {activePanel === 'decision' && 'Decision'}
-              {activePanel === 'execution' && 'Execution'}
-            </h3>
-            <div className="inline-phase-header-actions">
+      {activePanel && activePanel !== 'setup' && activePanel !== 'task' && (() => {
+        const decision = getDecision(councilId);
+        const plan = getPlan(councilId);
+        const directive = getDirective(councilId);
+        const latestOutput = getLatestOutput(councilId);
+        const allOutputs = getAllOutputs(councilId);
+        const roundSummaries = council.deliberationState?.roundSummaries || {};
+        const managerEval = council.deliberationState?.managerLastEvaluation;
+        const completionSummary = council.deliberationState?.completionSummary;
+
+        return (
+          <div className={`inline-phase-panel ${panelCollapsed ? 'collapsed' : ''}`}>
+            <div className="inline-phase-header">
+              <h4>
+                {activePanel === 'deliberation' && 'Deliberation'}
+                {activePanel === 'decision' && 'Decision'}
+                {activePanel === 'execution' && 'Execution'}
+              </h4>
               <button
                 className="collapse-inline-btn"
                 onClick={() => setPanelCollapsed(!panelCollapsed)}
@@ -434,157 +491,263 @@ export default function DeliberationView({
               >
                 {panelCollapsed ? '▼' : '▲'}
               </button>
-              <button className="close-inline-btn" onClick={() => setActivePanel(null)} title="Close">
-                ×
-              </button>
             </div>
-          </div>
-          {!panelCollapsed && <div className="inline-phase-content">
-            {/* Deliberation Panel - Start/Restart */}
-            {activePanel === 'deliberation' && (
-              <div className="inline-deliberation-status">
-                {entries.length > 0 ? (
-                  <>
-                    <div className="settings-section">
-                      <div className="settings-section-header">
+            {!panelCollapsed && <div className="inline-phase-content">
+              {/* === DELIBERATION PANEL === */}
+              {activePanel === 'deliberation' && (
+                <div className="inline-deliberation-status">
+                  {entries.length > 0 ? (
+                    <>
+                      <div className="settings-section">
                         <h4>Status</h4>
+                        <div className="settings-grid">
+                          <div className="setting-item">
+                            <span className="setting-label">Round</span>
+                            <span className="setting-value">{currentRound} / {maxRounds}</span>
+                          </div>
+                          <div className="setting-item">
+                            <span className="setting-label">Phase</span>
+                            <span className="setting-value">{currentPhase}</span>
+                          </div>
+                          <div className="setting-item">
+                            <span className="setting-label">Entries</span>
+                            <span className="setting-value">{entries.length}</span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="settings-grid">
-                        <div className="setting-item">
-                          <span className="setting-label">Round</span>
-                          <span className="setting-value">{currentRound} / {maxRounds}</span>
-                        </div>
-                        <div className="setting-item">
-                          <span className="setting-label">Phase</span>
-                          <span className="setting-value">{currentPhase}</span>
-                        </div>
-                        <div className="setting-item">
-                          <span className="setting-label">Entries</span>
-                          <span className="setting-value">{entries.length}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="deliberation-actions">
-                      <button
-                        className="deliberation-restart-btn"
-                        onClick={handleRestartDeliberation}
-                        disabled={!problemInput.trim() || isGenerating || !canStart}
-                      >
-                        {isGenerating ? 'Running...' : 'Restart Deliberation'}
-                      </button>
-                      <p className="action-hint">This will erase current results and start fresh.</p>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <p className="deliberation-prompt">
-                      {canStart && problemInput.trim()
-                        ? 'Ready to start the deliberation. The council will discuss and analyze your task.'
-                        : 'Complete Setup and Task steps before starting the deliberation.'}
-                    </p>
-                    <div className="deliberation-actions">
-                      <button
-                        className="deliberation-start-btn"
-                        onClick={handleFrameProblem}
-                        disabled={!problemInput.trim() || isGenerating || !canStart}
-                      >
-                        {isGenerating ? 'Starting...' : 'Start Deliberation'}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
 
-            {/* Decision Panel Content */}
-            {activePanel === 'decision' && (
-              <>
-                <div className="settings-section">
-                  <div className="settings-section-header">
+                      {/* Manager's Last Evaluation */}
+                      {managerEval && (
+                        <div className="settings-section">
+                          <h4>Manager Evaluation</h4>
+                          <div className="panel-content-block">
+                            <div className="eval-action">
+                              Action: <strong>{managerEval.action}</strong>
+                              {managerEval.confidence != null && (
+                                <span className="eval-confidence"> ({Math.round(managerEval.confidence * 100)}% confidence)</span>
+                              )}
+                            </div>
+                            <div className="eval-reasoning">{managerEval.reasoning}</div>
+                            {managerEval.missingInformation && managerEval.missingInformation.length > 0 && (
+                              <div className="eval-missing">
+                                <strong>Missing info:</strong> {managerEval.missingInformation.join(', ')}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Round Summaries */}
+                      {Object.keys(roundSummaries).length > 0 && (
+                        <div className="settings-section">
+                          <h4>Round Summaries</h4>
+                          {Object.entries(roundSummaries).map(([round, summary]) => (
+                            <div key={round} className="round-summary-item">
+                              <span className="round-summary-label">Round {round}</span>
+                              <div className="panel-content-block">{summary}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Completion Summary */}
+                      {completionSummary && (
+                        <div className="settings-section">
+                          <h4>Summary</h4>
+                          <div className="panel-content-block">{completionSummary}</div>
+                        </div>
+                      )}
+
+                      <div className="deliberation-actions">
+                        <button
+                          className="deliberation-restart-btn"
+                          onClick={handleRestartDeliberation}
+                          disabled={!problemInput.trim() || isGenerating || !canStart}
+                        >
+                          {isGenerating ? 'Running...' : 'Restart Deliberation'}
+                        </button>
+                        <p className="action-hint">This will erase current results and start fresh.</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="deliberation-prompt">
+                        {canStart && problemInput.trim()
+                          ? 'Ready to start the deliberation. The council will discuss and analyze your task.'
+                          : 'Complete Setup and Task steps before starting the deliberation.'}
+                      </p>
+                      <div className="deliberation-actions">
+                        <button
+                          className="deliberation-start-btn"
+                          onClick={handleFrameProblem}
+                          disabled={!problemInput.trim() || isGenerating || !canStart}
+                        >
+                          {isGenerating ? 'Starting...' : 'Start Deliberation'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* === DECISION PANEL === */}
+              {activePanel === 'decision' && (
+                <>
+                  {/* Manager */}
+                  <div className="settings-section">
                     <h4>Manager</h4>
-                  </div>
-                  {council.personas
-                    .filter((p) => council.deliberation?.roleAssignments?.find(
-                      (r) => r.personaId === p.id && r.role === 'manager'
-                    ))
-                    .map((persona) => (
-                      <div key={persona.id} className="persona-item">
-                        <span
-                          className="persona-avatar"
-                          style={{ backgroundColor: persona.color + '30', color: persona.color }}
-                        >
-                          {persona.avatar || '🤖'}
-                        </span>
-                        <div className="persona-info">
-                          <span className="persona-name">{persona.name}</span>
-                          <span className="persona-model">{persona.model}</span>
+                    {council.personas
+                      .filter((p) => council.deliberation?.roleAssignments?.find(
+                        (r) => r.personaId === p.id && r.role === 'manager'
+                      ))
+                      .map((persona) => (
+                        <div key={persona.id} className="persona-item">
+                          <span
+                            className="persona-avatar"
+                            style={{ backgroundColor: persona.color + '30', color: persona.color }}
+                          >
+                            {persona.avatar || '🤖'}
+                          </span>
+                          <div className="persona-info">
+                            <span className="persona-name">{persona.name}</span>
+                            <span className="persona-model">{persona.model}</span>
+                          </div>
+                          <span className="role-badge role-manager">Manager</span>
                         </div>
-                        <span className="role-badge role-manager">Manager</span>
-                      </div>
-                    ))}
-                </div>
-                <div className="settings-section">
-                  <div className="settings-section-header">
-                    <h4>Decision Status</h4>
+                      ))}
                   </div>
-                  <p className="settings-value">
-                    {currentPhase === 'deciding' && 'Manager is making the final decision...'}
-                    {currentPhase === 'planning' && 'Creating execution plan...'}
-                    {currentPhase === 'directing' && 'Issuing directive to worker...'}
-                    {!['deciding', 'planning', 'directing'].includes(currentPhase) &&
-                      'Decision phase will begin after deliberation rounds.'}
-                  </p>
-                </div>
-              </>
-            )}
 
-            {/* Execution Panel Content */}
-            {activePanel === 'execution' && (
-              <>
-                <div className="settings-section">
-                  <div className="settings-section-header">
+                  {/* Decision Status */}
+                  <div className="settings-section">
+                    <h4>Decision Status</h4>
+                    <p className="settings-value">
+                      {currentPhase === 'deciding' && 'Manager is making the final decision...'}
+                      {currentPhase === 'planning' && 'Creating execution plan...'}
+                      {currentPhase === 'directing' && 'Issuing directive to worker...'}
+                      {!['deciding', 'planning', 'directing', 'executing', 'reviewing', 'revising', 'completed'].includes(currentPhase) &&
+                        'Decision phase will begin after deliberation rounds.'}
+                      {['executing', 'reviewing', 'revising', 'completed'].includes(currentPhase) &&
+                        'Decision has been made.'}
+                    </p>
+                  </div>
+
+                  {/* Decision Content */}
+                  {decision && (
+                    <div className="settings-section">
+                      <h4>Decision</h4>
+                      <div className="panel-content-block">{decision.content}</div>
+                      {decision.acceptanceCriteria && (
+                        <>
+                          <h4 style={{ marginTop: '1rem' }}>Acceptance Criteria</h4>
+                          <div className="panel-content-block">{decision.acceptanceCriteria}</div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Plan */}
+                  {plan && (
+                    <div className="settings-section">
+                      <h4>Execution Plan</h4>
+                      <div className="panel-content-block">{plan.content}</div>
+                    </div>
+                  )}
+
+                  {/* Directive */}
+                  {directive && (
+                    <div className="settings-section">
+                      <h4>Work Directive</h4>
+                      <div className="panel-content-block">{directive.content}</div>
+                    </div>
+                  )}
+
+                  {/* Completion Summary */}
+                  {completionSummary && (
+                    <div className="settings-section">
+                      <h4>Summary</h4>
+                      <div className="panel-content-block">{completionSummary}</div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* === EXECUTION PANEL === */}
+              {activePanel === 'execution' && (
+                <>
+                  {/* Worker */}
+                  <div className="settings-section">
                     <h4>Worker</h4>
-                  </div>
-                  {council.personas
-                    .filter((p) => council.deliberation?.roleAssignments?.find(
-                      (r) => r.personaId === p.id && r.role === 'worker'
-                    ))
-                    .map((persona) => (
-                      <div key={persona.id} className="persona-item">
-                        <span
-                          className="persona-avatar"
-                          style={{ backgroundColor: persona.color + '30', color: persona.color }}
-                        >
-                          {persona.avatar || '🤖'}
-                        </span>
-                        <div className="persona-info">
-                          <span className="persona-name">{persona.name}</span>
-                          <span className="persona-model">{persona.model}</span>
+                    {council.personas
+                      .filter((p) => council.deliberation?.roleAssignments?.find(
+                        (r) => r.personaId === p.id && r.role === 'worker'
+                      ))
+                      .map((persona) => (
+                        <div key={persona.id} className="persona-item">
+                          <span
+                            className="persona-avatar"
+                            style={{ backgroundColor: persona.color + '30', color: persona.color }}
+                          >
+                            {persona.avatar || '🤖'}
+                          </span>
+                          <div className="persona-info">
+                            <span className="persona-name">{persona.name}</span>
+                            <span className="persona-model">{persona.model}</span>
+                          </div>
+                          <span className="role-badge role-worker">Worker</span>
                         </div>
-                        <span className="role-badge role-worker">Worker</span>
-                      </div>
-                    ))}
-                </div>
-                <div className="settings-section">
-                  <div className="settings-section-header">
+                      ))}
+                  </div>
+
+                  {/* Execution Status */}
+                  <div className="settings-section">
                     <h4>Execution Status</h4>
-                  </div>
-                  <div className="settings-grid">
-                    <div className="setting-item">
-                      <span className="setting-label">Phase</span>
-                      <span className="setting-value">{currentPhase}</span>
+                    <div className="settings-grid">
+                      <div className="setting-item">
+                        <span className="setting-label">Phase</span>
+                        <span className="setting-value">{currentPhase}</span>
+                      </div>
+                      <div className="setting-item">
+                        <span className="setting-label">Revisions</span>
+                        <span className="setting-value">{council.deliberationState?.revisionCount || 0} / {council.deliberation?.maxRevisions || 3}</span>
+                      </div>
+                      {allOutputs.length > 0 && (
+                        <div className="setting-item">
+                          <span className="setting-label">Outputs</span>
+                          <span className="setting-value">{allOutputs.length}</span>
+                        </div>
+                      )}
                     </div>
-                    <div className="setting-item">
-                      <span className="setting-label">Max Revisions</span>
-                      <span className="setting-value">{council.deliberation?.maxRevisions || 3}</span>
-                    </div>
                   </div>
-                </div>
-              </>
-            )}
-          </div>}
-        </div>
-      )}
+
+                  {/* Directive */}
+                  {directive && (
+                    <div className="settings-section">
+                      <h4>Work Directive</h4>
+                      <div className="panel-content-block">{directive.content}</div>
+                    </div>
+                  )}
+
+                  {/* Latest Output */}
+                  {latestOutput && (
+                    <div className="settings-section">
+                      <h4>Latest Output {latestOutput.isRevision && `(Revision ${latestOutput.version})`}</h4>
+                      <div className="panel-content-block">{latestOutput.content}</div>
+                    </div>
+                  )}
+
+                  {/* Completion Summary */}
+                  {completionSummary && (
+                    <div className="settings-section">
+                      <h4>Summary</h4>
+                      <div className="panel-content-block">{completionSummary}</div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>}
+          </div>
+        );
+      })()}
 
       {/* Main Content */}
       <div className="deliberation-main">
@@ -765,13 +928,69 @@ export default function DeliberationView({
                 </div>
               )}
 
+              {/* Save Output */}
+              <div className="setup-section">
+                <h4>Save Output</h4>
+                <p className="section-hint">Save deliberation results to the working directory on completion</p>
+                <div className="save-output-selector">
+                  <button
+                    type="button"
+                    className={`save-output-option ${saveMode === 'none' ? 'active' : ''}`}
+                    onClick={() => {
+                      setSaveMode('none');
+                      if (council.deliberation) {
+                        councilStore.update(councilId, {
+                          deliberation: { ...council.deliberation, saveDeliberation: false },
+                        });
+                      }
+                    }}
+                  >
+                    <span className="save-output-label">None</span>
+                    <span className="save-output-desc">Don't save files</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`save-output-option ${saveMode === 'abbreviated' ? 'active' : ''}`}
+                    onClick={() => {
+                      setSaveMode('abbreviated');
+                      if (council.deliberation) {
+                        councilStore.update(councilId, {
+                          deliberation: { ...council.deliberation, saveDeliberation: true, saveDeliberationMode: 'abbreviated' },
+                        });
+                      }
+                    }}
+                  >
+                    <span className="save-output-label">Summary</span>
+                    <span className="save-output-desc">1 file with highlights and decision</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`save-output-option ${saveMode === 'full' ? 'active' : ''}`}
+                    onClick={() => {
+                      setSaveMode('full');
+                      if (council.deliberation) {
+                        councilStore.update(councilId, {
+                          deliberation: { ...council.deliberation, saveDeliberation: true, saveDeliberationMode: 'full' },
+                        });
+                      }
+                    }}
+                  >
+                    <span className="save-output-label">Full</span>
+                    <span className="save-output-desc">Deliberation, decision, and output files</span>
+                  </button>
+                </div>
+                {saveMode !== 'none' && !workingDirectory && (
+                  <p className="task-warning">Set a working directory above to enable file saving.</p>
+                )}
+              </div>
+
               {/* Participants (consolidated with Role Assignment) */}
               <div className="setup-section">
                 <RoleAssignment
                   council={council}
                   configuredProviders={configuredProviders}
                   onClose={() => setActivePanel(null)}
-                  onSave={(assignments, personaUpdates) => {
+                  onSave={(assignments, personaUpdates, saveOptions) => {
                     councilStore.setRoleAssignments(councilId, assignments);
                     if (personaUpdates) {
                       for (const update of personaUpdates) {
@@ -781,13 +1000,15 @@ export default function DeliberationView({
                         });
                       }
                     }
-                    // Save directory settings and sync with local tools
+                    // Save directory settings, save deliberation options, and sync with local tools
                     if (council.deliberation) {
                       councilStore.update(councilId, {
                         deliberation: {
                           ...council.deliberation,
                           workingDirectory: workingDirectory || undefined,
                           directoryConstrained,
+                          saveDeliberation: saveMode !== 'none',
+                          saveDeliberationMode: saveMode === 'none' ? 'full' : saveMode,
                         },
                       });
                     }

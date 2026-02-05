@@ -393,6 +393,7 @@ export const deliberationRoleAssignmentSchema = z.object({
   focusArea: z.string().optional(),
   stance: z.string().optional(),
   suppressPersona: z.boolean().optional(),
+  writePermissions: z.boolean().optional(),
 });
 
 export const patchDecisionSchema = z.object({
@@ -429,6 +430,8 @@ export const deliberationConfigSchema = z.object({
   consultantErrorPolicy: consultantErrorPolicySchema.default('retry'),
   maxRetries: z.number().int().min(0).max(5).default(2),
   requirePlan: z.boolean().default(false),
+  saveDeliberation: z.boolean().optional(),
+  saveDeliberationMode: z.enum(['full', 'abbreviated']).optional(),
 });
 
 export const deliberationStateSchema = z.object({
@@ -449,6 +452,7 @@ export const deliberationStateSchema = z.object({
   workDirectiveId: z.string().optional(),
   currentOutputId: z.string().optional(),
   errorLog: z.array(z.string()),
+  completionSummary: z.string().optional(),
 });
 
 export const ledgerIndexSchema = z.object({

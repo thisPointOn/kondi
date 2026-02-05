@@ -144,6 +144,36 @@ export function checkCredentials(config: ProxyConfig): ProxyStatus {
 }
 
 /**
+ * Send an MCP initialize request to the remote server
+ */
+async function sendInitRequest(
+  initUrl: string,
+  headers: Record<string, string>,
+): Promise<Response> {
+  return fetch(initUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
+      ...headers,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: {
+          name: 'kondi-mcp-proxy',
+          version: '1.0.0',
+        },
+      },
+    }),
+  });
+}
+
+/**
  * Initialize MCP session for streamable HTTP transport
  * Returns { sessionId, authFailed, shouldRetry } where:
  * - authFailed: indicates an auth error that couldn't be resolved
@@ -158,38 +188,47 @@ async function initializeMcpSession(
   log(`[MCP Init] Sending initialize request to ${initUrl}${isRetry ? ' (retry after refresh)' : ''}`);
 
   try {
-    const response = await fetch(initUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream',
-        ...headers,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2025-03-26',
-          capabilities: {},
-          clientInfo: {
-            name: 'kondi-mcp-proxy',
-            version: '1.0.0',
-          },
-        },
-      }),
-    });
+    let response = await sendInitRequest(initUrl, headers);
+
+    // If we get a 401/403 on first attempt, retry with a delay before giving up.
+    // After dynamic client registration, the remote server may need a moment to
+    // propagate the new client credentials. Don't immediately clear credentials.
+    if (!response.ok && (response.status === 401 || response.status === 403) && !isRetry) {
+      const text = await response.text();
+      log(`[MCP Init] Got ${response.status} on first attempt: ${text}`);
+      log('[MCP Init] Retrying after 3-second delay (credential propagation)...');
+
+      // Retry up to 3 times with increasing delay
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        await new Promise(r => setTimeout(r, attempt * 2000)); // 2s, 4s, 6s
+        log(`[MCP Init] Retry attempt ${attempt}/3...`);
+
+        // Re-read config in case it was updated externally
+        const freshConfig = readConfig();
+        const freshHeaders = getAuthHeaders(freshConfig);
+
+        response = await sendInitRequest(initUrl, freshHeaders);
+        if (response.ok) {
+          log(`[MCP Init] Retry ${attempt} succeeded!`);
+          break;
+        }
+        if (response.status !== 401 && response.status !== 403) {
+          log(`[MCP Init] Retry ${attempt} got non-auth error: ${response.status}`);
+          break;
+        }
+        log(`[MCP Init] Retry ${attempt} still got ${response.status}`);
+      }
+    }
 
     if (!response.ok) {
       const text = await response.text();
       log(`[MCP Init] Initialize failed: ${response.status} ${text}`);
 
       if (response.status === 401 || response.status === 403) {
-        // If this is already a retry, we've exhausted our options
+        // If this is already a retry after refresh, we've exhausted our options
         if (isRetry) {
-          log('[MCP Init] Auth failed after token refresh, clearing invalid credentials');
-          clearCredentials();
-          status = 'needs_auth';
+          log('[MCP Init] Auth failed after token refresh, setting needs_reauth (NOT clearing credentials)');
+          status = 'needs_reauth';
           lastError = 'Authentication failed - please re-authenticate';
           return { sessionId: null, authFailed: true, shouldRetry: false };
         }
@@ -207,17 +246,17 @@ async function initializeMcpSession(
             lastRefreshAttempt = new Date();
             lastRefreshResult = 'failure';
             log(`[MCP Init] Token refresh failed: ${refreshErr}`);
-            // Clear invalid credentials and require fresh auth
-            clearCredentials();
-            status = 'needs_auth';
+            // DON'T clear credentials — the parent (reauthenticate) may have
+            // just written valid ones. Set needs_reauth instead so the frontend
+            // can decide whether to trigger a full re-auth.
+            status = 'needs_reauth';
             lastError = 'Token refresh failed - please re-authenticate';
             return { sessionId: null, authFailed: true, shouldRetry: false };
           }
         } else {
-          // No refresh token available, clear invalid credentials
-          log('[MCP Init] No refresh token available, clearing invalid credentials');
-          clearCredentials();
-          status = 'needs_auth';
+          // No refresh token available
+          log('[MCP Init] No refresh token available, setting needs_reauth');
+          status = 'needs_reauth';
           lastError = 'Authentication expired - please re-authenticate';
           return { sessionId: null, authFailed: true, shouldRetry: false };
         }
@@ -402,10 +441,10 @@ export async function connect(config: ProxyConfig): Promise<void> {
         if (config.authMethod === 'oauth' && config.oauth?.refreshToken) {
           attemptRefreshAndReconnect(config);
         } else {
-          // No refresh token, clear invalid credentials
-          log('No refresh token available, clearing invalid credentials');
-          clearCredentials();
-          status = 'needs_auth';
+          // No refresh token — set needs_reauth but DON'T clear credentials.
+          // Credentials may have been freshly written by reauthenticate_proxy.
+          log('No refresh token available, setting needs_reauth');
+          status = 'needs_reauth';
         }
       } else {
         status = 'remote_unreachable';
@@ -584,10 +623,10 @@ async function attemptRefreshAndReconnect(config: ProxyConfig): Promise<void> {
     lastRefreshAttempt = new Date();
     lastRefreshResult = 'failure';
     logError('Token refresh failed', err instanceof Error ? err : undefined);
-    // Clear invalid credentials and require fresh auth
-    log('Clearing invalid credentials after refresh failure');
-    clearCredentials();
-    status = 'needs_auth';
+    // DON'T clear credentials — they may have been freshly set by reauthenticate_proxy.
+    // Set needs_reauth so the frontend can trigger a proper re-auth flow.
+    log('Token refresh failed, setting needs_reauth (credentials preserved)');
+    status = 'needs_reauth';
     lastError = 'Token refresh failed - please re-authenticate';
   }
 }
