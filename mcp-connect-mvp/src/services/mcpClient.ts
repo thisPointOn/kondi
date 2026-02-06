@@ -45,6 +45,10 @@ export class MCPClient {
   private servers: Map<string, MCPServer> = new Map();
   private tools: Map<string, MCPTool[]> = new Map();
   private onAuthRequired: ((server: MCPServer) => Promise<string | null>) | null = null;
+  /** Set of proxy IDs currently undergoing reauthentication — blocks ensureProxyForServer from overwriting config */
+  private reauthenticatingProxies: Set<string> = new Set();
+  /** Set of server IDs currently connecting — prevents duplicate concurrent connectServer calls */
+  private connectingServers: Set<string> = new Set();
 
   setAuthHandler(handler: (server: MCPServer) => Promise<string | null>): void {
     this.onAuthRequired = handler;
@@ -79,7 +83,7 @@ export class MCPClient {
 
     // Step 3: Check proxy health and handle auth
     let health: proxyService.ProxyHealthResponse;
-    const maxAuthAttempts = 2;
+    const maxAuthAttempts = 1;
     let authAttempts = 0;
 
     while (authAttempts < maxAuthAttempts) {
@@ -90,13 +94,25 @@ export class MCPClient {
         health = await proxyService.getProxyHealth(proxyId);
         console.log(`[MCP Proxy] Health status: ${health.status}`);
       } catch (err) {
-        // Proxy might still be starting
+        // Proxy might still be starting — retry once
         console.log(`[MCP Proxy] Health check failed, retrying...`);
         await this.sleep(1000);
         try {
           health = await proxyService.getProxyHealth(proxyId);
         } catch {
-          throw new Error(`Proxy not responding: ${err instanceof Error ? err.message : String(err)}`);
+          // Proxy process is likely dead — restart it
+          console.log(`[MCP Proxy] Proxy not responding, restarting...`);
+          try {
+            // Stop the stale process reference, then start fresh
+            try { await proxyService.stopProxy(proxyId); } catch { /* ignore */ }
+            proxyPort = await proxyService.startProxy(proxyId);
+            console.log(`[MCP Proxy] Proxy restarted on port ${proxyPort}`);
+            await this.sleep(3000);
+            health = await proxyService.getProxyHealth(proxyId);
+            console.log(`[MCP Proxy] Health after restart: ${health.status}`);
+          } catch (restartErr) {
+            throw new Error(`Proxy not responding after restart: ${restartErr instanceof Error ? restartErr.message : String(restartErr)}`);
+          }
         }
       }
 
@@ -106,22 +122,40 @@ export class MCPClient {
         authAttempts++;
 
         try {
+          // Guard: prevent ensureProxyForServer from overwriting config during reauth
+          this.reauthenticatingProxies.add(proxyId);
+
           // Use reauthenticateProxy for fresh dynamic registration
-          // This ensures we don't use stale client_id when credentials are revoked
+          // This stops the proxy, does full OAuth, writes tokens, and restarts the proxy
           console.log(`[MCP Proxy] Using reauthenticate for clean OAuth flow...`);
           const authResult = await proxyService.reauthenticateProxy(proxyId);
           console.log(`[MCP Proxy] Reauthenticate result:`, authResult);
 
-          // Check if reauthenticate already succeeded (returned with token)
-          if (authResult.status === 'connected' || authResult.access_token) {
+          // Clear the guard now that reauth is complete
+          this.reauthenticatingProxies.delete(proxyId);
+
+          // Reauthenticate returns the new access_token and port
+          if (authResult.access_token) {
             console.log(`[MCP Proxy] Auth completed via reauthenticate call`);
-            // Update server with new token
-            if (authResult.access_token) {
-              server.accessToken = authResult.access_token;
-              this.servers.set(server.id, server);
+            server.accessToken = authResult.access_token;
+            this.servers.set(server.id, server);
+
+            // Update proxyPort since the proxy was restarted
+            if (authResult.port) {
+              proxyPort = authResult.port;
             }
-            // Give proxy more time to start and connect after fresh OAuth
-            // The remote server may need time to propagate new client credentials
+
+            // Read fresh proxy config to sync client credentials
+            try {
+              const freshConfig = await proxyService.getProxyConfig(proxyId);
+              if (freshConfig.oauth) {
+                server.clientId = freshConfig.oauth.clientId;
+                server.clientSecret = freshConfig.oauth.clientSecret;
+                this.servers.set(server.id, server);
+              }
+            } catch { /* ignore */ }
+
+            // Give proxy time to connect to remote with fresh credentials
             await this.sleep(4000);
             health = await proxyService.getProxyHealth(proxyId);
             console.log(`[MCP Proxy] Health after reauthenticate: ${health.status}`);
@@ -135,7 +169,7 @@ export class MCPClient {
               console.log(`[MCP Proxy] Proxy reports ${health.status} after fresh OAuth, reloading...`);
               try {
                 await proxyService.reloadProxy(proxyId);
-                await this.sleep(3000);
+                await this.sleep(5000);
                 health = await proxyService.getProxyHealth(proxyId);
                 console.log(`[MCP Proxy] Health after reload: ${health.status}`);
                 if (health.status === 'connected') {
@@ -145,87 +179,27 @@ export class MCPClient {
                 console.warn(`[MCP Proxy] Reload failed:`, reloadErr);
               }
             }
-          }
 
-          // Wait for auth to complete (user will complete in browser)
-          // Poll health until status changes
-          const authTimeout = 180000; // 3 minutes (increased from 2)
-          const startTime = Date.now();
-
-          while (Date.now() - startTime < authTimeout) {
-            await this.sleep(1500); // Poll slightly more frequently
-            try {
+            // Poll for connection — the proxy might need a few more seconds
+            const pollTimeout = 30000;
+            const pollStart = Date.now();
+            while (Date.now() - pollStart < pollTimeout) {
+              await this.sleep(2000);
               health = await proxyService.getProxyHealth(proxyId);
-              console.log(`[MCP Proxy] Polling health: ${health.status}`);
-              if (health.status === 'connected') {
-                console.log(`[MCP Proxy] Auth completed successfully`);
-
-                // Update server with new token from proxy config
-                try {
-                  const proxyConfig = await proxyService.getProxyConfig(proxyId);
-                  if (proxyConfig.oauth?.accessToken) {
-                    server.accessToken = proxyConfig.oauth.accessToken;
-                    server.clientId = proxyConfig.oauth.clientId;
-                    server.clientSecret = proxyConfig.oauth.clientSecret;
-                    this.servers.set(server.id, server);
-                  }
-                } catch {
-                  // Ignore config read errors
-                }
-                break;
-              }
+              console.log(`[MCP Proxy] Polling after reauth: ${health.status}`);
+              if (health.status === 'connected') break;
               if (health.status === 'error') {
-                throw new Error(health.error || 'Authentication failed');
+                throw new Error(health.error || 'Connection failed after authentication');
               }
-            } catch (pollErr) {
-              // Continue polling but log
-              console.log(`[MCP Proxy] Poll error (continuing):`, pollErr);
             }
+            if (health.status === 'connected') break;
+            throw new Error('Proxy failed to connect after authentication - please try again');
           }
 
-          // After timeout, try a final reload + config check
-          if (health.status !== 'connected') {
-            console.log(`[MCP Proxy] Polling timed out (status: ${health.status}), attempting recovery...`);
-
-            // If proxy is stuck in needs_auth/needs_reauth, reload it to re-read config
-            if (health.status === 'needs_auth' || health.status === 'needs_reauth') {
-              console.log(`[MCP Proxy] Proxy stuck in ${health.status}, reloading to re-read config...`);
-              try {
-                await proxyService.reloadProxy(proxyId);
-                await this.sleep(5000); // Give proxy time to reconnect after reload
-                health = await proxyService.getProxyHealth(proxyId);
-                console.log(`[MCP Proxy] Health after final reload: ${health.status}`);
-                if (health.status === 'connected') {
-                  console.log(`[MCP Proxy] Connected after final reload!`);
-                  break;
-                }
-              } catch (reloadErr) {
-                console.warn(`[MCP Proxy] Final reload failed:`, reloadErr);
-              }
-            }
-
-            // Check proxy config for tokens as last resort
-            try {
-              const proxyConfig = await proxyService.getProxyConfig(proxyId);
-              if (proxyConfig.oauth?.accessToken) {
-                console.log(`[MCP Proxy] Found tokens in proxy config, attempting to proceed...`);
-                server.accessToken = proxyConfig.oauth.accessToken;
-                server.clientId = proxyConfig.oauth.clientId;
-                server.clientSecret = proxyConfig.oauth.clientSecret;
-                this.servers.set(server.id, server);
-                await this.sleep(1000);
-                health = await proxyService.getProxyHealth(proxyId);
-                if (health.status === 'connected') {
-                  console.log(`[MCP Proxy] Connected after final config check`);
-                  break;
-                }
-              }
-            } catch {
-              // Ignore config errors
-            }
-            throw new Error('Authentication timed out - please try reconnecting');
-          }
+          // reauthenticate didn't return a token (shouldn't happen, but handle gracefully)
+          throw new Error('Re-authentication did not return an access token');
         } catch (authErr) {
+          this.reauthenticatingProxies.delete(proxyId);
           if (authAttempts >= maxAuthAttempts) {
             throw new Error(`Authentication failed: ${authErr instanceof Error ? authErr.message : String(authErr)}`);
           }
@@ -286,10 +260,62 @@ export class MCPClient {
       });
       const toolsResult = normalizeInvokeResult(toolsRaw);
       const jsonBody = parseResponseBody(toolsResult.body);
+      console.log(`[MCP Proxy] tools/list raw response:`, jsonBody);
       const responseData = JSON.parse(jsonBody);
-      const toolsData = responseData.result || responseData;
-      console.log(`[MCP Proxy] Loaded ${toolsData.tools?.length || 0} tools`);
-      this.tools.set(server.id, toolsData.tools || []);
+      console.log(`[MCP Proxy] tools/list parsed:`, responseData);
+
+      // Check for auth errors in the response - proxy might be connected but token expired
+      if (responseData.error) {
+        const errorMsg = responseData.error.message || JSON.stringify(responseData.error);
+        if (errorMsg.includes('401') || errorMsg.includes('invalid_token') || errorMsg.includes('expired')) {
+          console.log(`[MCP Proxy] Token expired, triggering re-authentication...`);
+          // Trigger re-auth
+          this.reauthenticatingProxies.add(proxyId);
+          try {
+            const authResult = await proxyService.reauthenticateProxy(proxyId);
+            this.reauthenticatingProxies.delete(proxyId);
+            if (authResult.access_token) {
+              server.accessToken = authResult.access_token;
+              this.servers.set(server.id, server);
+              // Wait for proxy to reconnect with new token
+              await this.sleep(3000);
+              // Retry tools/list
+              const retryRaw = await invoke<any>('mcp_request', {
+                url: proxyUrl,
+                method: 'POST',
+                body: JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: this.nextRequestId(),
+                  method: 'tools/list',
+                  params: {},
+                }),
+                accessToken: null,
+                sessionId: server.sessionId || null,
+              });
+              const retryResult = normalizeInvokeResult(retryRaw);
+              const retryBody = parseResponseBody(retryResult.body);
+              const retryData = JSON.parse(retryBody);
+              if (retryData.error) {
+                throw new Error(`Tools list failed after re-auth: ${retryData.error.message}`);
+              }
+              const retryTools = retryData.result || retryData;
+              console.log(`[MCP Proxy] Loaded ${retryTools.tools?.length || 0} tools after re-auth`);
+              this.tools.set(server.id, retryTools.tools || []);
+            } else {
+              throw new Error('Re-authentication failed - no token returned');
+            }
+          } catch (authErr) {
+            this.reauthenticatingProxies.delete(proxyId);
+            throw new Error(`Token expired and re-auth failed: ${authErr instanceof Error ? authErr.message : String(authErr)}`);
+          }
+        } else {
+          throw new Error(`Tools list failed: ${errorMsg}`);
+        }
+      } else {
+        const toolsData = responseData.result || responseData;
+        console.log(`[MCP Proxy] Loaded ${toolsData.tools?.length || 0} tools:`, toolsData.tools?.map((t: any) => t.name));
+        this.tools.set(server.id, toolsData.tools || []);
+      }
     } catch (err) {
       throw new Error(`Failed to fetch tools: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -447,6 +473,13 @@ export class MCPClient {
   }
 
   async connectServer(server: MCPServer, isRetry = false): Promise<void> {
+    // Prevent duplicate concurrent connections to the same server
+    if (this.connectingServers.has(server.id)) {
+      console.log(`[MCP] Already connecting to ${server.name}, skipping duplicate call`);
+      return;
+    }
+    this.connectingServers.add(server.id);
+
     try {
       server.status = 'connecting';
       server.sessionId = undefined; // Clear any old session
@@ -878,6 +911,8 @@ export class MCPClient {
       this.servers.set(server.id, server);
       void this.persistServer(server);
       throw error;
+    } finally {
+      this.connectingServers.delete(server.id);
     }
   }
 
@@ -1094,6 +1129,14 @@ export class MCPClient {
         proxyConfig = await proxyService.getProxyConfig(server.id);
       } catch {
         // Proxy doesn't exist by ID, check by name
+      }
+
+      // If this proxy is currently reauthenticating, don't overwrite its config.
+      // Just return the proxy ID so the caller can proceed with health checks.
+      const earlyProxyId = proxyConfig?.id || server.id;
+      if (this.reauthenticatingProxies.has(earlyProxyId)) {
+        console.log(`[MCP] Proxy ${earlyProxyId} is reauthenticating, skipping config update`);
+        return earlyProxyId;
       }
 
       // If not found by ID, check if one exists with the same name

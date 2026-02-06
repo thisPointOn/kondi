@@ -39,6 +39,7 @@ export interface LLMProvider {
     systemPrompt: string;
     userMessage: string;
     temperature?: number;
+    availableTools?: Map<string, { serverId: string; tools: import('../types/mcp').MCPTool[] }>;
   }): Promise<{
     content: string;
     tokensUsed: number;

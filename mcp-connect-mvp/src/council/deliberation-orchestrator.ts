@@ -152,86 +152,114 @@ export class DeliberationOrchestrator {
 
   /**
    * Run the full deliberation automatically from start to completion.
-   * This method chains all phases together:
-   * 1. Frame problem
-   * 2. Run rounds (independent → manager eval → interactive → ...)
-   * 3. Make decision
-   * 4. Create plan & directive
-   * 5. Execute & review
+   * Frames the problem then hands off to continueDeliberation.
    */
   async runFullDeliberation(council: Council, rawProblem: string): Promise<void> {
     console.log('[Orchestrator] Starting full deliberation...');
 
     // Phase 1: Frame the problem
     await this.frameProblem(council, rawProblem);
-    council = councilStore.get(council.id)!;
+
+    // Continue through all remaining phases automatically
+    await this.continueDeliberation(council.id);
+  }
+
+  /**
+   * Continue deliberation from whatever phase it's currently in.
+   * Used after initial start (runFullDeliberation) and after resume from pause.
+   * Runs fully automatically — no manual step-by-step buttons needed.
+   */
+  async continueDeliberation(councilId: string): Promise<void> {
+    let council = councilStore.get(councilId)!;
 
     // Phase 2: Deliberation rounds
     const maxRounds = council.deliberation?.maxRounds || 4;
-    let roundCount = 0;
 
-    while (roundCount < maxRounds) {
-      council = councilStore.get(council.id)!;
+    // Run rounds until manager decides or max rounds reached
+    let loopGuard = 0;
+    const maxLoopIterations = maxRounds * 3 + 10; // Safety limit
+
+    while (loopGuard++ < maxLoopIterations) {
+      council = councilStore.get(councilId)!;
       const phase = council.deliberationState?.currentPhase;
 
+      // Stop on pause or terminal states
+      if (phase === 'paused') {
+        console.log('[Orchestrator] Deliberation paused — stopping auto-run');
+        return;
+      }
+      if (phase === 'deciding' || phase === 'planning' || phase === 'directing' ||
+          phase === 'executing' || phase === 'reviewing' || phase === 'revising' ||
+          phase === 'completed' || phase === 'cancelled' || phase === 'failed') {
+        break; // Move past deliberation rounds
+      }
+
       if (phase === 'round_independent') {
-        console.log(`[Orchestrator] Running independent round ${roundCount + 1}...`);
+        console.log(`[Orchestrator] Running independent round...`);
         await this.runIndependentRound(council);
-        roundCount++;
       } else if (phase === 'round_waiting_for_manager') {
         console.log('[Orchestrator] Manager evaluating...');
-        const evaluation = await this.managerEvaluate(council);
-
-        // Check if manager decided to move to decision phase
-        council = councilStore.get(council.id)!;
-        const newPhase = council.deliberationState?.currentPhase;
-        if (newPhase === 'deciding' || newPhase === 'planning') {
-          console.log('[Orchestrator] Manager decided to conclude deliberation');
-          break;
-        }
+        await this.managerEvaluate(council);
       } else if (phase === 'round_interactive') {
         console.log('[Orchestrator] Running interactive round...');
         await this.runInteractiveRound(council);
-      } else if (phase === 'deciding' || phase === 'planning') {
-        break; // Move to decision phase
       } else {
         console.log(`[Orchestrator] Unexpected phase during deliberation: ${phase}`);
         break;
       }
     }
 
-    // Phase 3: Decision
-    council = councilStore.get(council.id)!;
+    // Phase 3: Decision + Plan + Directive
+    council = councilStore.get(councilId)!;
     let phase = council.deliberationState?.currentPhase;
+
+    // If still in round phases after max iterations, force to deciding
+    if (phase === 'round_waiting_for_manager' || phase === 'round_interactive' || phase === 'round_independent') {
+      console.log('[Orchestrator] Max rounds exhausted, forcing decision phase');
+      this.transitionPhase(councilId, 'deciding');
+      council = councilStore.get(councilId)!;
+      phase = council.deliberationState?.currentPhase;
+    }
+
+    if (phase === 'paused') return;
 
     if (phase === 'deciding') {
       console.log('[Orchestrator] Making decision...');
       await this.makeDecision(council);
-      council = councilStore.get(council.id)!;
+      council = councilStore.get(councilId)!;
       phase = council.deliberationState?.currentPhase;
     }
+
+    if (phase === 'paused') return;
 
     if (phase === 'planning') {
       console.log('[Orchestrator] Creating plan...');
       await this.createPlan(council);
-      council = councilStore.get(council.id)!;
+      council = councilStore.get(councilId)!;
       phase = council.deliberationState?.currentPhase;
     }
+
+    if (phase === 'paused') return;
 
     if (phase === 'directing') {
       console.log('[Orchestrator] Issuing directive...');
       await this.issueDirective(council);
-      council = councilStore.get(council.id)!;
+      council = councilStore.get(councilId)!;
       phase = council.deliberationState?.currentPhase;
     }
 
-    // Phase 4: Execution
+    // Phase 4: Execution loop
     const maxRevisions = council.deliberation?.maxRevisions || 3;
-    let revisionCount = 0;
+    let revisionCount = council.deliberationState?.revisionCount || 0;
 
-    while (revisionCount < maxRevisions) {
-      council = councilStore.get(council.id)!;
+    while (revisionCount < maxRevisions + 1) {
+      council = councilStore.get(councilId)!;
       phase = council.deliberationState?.currentPhase;
+
+      if (phase === 'paused') {
+        console.log('[Orchestrator] Deliberation paused — stopping auto-run');
+        return;
+      }
 
       if (phase === 'executing') {
         console.log('[Orchestrator] Executing work...');
@@ -247,8 +275,10 @@ export class DeliberationOrchestrator {
           revisionCount++;
           console.log(`[Orchestrator] Revision requested (${revisionCount}/${maxRevisions})`);
         } else if (review.verdict === 're_deliberate') {
-          console.log('[Orchestrator] Re-deliberation requested');
-          // This will loop back through deliberation
+          console.log('[Orchestrator] Re-deliberation requested — looping back');
+          // Phase transitions back to round_interactive, re-enter deliberation loop
+          await this.continueDeliberation(councilId);
+          return;
         }
       } else if (phase === 'revising') {
         console.log('[Orchestrator] Revising work...');
@@ -262,7 +292,7 @@ export class DeliberationOrchestrator {
       }
     }
 
-    console.log('[Orchestrator] Full deliberation finished');
+    console.log('[Orchestrator] Auto-run finished');
   }
 
   // ==========================================================================
@@ -332,14 +362,18 @@ export class DeliberationOrchestrator {
       throw new Error('No context found - problem must be framed first');
     }
 
+    if (consultants.length === 0) {
+      console.warn('[Orchestrator] No consultants assigned - skipping independent round');
+      this.transitionPhase(council.id, 'round_waiting_for_manager');
+      return [];
+    }
+
     const entries: LedgerEntry[] = [];
 
-    // Run consultants in parallel
-    const promises = consultants.map(async (consultant) => {
+    const runOne = async (consultant: Persona): Promise<LedgerEntry> => {
       const assignment = getRoleAssignment(council, consultant.id);
       const focusArea = assignment?.focusArea || consultant.predisposition.domain || 'general';
 
-      // Build prompts per Section 9.2
       const systemPrompt = consultant.predisposition.systemPrompt;
       const userMessage = buildIndependentAnalysisPrompt(consultant, focusArea, context.content);
 
@@ -349,10 +383,8 @@ export class DeliberationOrchestrator {
         'independent_analysis'
       );
 
-      // Check for context change proposal
       const proposedPatch = this.extractContextProposal(response.content);
 
-      // Create ledger entry
       const entry = this.createEntry(
         council.id,
         'consultant',
@@ -366,10 +398,8 @@ export class DeliberationOrchestrator {
         council.deliberationState?.currentRound
       );
 
-      // Record submission
       councilStore.recordSubmission(council.id, consultant.id);
 
-      // Create patch if proposed
       if (proposedPatch) {
         const patch = createPatch(
           council.id,
@@ -384,19 +414,32 @@ export class DeliberationOrchestrator {
       }
 
       return entry;
-    });
+    };
 
-    const results = await Promise.allSettled(promises);
+    // Respect consultantExecution setting
+    const isSequential = council.deliberation?.consultantExecution === 'sequential';
 
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        entries.push(result.value);
-      } else {
-        await this.handleConsultantError(council, 'unknown', result.reason);
+    if (isSequential) {
+      // Sequential: run one at a time, each with retry
+      for (const consultant of consultants) {
+        const entry = await this.runConsultantWithRetry(council, consultant, () => runOne(consultant));
+        if (entry) entries.push(entry);
+      }
+    } else {
+      // Parallel: all at once, each with retry
+      const results = await Promise.allSettled(
+        consultants.map((consultant) =>
+          this.runConsultantWithRetry(council, consultant, () => runOne(consultant))
+        )
+      );
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) {
+          entries.push(result.value);
+        }
       }
     }
 
-    // Check if round is complete
+    // Check if round is complete (all consultants submitted or accounted for)
     if (councilStore.isRoundComplete(council.id)) {
       this.transitionPhase(council.id, 'round_waiting_for_manager');
     }
@@ -478,20 +521,44 @@ export class DeliberationOrchestrator {
     const consultants = this.getConsultants(council);
     const entries: LedgerEntry[] = [];
 
-    // Run consultants in parallel
-    const promises = consultants.map((c) =>
-      this.generateDeliberationResponse(council, c.id)
-    );
+    if (consultants.length === 0) {
+      console.warn('[Orchestrator] No consultants assigned - skipping interactive round');
+      this.transitionPhase(council.id, 'round_waiting_for_manager');
+      return [];
+    }
 
-    const results = await Promise.allSettled(promises);
+    // Respect consultantExecution setting
+    const isSequential = council.deliberation?.consultantExecution === 'sequential';
 
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        entries.push(result.value);
+    if (isSequential) {
+      // Sequential: each consultant sees previous consultants' responses in this round
+      for (const consultant of consultants) {
+        const entry = await this.runConsultantWithRetry(
+          council,
+          consultant,
+          () => this.generateDeliberationResponse(councilStore.get(council.id)!, consultant.id)
+        );
+        if (entry) entries.push(entry);
+      }
+    } else {
+      // Parallel: all consultants respond simultaneously with same context
+      const results = await Promise.allSettled(
+        consultants.map((consultant) =>
+          this.runConsultantWithRetry(
+            council,
+            consultant,
+            () => this.generateDeliberationResponse(council, consultant.id)
+          )
+        )
+      );
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) {
+          entries.push(result.value);
+        }
       }
     }
 
-    // Check if round is complete
+    // Check if round is complete (all consultants submitted or accounted for)
     const updatedCouncil = councilStore.get(council.id);
     if (updatedCouncil && councilStore.isRoundComplete(council.id)) {
       this.transitionPhase(council.id, 'round_waiting_for_manager');
@@ -1646,27 +1713,70 @@ export class DeliberationOrchestrator {
     };
   }
 
-  async handleConsultantError(
+  /**
+   * Run a single consultant's contribution with retry logic.
+   * Ensures every consultant gets a fair chance to contribute:
+   * - 'retry' policy: retries up to maxRetries times with backoff
+   * - 'skip' policy: records error and moves on
+   * - 'fail' policy: fails the entire deliberation
+   *
+   * On final failure, records the submission anyway so the round can complete.
+   */
+  private async runConsultantWithRetry(
     council: Council,
-    consultantId: string,
-    error: Error
-  ): Promise<'retried' | 'skipped' | 'failed'> {
-    const policy = council.deliberation?.consultantErrorPolicy || 'retry';
+    consultant: Persona,
+    runFn: () => Promise<LedgerEntry>
+  ): Promise<LedgerEntry | null> {
     const maxRetries = council.deliberation?.maxRetries || 2;
+    const policy = council.deliberation?.consultantErrorPolicy || 'retry';
 
-    councilStore.addError(council.id, `Consultant ${consultantId}: ${error.message}`);
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await runFn();
+      } catch (error) {
+        const isLastAttempt = attempt >= maxRetries || policy !== 'retry';
 
-    if (policy === 'fail') {
-      this.transitionPhase(council.id, 'failed');
-      return 'failed';
+        console.error(
+          `[Orchestrator] Consultant ${consultant.name} failed (attempt ${attempt + 1}/${maxRetries + 1}):`,
+          (error as Error).message
+        );
+
+        councilStore.addError(
+          council.id,
+          `Consultant ${consultant.name}: ${(error as Error).message} (attempt ${attempt + 1})`
+        );
+
+        if (policy === 'fail') {
+          this.transitionPhase(council.id, 'failed');
+          throw error;
+        }
+
+        if (isLastAttempt) {
+          // Record submission for failed consultant so the round can still complete
+          councilStore.recordSubmission(council.id, consultant.id);
+
+          // Create an error entry in the ledger so it's visible in the UI
+          this.createEntry(
+            council.id,
+            'consultant',
+            consultant.id,
+            'error',
+            council.deliberationState?.currentPhase || 'round_independent',
+            `Failed to contribute after ${attempt + 1} attempt(s): ${(error as Error).message}`,
+            0,
+            0,
+            undefined,
+            council.deliberationState?.currentRound
+          );
+
+          return null;
+        }
+
+        // Brief delay before retry (escalating backoff)
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+      }
     }
 
-    if (policy === 'skip') {
-      return 'skipped';
-    }
-
-    // Retry policy - for now just skip after logging
-    // In a real implementation, this would track retry counts per consultant
-    return 'skipped';
+    return null;
   }
 }

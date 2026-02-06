@@ -18,8 +18,26 @@
 }
 
 .controls-description {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   font-size: 0.875rem;
   color: var(--text-secondary, #999);
+}
+
+/* Animated processing indicator */
+.processing-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: var(--accent-color, #3b82f6);
+  border-radius: 50%;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
 }
 
 .controls-right {

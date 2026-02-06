@@ -4,6 +4,7 @@
  */
 
 import type { LLMProvider } from './orchestrator';
+import type { MCPTool } from '../types/mcp';
 import { anthropicClient } from '../services/anthropicClient';
 import { openaiClient } from '../services/openaiClient';
 
@@ -13,6 +14,7 @@ interface CompletionParams {
   systemPrompt: string;
   userMessage: string;
   temperature?: number;
+  availableTools?: Map<string, { serverId: string; tools: MCPTool[] }>;
 }
 
 interface CompletionResult {
@@ -50,7 +52,6 @@ export class LLMAdapter implements LLMProvider {
     params: CompletionParams,
     startTime: number
   ): Promise<CompletionResult> {
-    // Create a simple message for completion
     const messages = [
       {
         id: crypto.randomUUID(),
@@ -60,8 +61,8 @@ export class LLMAdapter implements LLMProvider {
       },
     ];
 
-    // Use the chat method with empty tools (no MCP tools for council)
-    const availableTools = new Map();
+    // Pass through MCP tools if provided, otherwise empty map
+    const availableTools = params.availableTools || new Map();
 
     const result = await anthropicClient.chat(
       messages,
@@ -88,7 +89,6 @@ export class LLMAdapter implements LLMProvider {
     params: CompletionParams,
     startTime: number
   ): Promise<CompletionResult> {
-    // Create a simple message for completion
     const messages = [
       {
         id: crypto.randomUUID(),
@@ -98,8 +98,8 @@ export class LLMAdapter implements LLMProvider {
       },
     ];
 
-    // Use the chat method with empty tools
-    const availableTools = new Map();
+    // Pass through MCP tools if provided, otherwise empty map
+    const availableTools = params.availableTools || new Map();
 
     const result = await openaiClient.chat(
       messages,

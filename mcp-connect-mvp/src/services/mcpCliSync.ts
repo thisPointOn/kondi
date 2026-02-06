@@ -12,8 +12,13 @@ import type { MCPServer } from '../types/mcp';
 const CODEX_CONFIG_PATH = '~/.codex/config.toml';
 
 class McpCliSync {
-  // Track synced servers with their URLs to detect changes
-  private syncedServers: Map<string, string> = new Map(); // serverId -> url
+  // Track synced servers with their URL+token fingerprint to detect changes
+  private syncedServers: Map<string, string> = new Map(); // serverId -> url+token fingerprint
+
+  private fingerprint(server: MCPServer): string {
+    // Include token in fingerprint so re-auth with same port still triggers re-sync
+    return `${server.url}|${server.accessToken || ''}`;
+  }
 
   /**
    * Sync an MCP server to CLI tools
@@ -21,16 +26,17 @@ class McpCliSync {
    */
   async syncServer(server: MCPServer): Promise<void> {
     const cliName = this.sanitizeName(server.name);
-    const previousUrl = this.syncedServers.get(server.id);
+    const currentFingerprint = this.fingerprint(server);
+    const previousFingerprint = this.syncedServers.get(server.id);
 
-    // Check if URL has changed (need to re-sync)
-    if (previousUrl && previousUrl === server.url) {
-      console.log('[McpCliSync] Server already synced with same URL:', server.name);
+    // Check if URL and token are unchanged (no re-sync needed)
+    if (previousFingerprint && previousFingerprint === currentFingerprint) {
+      console.log('[McpCliSync] Server already synced with same config:', server.name);
       return;
     }
 
-    if (previousUrl && previousUrl !== server.url) {
-      console.log('[McpCliSync] Server URL changed, re-syncing:', server.name, previousUrl, '->', server.url);
+    if (previousFingerprint) {
+      console.log('[McpCliSync] Server config changed, re-syncing:', server.name);
     }
 
     console.log('[McpCliSync] Syncing server to CLIs:', cliName, server.url);
@@ -41,7 +47,7 @@ class McpCliSync {
     // Sync to Codex
     await this.syncToCodex(server, cliName);
 
-    this.syncedServers.set(server.id, server.url);
+    this.syncedServers.set(server.id, currentFingerprint);
   }
 
   /**
@@ -200,31 +206,43 @@ class McpCliSync {
   }
 
   /**
-   * Build Claude Code CLI-compatible config from server
+   * Derive the correct proxy endpoint URL for the given transport.
+   * The proxy serves SSE at /sse and streamable HTTP at /mcp,
+   * so we swap the path suffix based on the server's transport config.
+   */
+  private getProxyEndpoint(baseUrl: string, transport: 'sse' | 'http'): string {
+    // For proxy URLs (http://127.0.0.1:PORT/mcp), swap the endpoint
+    if (baseUrl.match(/^https?:\/\/127\.0\.0\.1:\d+\/mcp\/?$/)) {
+      const base = baseUrl.replace(/\/mcp\/?$/, '');
+      return transport === 'sse' ? `${base}/sse` : `${base}/mcp`;
+    }
+    // For direct remote URLs, use as-is (server URL should already be correct)
+    return baseUrl;
+  }
+
+  /**
+   * Build Claude Code CLI-compatible config from server.
+   * Uses the server's transport setting from Kondi to determine
+   * which proxy endpoint to point Claude Code at.
    */
   private buildClaudeCodeConfig(server: MCPServer): object | null {
+    const authHeaders = server.accessToken
+      ? { headers: { Authorization: `Bearer ${server.accessToken}` } }
+      : {};
+
     switch (server.transport) {
       case 'sse':
         return {
           type: 'sse',
-          url: server.url,
-          ...(server.accessToken && {
-            headers: {
-              Authorization: `Bearer ${server.accessToken}`
-            }
-          })
+          url: this.getProxyEndpoint(server.url, 'sse'),
+          ...authHeaders,
         };
 
       case 'http':
-        // HTTP transport - use as SSE endpoint
         return {
-          type: 'sse',
-          url: server.url.endsWith('/sse') ? server.url : `${server.url}/sse`,
-          ...(server.accessToken && {
-            headers: {
-              Authorization: `Bearer ${server.accessToken}`
-            }
-          })
+          type: 'url',
+          url: this.getProxyEndpoint(server.url, 'http'),
+          ...authHeaders,
         };
 
       case 'stdio':

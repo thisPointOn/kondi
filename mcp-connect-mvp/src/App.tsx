@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FC, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FC, type ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import Sidebar, { type AppView } from './components/Sidebar';
 import ChatArea from './components/ChatArea';
@@ -74,6 +74,8 @@ function App() {
   useEffect(() => {
     console.log('[App] State changed - selectedProviderId:', selectedProviderId, 'anthropicModel:', anthropicModel, 'openaiModel:', openaiModel);
   }, [selectedProviderId, anthropicModel, openaiModel]);
+  /** Guard to prevent double auto-connect from React StrictMode double-mount */
+  const hasInitializedRef = useRef(false);
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle');
   const [updateMessage, setUpdateMessage] = useState<string>('Not checked yet.');
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -413,11 +415,16 @@ function App() {
   // Load existing server state from the MCP client
   const refreshServers = () => {
     const all = mcpClient.getAllServers();
-    const withTools = all.map((server) => ({
-      ...server,
-      tools: mcpClient.getTools(server.id),
-      icon: server.icon || undefined,
-    }));
+    const withTools = all.map((server) => {
+      const tools = mcpClient.getTools(server.id);
+      console.log(`[App] refreshServers: ${server.name} (${server.id}) has ${tools.length} tools`);
+      return {
+        ...server,
+        tools,
+        icon: server.icon || undefined,
+      };
+    });
+    console.log(`[App] refreshServers: Total ${withTools.length} servers, ${withTools.reduce((sum, s) => sum + (s.tools?.length || 0), 0)} tools`);
     setServers(withTools);
     // Persist to localStorage for quick restore across restarts
     const configsToSave = withTools.map(({ id, name, url, transport, icon, accessToken, clientId, clientSecret, autoConnect, type, metadata }) => ({
@@ -487,6 +494,10 @@ function App() {
 
   // Load servers from localStorage on mount
   useEffect(() => {
+    // Guard against React StrictMode double-mount triggering duplicate OAuth flows
+    if (hasInitializedRef.current) return;
+    hasInitializedRef.current = true;
+
     // Load chats - try Tauri first, then localStorage
     (async () => {
       let loaded = false;
@@ -583,6 +594,13 @@ function App() {
           try {
             console.log('[App] Auto-reconnecting server:', server.name);
             await mcpClient.connectServer(server);
+            // Re-sync to CLI tools after reconnect (proxy port/token may have changed)
+            const reconnectedServer = mcpClient.getAllServers().find(s => s.id === server.id);
+            if (reconnectedServer) {
+              mcpCliSync.resyncServer(reconnectedServer).catch(err => {
+                console.warn('[App] Failed to sync auto-reconnected server to CLI tools:', err);
+              });
+            }
             refreshServers();
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
@@ -879,14 +897,15 @@ function App() {
     map.set(LOCAL_SERVER_ID, { serverId: LOCAL_SERVER_ID, tools: LOCAL_TOOLS });
 
     // Add MCP server tools
-    servers
-      .filter((s) => s.status === 'connected')
-      .forEach((server) => {
+    const connectedServers = servers.filter((s) => s.status === 'connected');
+    console.log(`[App] availableTools: ${connectedServers.length} connected servers:`, connectedServers.map(s => `${s.name}(${s.tools?.length || 0} tools)`));
+    connectedServers.forEach((server) => {
         const tools = server.tools || [];
         if (tools.length > 0) {
           map.set(server.id, { serverId: server.id, tools });
         }
       });
+    console.log(`[App] availableTools: Total ${map.size} entries in map`);
     return map;
   }, [servers]);
 
@@ -1206,8 +1225,8 @@ function App() {
       // Reconnect to refresh tools - this will use the messageEndpoint we just set
       await mcpClient.connectServer(updatedServer);
 
-      // Sync to CLI tools so they also have the new proxy endpoint
-      mcpCliSync.syncServer(updatedServer).catch(err => {
+      // Force re-sync to CLI tools (token changed, proxy port may have changed)
+      mcpCliSync.resyncServer(updatedServer).catch(err => {
         console.warn('[App] Failed to sync re-authenticated server to CLI tools:', err);
       });
 
@@ -1263,6 +1282,13 @@ function App() {
       });
       // Track that this server is connected for auto-reconnect on next startup
       localStorage.setItem(`mcp-server-connected-${serverId}`, 'true');
+      // Re-sync to CLI tools (proxy port/token may have changed)
+      const reconnectedServer = mcpClient.getAllServers().find(s => s.id === serverId);
+      if (reconnectedServer) {
+        mcpCliSync.resyncServer(reconnectedServer).catch(err => {
+          console.warn('[App] Failed to sync reconnected server to CLI tools:', err);
+        });
+      }
       refreshServers();
     } catch (error) {
       console.error('[App] Reconnect failed:', error);
@@ -1366,6 +1392,7 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
+                      availableTools,
                     });
                     return result;
                   },
@@ -1375,6 +1402,7 @@ function App() {
                       provider: params.provider,
                       systemPrompt: params.systemPrompt,
                       userMessage: params.userMessage,
+                      availableTools,
                     });
                     return { content: result.content, tokensUsed: result.tokensUsed };
                   },
@@ -1479,6 +1507,7 @@ function App() {
                         systemPrompt: invocation.systemPrompt,
                         userMessage: invocation.userMessage,
                         temperature: persona.temperature,
+                        availableTools,
                       });
                       console.log('[App] invokeAgent completed', { personaName: persona.name });
                       return result;
@@ -1513,6 +1542,7 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
+                      availableTools,
                     });
                     return result;
                   },
@@ -1540,6 +1570,7 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
+                      availableTools,
                     });
                     return result;
                   },
@@ -1562,6 +1593,7 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
+                      availableTools,
                     });
                     return result;
                   },
@@ -1584,6 +1616,7 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
+                      availableTools,
                     });
                     return result;
                   },
@@ -1606,6 +1639,7 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
+                      availableTools,
                     });
                     return result;
                   },
@@ -1628,6 +1662,7 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
+                      availableTools,
                     });
                     return result;
                   },
@@ -1650,6 +1685,7 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
+                      availableTools,
                     });
                     return result;
                   },
@@ -1672,6 +1708,7 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
+                      availableTools,
                     });
                     return result;
                   },
@@ -1687,11 +1724,21 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
+                      availableTools,
                     });
                     return result;
                   },
+                  onAgentThinkingStart: (persona) => {
+                    setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+                  },
+                  onAgentThinkingEnd: (persona) => {
+                    setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+                  },
                 });
+                // Resume from paused state and continue auto-running
                 await deliberator.resume(council);
+                await deliberator.continueDeliberation(council.id);
+                setThinkingPersonas([]);
               }}
               onForceDecision={async (council) => {
                 const deliberator = new DeliberationOrchestrator({
@@ -1702,6 +1749,7 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
+                      availableTools,
                     });
                     return result;
                   },
@@ -1725,6 +1773,7 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
+                      availableTools,
                     });
                     return result;
                   },
@@ -1759,6 +1808,7 @@ function App() {
                     systemPrompt: responder.predisposition.systemPrompt,
                     userMessage: `The user has paused the deliberation to ask you a question or make a comment:\n\n"${message}"\n\nPlease respond helpfully, keeping in mind the context of the ongoing deliberation.`,
                     temperature: responder.temperature,
+                    availableTools,
                   });
 
                   // Add response to ledger

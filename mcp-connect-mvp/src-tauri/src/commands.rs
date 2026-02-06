@@ -776,8 +776,10 @@ pub struct OAuthResult {
 
 /// Internal OAuth function that returns full credentials
 /// Used by reauthenticate_proxy to get all OAuth details in one call
+/// callback_port: if Some, use that port for the OAuth callback server; otherwise pick 9876
 pub async fn start_oauth_full(
     server_url: String,
+    callback_port: Option<u16>,
 ) -> Result<OAuthResult, String> {
     // Derive OAuth endpoints from base server URL
     let base_url = Url::parse(&server_url).map_err(|e| format!("Invalid server URL: {}", e))?;
@@ -798,7 +800,7 @@ pub async fn start_oauth_full(
     let mut token_endpoint = format!("{}/oauth/token", base_with_port);
     let mut registration_endpoint: Option<String> = None;
 
-    println!("[OAuth] Discovering endpoints from {}", well_known_url);
+    println!("[OAuth Full] Discovering endpoints from {}", well_known_url);
     if let Ok(res) = reqwest::Client::new().get(&well_known_url).send().await {
         if res.status().is_success() {
             if let Ok(json) = res.json::<serde_json::Value>().await {
@@ -815,9 +817,10 @@ pub async fn start_oauth_full(
         }
     }
 
-    let callback_port = 9876;
-    let redirect_uri = format!("http://localhost:{}/callback", callback_port);
-    let port = callback_port;
+    let cb_port = callback_port.unwrap_or(9876);
+    let redirect_uri = format!("http://localhost:{}/callback", cb_port);
+    let port = cb_port;
+    println!("[OAuth Full] Using callback port: {}", port);
 
     let code_verifier: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -4260,8 +4263,10 @@ pub async fn reauthenticate_proxy(
 
     // Use start_oauth_full to do dynamic registration and get ALL credentials in one call
     // This ensures the client_id/secret match the access_token (no mismatch from separate calls)
-    println!("[Proxy] Starting OAuth flow with dynamic registration...");
-    let oauth_result = start_oauth_full(config.remote_url.clone()).await?;
+    // Pass the proxy's callbackPort so the OAuth redirect URI matches
+    let cb_port = config.oauth.as_ref().map(|o| o.callback_port);
+    println!("[Proxy] Starting OAuth flow with dynamic registration (callback port: {:?})...", cb_port);
+    let oauth_result = start_oauth_full(config.remote_url.clone(), cb_port).await?;
 
     println!("[Proxy] Got new credentials - client_id: {}", oauth_result.client_id);
 

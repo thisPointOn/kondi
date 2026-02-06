@@ -214,6 +214,9 @@ class ClaudeCodeWrapper {
   private buildArgs(opts: ClaudeCallOptions): string[] {
     const args: string[] = ['-p'];  // print mode (non-interactive)
 
+    // Skip all permission prompts for MCP tools
+    args.push('--dangerously-skip-permissions');
+
     // Output format: stream-json for real-time token streaming
     args.push('--output-format', 'stream-json');
     args.push('--verbose');
@@ -287,12 +290,30 @@ class ClaudeCodeWrapper {
         'run_claude_command',
         { args: ['mcp', 'list'] }
       );
+      console.log('[ClaudeCode] mcp list raw output:', result.output);
       if (result.success) {
         // Parse the output to extract server names
-        return result.output.split('\n').filter(line => line.trim());
+        // Format: "server_name: http://... (HTTP) - ✓ Connected"
+        // We need to extract just the server name before the colon
+        const servers = result.output
+          .split('\n')
+          .map(line => line.trim())
+          .filter(line => {
+            // Only lines that look like server entries (contain ": http")
+            return line.includes(': http') && !line.startsWith('Checking');
+          })
+          .map(line => {
+            // Extract server name (everything before the first colon)
+            const colonIdx = line.indexOf(':');
+            return colonIdx > 0 ? line.substring(0, colonIdx).trim() : null;
+          })
+          .filter((name): name is string => name !== null && name.length > 0);
+        console.log('[ClaudeCode] Parsed MCP servers:', servers);
+        return servers;
       }
       return [];
-    } catch {
+    } catch (err) {
+      console.error('[ClaudeCode] Failed to list MCP servers:', err);
       return [];
     }
   }

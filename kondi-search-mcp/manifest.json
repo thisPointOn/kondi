@@ -1,0 +1,28 @@
+{
+  "name": "kondi-search-mcp",
+  "version": "1.0.0",
+  "description": "MCP server providing web search and fetch tools via local SearXNG",
+  "entrypoint": "dist/index.js",
+  "runtime": "node",
+  "run": {
+    "command": "node",
+    "args": ["dist/index.js"],
+    "env": {
+      "KONDI_SEARCH_SEARXNG_URL": "http://localhost:8888"
+    }
+  },
+  "tools": [
+    {
+      "name": "web_search",
+      "description": "Search the web using a local SearXNG instance. Returns titles, URLs, and snippets."
+    },
+    {
+      "name": "web_fetch",
+      "description": "Fetch a web page and extract its readable content. Supports HTML and PDF."
+    }
+  ],
+  "requirements": {
+    "docker": true,
+    "services": ["searxng"]
+  }
+}

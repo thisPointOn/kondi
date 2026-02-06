@@ -456,23 +456,37 @@ export class OpenAIClient {
       })),
     ];
 
-    // First API call
-    const completion = await this.client!.chat.completions.create({
-      model: model || 'gpt-5.2-codex',
-      messages: openaiMessages,
-      tools: tools.length > 0 ? tools : undefined,
-      tool_choice: tools.length > 0 ? 'auto' : undefined,
-    });
-
-    const response = completion.choices[0].message;
-    console.log('[OpenAI] First response:', JSON.stringify(response, null, 2));
-
+    // Agentic tool-use loop: keep sending requests until the model stops
+    // requesting tools or we hit the max turn limit. This handles chained
+    // tool calls like rtb_auth_status → actual_search without stopping early.
+    const MAX_TOOL_TURNS = 8;
     const toolCalls: ToolCall[] = [];
+    let currentMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [...openaiMessages];
+    let turnCount = 0;
+    let finalContent = '';
 
-    // If the model wants to use tools
-    if (response.tool_calls && response.tool_calls.length > 0) {
-      console.log('[OpenAI] Tool calls requested:', response.tool_calls.length);
+    while (turnCount < MAX_TOOL_TURNS) {
+      turnCount++;
+      const completion = await this.client!.chat.completions.create({
+        model: model || 'gpt-5.2-codex',
+        messages: currentMessages,
+        tools: tools.length > 0 ? tools : undefined,
+        tool_choice: turnCount === 1 && tools.length > 0 ? 'auto' : undefined,
+      });
 
+      const response = completion.choices[0].message;
+      console.log(`[OpenAI] Turn ${turnCount} response:`, JSON.stringify(response, null, 2));
+
+      // No tool calls — we're done
+      if (!response.tool_calls || response.tool_calls.length === 0) {
+        finalContent = typeof response.content === 'string'
+          ? response.content
+          : JSON.stringify(response.content || '');
+        break;
+      }
+
+      // Execute all tool calls for this turn
+      console.log(`[OpenAI] Turn ${turnCount}: ${response.tool_calls.length} tool calls`);
       const toolResults: OpenAI.Chat.Completions.ChatCompletionToolMessageParam[] = [];
 
       for (const tc of response.tool_calls) {
@@ -480,7 +494,6 @@ export class OpenAIClient {
 
         console.log('[OpenAI] Processing tool call:', tc.function.name);
         const toolInfo = toolMap.get(tc.function.name);
-        console.log('[OpenAI] Tool info found:', !!toolInfo);
 
         if (!toolInfo) {
           toolResults.push({
@@ -503,7 +516,6 @@ export class OpenAIClient {
           toolCall.status = 'running';
           console.log('[OpenAI] Calling tool:', toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);
 
-          // Route to local tools service or MCP client
           let result;
           if (toolInfo.serverId === LOCAL_SERVER_ID) {
             result = await localToolsService.callTool(toolInfo.tool.name, toolCall.arguments);
@@ -539,46 +551,27 @@ export class OpenAIClient {
         toolCalls.push(toolCall);
       }
 
-      // Second API call with tool results
-      const followUpMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-        ...openaiMessages,
+      // Append assistant response + tool results and loop for next turn
+      currentMessages = [
+        ...currentMessages,
         {
-          role: 'assistant',
+          role: 'assistant' as const,
           content: response.content,
           tool_calls: response.tool_calls,
         },
         ...toolResults,
       ];
-
-      const followUp = await this.client!.chat.completions.create({
-        model: model || 'gpt-5.2-codex',
-        messages: followUpMessages,
-        tools: tools.length > 0 ? tools : undefined,
-      });
-
-      const finalResponse = followUp.choices[0].message;
-      console.log('[OpenAI] Final response:', finalResponse.content);
-
-      return {
-        message: {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: finalResponse.content || '[No content returned]',
-          timestamp: new Date(),
-        },
-        toolCalls,
-      };
     }
 
-    // No tool use, just return the response
+    if (turnCount >= MAX_TOOL_TURNS) {
+      console.warn(`[OpenAI] Hit max tool turns (${MAX_TOOL_TURNS})`);
+    }
+
     return {
       message: {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content:
-          typeof response.content === 'string'
-            ? response.content
-            : JSON.stringify(response.content || ''),
+        content: finalContent || '[No content returned]',
         timestamp: new Date(),
       },
       toolCalls,

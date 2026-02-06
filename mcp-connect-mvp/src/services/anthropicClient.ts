@@ -275,63 +275,67 @@ class AnthropicClient {
       content: [{ type: 'text', text: m.content }],
     }));
 
-    const toolSummary =
-      tools && tools.length > 0
-        ? `Available MCP tools:\n${Array.from(availableTools.values())
-            .map(({ serverId, tools }) => {
-              const names = tools.map((t) => t.name).join(', ');
-              return `- ${serverId}: ${names}`;
-            })
-            .join('\n')}\nWhen you use a tool, pick the best one for the task.`
-        : undefined;
-
     // When using OAuth, prepend the Claude Code system prompt (required for OAuth tokens)
     const isOAuthToken = this.useOAuth && this.oauthToken?.includes('sk-ant-oat');
     const systemParts = isOAuthToken
-      ? [CLAUDE_CODE_SYSTEM_PREFIX, BASE_SYSTEM_PROMPT, additionalSystemPrompt, toolSummary, serverSummary]
-      : [BASE_SYSTEM_PROMPT, additionalSystemPrompt, toolSummary, serverSummary];
+      ? [CLAUDE_CODE_SYSTEM_PREFIX, BASE_SYSTEM_PROMPT, additionalSystemPrompt, serverSummary]
+      : [BASE_SYSTEM_PROMPT, additionalSystemPrompt, serverSummary];
 
     const system = systemParts
       .filter(Boolean)
       .join('\n\n')
       .trim();
 
-    // First turn
-    const first = await this.sendMessage(anthropicMessages, tools, model, system || undefined);
-    console.log('[Anthropic] First response:', JSON.stringify(first, null, 2));
-
-    // Check for API errors
-    if (first.error) {
-      console.error('[Anthropic] API error:', first.error);
-      throw new Error(first.error.message || JSON.stringify(first.error));
-    }
-
-    // Extract text and tool uses from first response
-    const firstTextParts =
-      Array.isArray(first.content) && first.content.length > 0
-        ? first.content
-            .filter((p: any) => p.type === 'text')
-            .map((p: any) => p.text)
-            .join('\n')
-        : '';
-    console.log('[Anthropic] First response text:', firstTextParts ? firstTextParts.slice(0, 200) + '...' : '(none)');
-
-    // Extract tool uses
-    const toolUses =
-      Array.isArray(first.content) && first.content.length > 0
-        ? first.content.filter((p: any) => p.type === 'tool_use')
-        : [];
-    console.log('[Anthropic] Tool uses found:', toolUses.length);
-
+    // Agentic tool-use loop: keep sending requests until the model stops
+    // requesting tools or we hit the max turn limit. This handles chained
+    // tool calls like auth_status → actual_search without dropping the ball.
+    const MAX_TOOL_TURNS = 8;
     const toolCalls: ToolCall[] = [];
+    const allTextParts: string[] = [];
+    let currentMessages = [...anthropicMessages];
+    let turnCount = 0;
 
-    if (toolUses.length > 0) {
+    while (turnCount < MAX_TOOL_TURNS) {
+      turnCount++;
+      const response = await this.sendMessage(currentMessages, tools, model, system || undefined);
+      console.log(`[Anthropic] Turn ${turnCount} response:`, JSON.stringify(response, null, 2));
+
+      // Check for API errors
+      if (response.error) {
+        console.error('[Anthropic] API error:', response.error);
+        throw new Error(response.error.message || JSON.stringify(response.error));
+      }
+
+      // Extract text parts from this turn
+      const textParts =
+        Array.isArray(response.content) && response.content.length > 0
+          ? response.content
+              .filter((p: any) => p.type === 'text')
+              .map((p: any) => p.text)
+              .join('\n')
+          : '';
+      if (textParts) {
+        allTextParts.push(textParts);
+      }
+
+      // Extract tool uses
+      const toolUses =
+        Array.isArray(response.content) && response.content.length > 0
+          ? response.content.filter((p: any) => p.type === 'tool_use')
+          : [];
+      console.log(`[Anthropic] Turn ${turnCount}: ${toolUses.length} tool calls, stop_reason: ${response.stop_reason}`);
+
+      // No tool calls — we're done
+      if (toolUses.length === 0) {
+        break;
+      }
+
+      // Execute all tool calls for this turn
       const toolResultsContent: { type: 'tool_result'; tool_use_id: string; content: string }[] = [];
 
       for (const use of toolUses) {
         console.log('[Anthropic] Processing tool use:', use.name);
         const toolInfo = toolMap.get(use.name);
-        console.log('[Anthropic] Tool info found:', !!toolInfo, toolInfo?.serverId, toolInfo?.tool?.name);
         const call: ToolCall = {
           id: use.id || crypto.randomUUID(),
           serverId: toolInfo?.serverId || 'unknown',
@@ -343,7 +347,6 @@ class AnthropicClient {
           call.status = 'running';
           console.log('[Anthropic] Calling tool:', call.serverId, call.toolName, call.arguments);
 
-          // Route to local tools service or MCP client
           let result;
           if (call.serverId === LOCAL_SERVER_ID) {
             result = await localToolsService.callTool(call.toolName, call.arguments);
@@ -371,57 +374,30 @@ class AnthropicClient {
         toolCalls.push(call);
       }
 
-      // Second turn with tool results to get final response
-      const followupMessages: AnthropicMessage[] = [
-        ...anthropicMessages,
-        { role: 'assistant', content: first.content },
-        { role: 'user', content: toolResultsContent },
+      // Append assistant response + tool results and loop for next turn
+      currentMessages = [
+        ...currentMessages,
+        { role: 'assistant' as const, content: response.content },
+        { role: 'user' as const, content: toolResultsContent },
       ];
-
-      const second = await this.sendMessage(followupMessages, tools, model, system || undefined);
-      console.log('[Anthropic] Second response:', JSON.stringify(second, null, 2));
-
-      const secondTextParts =
-        Array.isArray(second.content) && second.content.length > 0
-          ? second.content
-              .filter((p: any) => p.type === 'text')
-              .map((p: any) => p.text)
-              .join('\n')
-          : '';
-
-      // Combine any text from first response with second response
-      const combinedText = [firstTextParts, secondTextParts].filter(Boolean).join('\n\n');
-
-      return {
-        message: {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: combinedText || '[No content returned after tool use]',
-          timestamp: new Date(),
-        },
-        toolCalls,
-      };
     }
 
-    // No tool use, just return first response
-    // Use the already extracted firstTextParts
-    let content = firstTextParts;
+    if (turnCount >= MAX_TOOL_TURNS) {
+      console.warn(`[Anthropic] Hit max tool turns (${MAX_TOOL_TURNS})`);
+    }
 
-    // If no text content, provide more helpful message
-    if (!content) {
-      console.warn('[Anthropic] No text content in response. Full response:', first);
-      if (first.stop_reason) {
-        content = `[Response ended with reason: ${first.stop_reason}]`;
-      } else {
-        content = '[No content returned - check console for details]';
-      }
+    // Combine all text across turns
+    const finalContent = allTextParts.filter(Boolean).join('\n\n');
+
+    if (!finalContent) {
+      console.warn('[Anthropic] No text content across all turns');
     }
 
     return {
       message: {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content,
+        content: finalContent || '[No content returned - check console for details]',
         timestamp: new Date(),
       },
       toolCalls,
@@ -434,18 +410,15 @@ class AnthropicClient {
   private buildToolDescription(availableTools: Map<string, { serverId: string; tools: MCPTool[] }>): string {
     if (availableTools.size === 0) return '';
 
-    const parts: string[] = ['## Available MCP Tools\n'];
-    for (const [serverId, { tools }] of availableTools) {
+    const parts: string[] = ['## Available Tools\n'];
+    parts.push('These tools are ready to use. Call them directly to accomplish tasks.\n');
+
+    let toolIndex = 0;
+    for (const [, { tools }] of availableTools) {
       if (tools.length === 0) continue;
-      parts.push(`### ${serverId}`);
       for (const tool of tools) {
-        parts.push(`- **${tool.name}**: ${tool.description || 'No description'}`);
-        if (tool.inputSchema?.properties) {
-          const params = Object.entries(tool.inputSchema.properties)
-            .map(([name, schema]: [string, any]) => `  - ${name}: ${schema.description || schema.type || 'any'}`)
-            .join('\n');
-          if (params) parts.push(params);
-        }
+        toolIndex++;
+        parts.push(`${toolIndex}. **${tool.name}**: ${tool.description || 'No description'}`);
       }
     }
     return parts.join('\n');
@@ -514,7 +487,9 @@ class AnthropicClient {
     // Build allowed tools list from connected MCP servers
     const allowedTools = await claudeCodeWrapper.listMCPServers();
 
-    console.log('[Anthropic CLI] Tool count:', Array.from(availableTools.values()).reduce((sum, { tools }) => sum + tools.length, 0));
+    console.log('[Anthropic CLI] Tool count from app:', Array.from(availableTools.values()).reduce((sum, { tools }) => sum + tools.length, 0));
+    console.log('[Anthropic CLI] Claude Code MCP servers:', allowedTools);
+    console.log('[Anthropic CLI] Allowed tools being passed:', allowedTools.map(s => `mcp__${s}`));
 
     let resultText = '';
     let newSessionId: string | null = null;

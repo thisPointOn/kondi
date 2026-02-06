@@ -122,6 +122,10 @@ export default function DeliberationView({
     if (!c?.deliberation?.saveDeliberation) return 'none';
     return c.deliberation.saveDeliberationMode ?? 'full';
   });
+  const [maxRounds, setMaxRounds] = useState(() => {
+    const c = councilStore.get(councilId);
+    return c?.deliberation?.maxRounds ?? 4;
+  });
   const [isAddingPersona, setIsAddingPersona] = useState(false);
   const [editingPersona, setEditingPersona] = useState<Persona | null>(null);
   const ledgerEndRef = useRef<HTMLDivElement>(null);
@@ -254,7 +258,6 @@ export default function DeliberationView({
   // Get current phase
   const currentPhase = council?.deliberationState?.currentPhase || 'created';
   const currentRound = council?.deliberationState?.currentRound || 0;
-  const maxRounds = council?.deliberation?.maxRounds || 4;
 
   // Check if roles are assigned
   const hasRoleAssignments = (council?.deliberation?.roleAssignments?.length ?? 0) > 0;
@@ -308,11 +311,12 @@ export default function DeliberationView({
     const trimmedProblem = problemInput.trim();
     const trimmedOutput = expectedOutput.trim();
 
-    // Update the council's deliberation config with the saved problem and expected output
-    if (council.deliberation) {
+    // Read fresh council to avoid overwriting other settings
+    const freshC = councilStore.get(councilId);
+    if (freshC?.deliberation) {
       councilStore.update(councilId, {
         deliberation: {
-          ...council.deliberation,
+          ...freshC.deliberation,
           savedProblem: trimmedProblem,
           expectedOutput: trimmedOutput || undefined,
         },
@@ -898,9 +902,10 @@ export default function DeliberationView({
                       type="button"
                       className={`execution-option ${council.deliberation?.consultantExecution !== 'parallel' ? 'active' : ''}`}
                       onClick={() => {
-                        if (council.deliberation) {
+                        const fresh = councilStore.get(councilId);
+                        if (fresh?.deliberation) {
                           councilStore.update(councilId, {
-                            deliberation: { ...council.deliberation, consultantExecution: 'sequential' },
+                            deliberation: { ...fresh.deliberation, consultantExecution: 'sequential' },
                           });
                         }
                       }}
@@ -913,9 +918,10 @@ export default function DeliberationView({
                       type="button"
                       className={`execution-option ${council.deliberation?.consultantExecution === 'parallel' ? 'active' : ''}`}
                       onClick={() => {
-                        if (council.deliberation) {
+                        const fresh = councilStore.get(councilId);
+                        if (fresh?.deliberation) {
                           councilStore.update(councilId, {
-                            deliberation: { ...council.deliberation, consultantExecution: 'parallel' },
+                            deliberation: { ...fresh.deliberation, consultantExecution: 'parallel' },
                           });
                         }
                       }}
@@ -924,6 +930,34 @@ export default function DeliberationView({
                       <span className="execution-label">Parallel</span>
                       <span className="execution-desc">All consultants respond simultaneously</span>
                     </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Max Rounds - only show in deliberation mode */}
+              {council.orchestration.mode === 'deliberation' && (
+                <div className="setup-section">
+                  <h4>Max Rounds</h4>
+                  <p className="section-hint">Maximum number of deliberation rounds before forcing a decision</p>
+                  <div className="max-rounds-selector">
+                    {[2, 3, 4, 6, 8].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={`rounds-option ${maxRounds === value ? 'active' : ''}`}
+                        onClick={() => {
+                          setMaxRounds(value);
+                          const fresh = councilStore.get(councilId);
+                          if (fresh?.deliberation) {
+                            councilStore.update(councilId, {
+                              deliberation: { ...fresh.deliberation, maxRounds: value },
+                            });
+                          }
+                        }}
+                      >
+                        {value}
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}
@@ -938,9 +972,10 @@ export default function DeliberationView({
                     className={`save-output-option ${saveMode === 'none' ? 'active' : ''}`}
                     onClick={() => {
                       setSaveMode('none');
-                      if (council.deliberation) {
+                      const freshNone = councilStore.get(councilId);
+                      if (freshNone?.deliberation) {
                         councilStore.update(councilId, {
-                          deliberation: { ...council.deliberation, saveDeliberation: false },
+                          deliberation: { ...freshNone.deliberation, saveDeliberation: false },
                         });
                       }
                     }}
@@ -953,9 +988,10 @@ export default function DeliberationView({
                     className={`save-output-option ${saveMode === 'abbreviated' ? 'active' : ''}`}
                     onClick={() => {
                       setSaveMode('abbreviated');
-                      if (council.deliberation) {
+                      const freshAbbr = councilStore.get(councilId);
+                      if (freshAbbr?.deliberation) {
                         councilStore.update(councilId, {
-                          deliberation: { ...council.deliberation, saveDeliberation: true, saveDeliberationMode: 'abbreviated' },
+                          deliberation: { ...freshAbbr.deliberation, saveDeliberation: true, saveDeliberationMode: 'abbreviated' },
                         });
                       }
                     }}
@@ -968,9 +1004,10 @@ export default function DeliberationView({
                     className={`save-output-option ${saveMode === 'full' ? 'active' : ''}`}
                     onClick={() => {
                       setSaveMode('full');
-                      if (council.deliberation) {
+                      const freshFull = councilStore.get(councilId);
+                      if (freshFull?.deliberation) {
                         councilStore.update(councilId, {
-                          deliberation: { ...council.deliberation, saveDeliberation: true, saveDeliberationMode: 'full' },
+                          deliberation: { ...freshFull.deliberation, saveDeliberation: true, saveDeliberationMode: 'full' },
                         });
                       }
                     }}
@@ -991,7 +1028,9 @@ export default function DeliberationView({
                   configuredProviders={configuredProviders}
                   onClose={() => setActivePanel(null)}
                   onSave={(assignments, personaUpdates, saveOptions) => {
+                    // Step 1: Save role assignments
                     councilStore.setRoleAssignments(councilId, assignments);
+                    // Step 2: Save persona model changes
                     if (personaUpdates) {
                       for (const update of personaUpdates) {
                         councilStore.updatePersona(councilId, update.id, {
@@ -1000,13 +1039,17 @@ export default function DeliberationView({
                         });
                       }
                     }
-                    // Save directory settings, save deliberation options, and sync with local tools
-                    if (council.deliberation) {
+                    // Step 3: Save directory & other settings
+                    // IMPORTANT: Read fresh council from store so we don't overwrite
+                    // the role assignments and persona updates we just saved above
+                    const freshCouncil = councilStore.get(councilId);
+                    if (freshCouncil?.deliberation) {
                       councilStore.update(councilId, {
                         deliberation: {
-                          ...council.deliberation,
+                          ...freshCouncil.deliberation,
                           workingDirectory: workingDirectory || undefined,
                           directoryConstrained,
+                          maxRounds: maxRounds,
                           saveDeliberation: saveMode !== 'none',
                           saveDeliberationMode: saveMode === 'none' ? 'full' : saveMode,
                         },
@@ -1067,24 +1110,19 @@ export default function DeliberationView({
                 <button
                   className={`task-save-btn ${taskSaved ? 'saved' : ''}`}
                   onClick={() => {
-                    console.log('[Task Save] clicked, council:', !!council, 'problemInput:', problemInput, 'taskSaved:', taskSaved);
-                    if (!council || !problemInput.trim() || taskSaved) {
-                      console.log('[Task Save] early return');
-                      return;
-                    }
+                    if (!council || !problemInput.trim() || taskSaved) return;
                     const trimmedProblem = problemInput.trim();
                     const trimmedOutput = expectedOutput.trim();
-                    if (council.deliberation) {
-                      console.log('[Task Save] updating councilStore');
+                    const freshC = councilStore.get(councilId);
+                    if (freshC?.deliberation) {
                       councilStore.update(councilId, {
                         deliberation: {
-                          ...council.deliberation,
+                          ...freshC.deliberation,
                           savedProblem: trimmedProblem,
                           expectedOutput: trimmedOutput || undefined,
                         },
                       });
                     }
-                    console.log('[Task Save] setting taskSaved to true');
                     setTaskSaved(true);
                   }}
                   disabled={!problemInput.trim() || taskSaved}
@@ -1324,13 +1362,16 @@ export default function DeliberationView({
           }}
           onUpdate={(personaId: string, updates: Partial<Persona>, roleUpdates?: Partial<DeliberationRoleAssignment>) => {
             councilStore.updatePersona(councilId, personaId, updates);
-            if (roleUpdates && council.deliberation?.roleAssignments) {
-              const updatedAssignments = council.deliberation.roleAssignments.map((r) =>
-                r.personaId === personaId ? { ...r, ...roleUpdates } : r
-              );
-              councilStore.update(councilId, {
-                deliberation: { ...council.deliberation, roleAssignments: updatedAssignments },
-              });
+            if (roleUpdates) {
+              const freshC = councilStore.get(councilId);
+              if (freshC?.deliberation?.roleAssignments) {
+                const updatedAssignments = freshC.deliberation.roleAssignments.map((r) =>
+                  r.personaId === personaId ? { ...r, ...roleUpdates } : r
+                );
+                councilStore.update(councilId, {
+                  deliberation: { ...freshC.deliberation, roleAssignments: updatedAssignments },
+                });
+              }
             }
             setEditingPersona(null);
           }}

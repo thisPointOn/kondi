@@ -1,0 +1,113 @@
+# SearXNG settings for Kondi Search MCP Server
+# See https://docs.searxng.org/admin/settings/index.html
+
+use_default_settings: true
+
+general:
+  instance_name: "Kondi Search"
+  privacypolicy_url: false
+  donation_url: false
+  contact_url: false
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json  # Required for MCP server to work
+
+server:
+  secret_key: "change-this-to-a-random-string-in-production"
+  bind_address: "0.0.0.0:8080"
+  method: "GET"
+  limiter: false
+  image_proxy: false
+  http_protocol_version: "1.1"
+
+ui:
+  static_use_hash: true
+  default_theme: simple
+  theme_args:
+    simple_style: dark
+
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+  useragent_suffix: "KondiSearch"
+  pool_connections: 100
+  pool_maxsize: 20
+
+# Enable search engines
+# More engines = better coverage but potentially slower
+engines:
+  # General search engines
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+
+  # Knowledge & Reference
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: w
+    disabled: false
+
+  - name: wikidata
+    engine: wikidata
+    shortcut: wd
+    disabled: false
+
+  # Developer focused
+  - name: github
+    engine: github
+    shortcut: gh
+    disabled: false
+
+  - name: stackoverflow
+    engine: stackoverflow
+    shortcut: so
+    disabled: false
+
+  - name: npm
+    engine: json_engine
+    shortcut: npm
+    disabled: true  # Enable if you want npm search
+
+  # News (disabled by default - enable for news category)
+  - name: google news
+    engine: google_news
+    shortcut: gn
+    disabled: true
+
+  - name: bing news
+    engine: bing_news
+    shortcut: bn
+    disabled: true
+
+  # Science (disabled by default - enable for science category)
+  - name: arxiv
+    engine: arxiv
+    shortcut: arx
+    disabled: true
+
+  - name: google scholar
+    engine: google_scholar
+    shortcut: gs
+    disabled: true

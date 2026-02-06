@@ -3,7 +3,7 @@
  * Also allows changing models per persona
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { Council, Persona, DeliberationRole, DeliberationRoleAssignment } from '../../council/types';
 import {
   ANTHROPIC_CLI_MODELS,
@@ -175,6 +175,27 @@ export default function RoleAssignment({
     mergeAssignments()
   );
 
+  // When personas are added/removed, sync the assignments array
+  useEffect(() => {
+    setAssignments((prev) => {
+      const existingIds = new Set(prev.map((a) => a.personaId));
+      const personaIds = new Set(council.personas.map((p) => p.id));
+
+      // Add assignments for new personas
+      const newAssignments = council.personas
+        .filter((p) => !existingIds.has(p.id))
+        .map((p) => ({ personaId: p.id, role: 'consultant' as DeliberationRole }));
+
+      // Remove assignments for deleted personas
+      const filtered = prev.filter((a) => personaIds.has(a.personaId));
+
+      if (newAssignments.length === 0 && filtered.length === prev.length) {
+        return prev; // No changes
+      }
+      return [...filtered, ...newAssignments];
+    });
+  }, [council.personas]);
+
   // Track model changes per persona
   const [modelChanges, setModelChanges] = useState<Record<string, { model: string; provider: string }>>({});
 
@@ -247,9 +268,14 @@ export default function RoleAssignment({
     // Set suppressPersona for manager/worker, clear it for consultant
     const suppressPersona = (role === 'manager' || role === 'worker') ? true : undefined;
 
-    setAssignments((prev) =>
-      prev.map((a) => (a.personaId === personaId ? { ...a, role, suppressPersona } : a))
-    );
+    setAssignments((prev) => {
+      const exists = prev.some((a) => a.personaId === personaId);
+      if (exists) {
+        return prev.map((a) => (a.personaId === personaId ? { ...a, role, suppressPersona } : a));
+      }
+      // Persona not yet in assignments (just added) — append it
+      return [...prev, { personaId, role, suppressPersona }];
+    });
     setSaved(false);
   };
 
