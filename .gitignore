@@ -1,0 +1,16 @@
+# Planning docs & specs
+*.docx
+*.txt
+FLOWFORGE_PLAN.md
+PRD.txt
+
+# Misc
+hello.py
+nodesource_setup.sh
+/package-lock.json
+
+# Removed projects
+openclaw/
+
+# Local config
+.kondi/
