@@ -637,6 +637,7 @@ export interface DeliberationConfig {
 
   roleAssignments: DeliberationRoleAssignment[];
 
+  minRounds: number;               // Default: 1
   maxRounds: number;               // Default: 4
   maxRevisions: number;            // Default: 3
 
@@ -674,6 +675,9 @@ export interface DeliberationConfig {
 
   /** Save mode: 'full' writes 3 files, 'abbreviated' writes 1 summary file */
   saveDeliberationMode?: 'full' | 'abbreviated';
+
+  /** Soft word limit per response — guides LLM to be concise, does not truncate */
+  maxWordsPerResponse?: number;
 }
 
 /**

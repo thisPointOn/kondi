@@ -1255,7 +1255,10 @@ function App() {
       prev.map((s) => (s.id === serverId ? { ...s, status: 'connecting' as const, error: undefined } : s))
     );
 
-    const deadline = Date.now() + 30_000; // 30s timeout for connection attempt
+    // Proxy/OAuth connections need more time (user interacts with browser for OAuth)
+    const isProxyConnection = (server.transport === 'http' || server.transport === 'sse') && server.type !== 'github_mcp_local';
+    const timeoutMs = isProxyConnection ? 180_000 : 30_000; // 3 minutes for OAuth, 30s for local
+    const deadline = Date.now() + timeoutMs;
     setConnectDeadlines((prev) => ({ ...prev, [serverId]: deadline }));
     let timeout: NodeJS.Timeout | null = setTimeout(() => {
       mcpClient.setServerStatus(serverId, 'error', 'Connection timed out');
@@ -1268,7 +1271,7 @@ function App() {
         const { [serverId]: _, ...rest } = prev;
         return rest;
       });
-    }, 30_000);
+    }, timeoutMs);
 
     try {
       await mcpClient.connectServer(server);

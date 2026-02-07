@@ -3116,8 +3116,13 @@ pub async fn run_claude_streaming(
                                 session_id = Some(sid.to_string());
                             }
                             if json.get("type").and_then(|v| v.as_str()) == Some("result") {
-                                if let Some(result) = json.get("result").and_then(|v| v.as_str()) {
-                                    final_result = Some(result.to_string());
+                                if let Some(result_val) = json.get("result") {
+                                    // Handle result as string, or stringify if it's another type
+                                    if let Some(s) = result_val.as_str() {
+                                        final_result = Some(s.to_string());
+                                    } else if !result_val.is_null() {
+                                        final_result = Some(result_val.to_string());
+                                    }
                                 }
                             }
                         }

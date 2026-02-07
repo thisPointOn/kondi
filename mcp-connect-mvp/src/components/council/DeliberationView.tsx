@@ -21,7 +21,7 @@ import type {
 import { councilStore, createPersonaFromTemplate, allTemplates, templateCategories } from '../../council';
 import { localToolsService } from '../../services/localTools';
 import { ledgerStore, getAllEntries } from '../../council/ledger-store';
-import { contextStore, getCurrentContext, getPendingPatches, getContextHistory, getDecision, getPlan, getDirective, getLatestOutput, getAllOutputs } from '../../council/context-store';
+import { contextStore, getCurrentContext, getPendingPatches, getContextHistory, getDecision, getPlan, getDirective, getLatestOutput, getAllOutputs, deleteAllArtifacts } from '../../council/context-store';
 import PhaseIndicator from './PhaseIndicator';
 import LedgerEntryCard from './LedgerEntryCard';
 import LedgerTimeline from './LedgerTimeline';
@@ -122,13 +122,61 @@ export default function DeliberationView({
     if (!c?.deliberation?.saveDeliberation) return 'none';
     return c.deliberation.saveDeliberationMode ?? 'full';
   });
+  const [minRounds, setMinRounds] = useState(() => {
+    const c = councilStore.get(councilId);
+    return c?.deliberation?.minRounds ?? 1;
+  });
   const [maxRounds, setMaxRounds] = useState(() => {
     const c = councilStore.get(councilId);
     return c?.deliberation?.maxRounds ?? 4;
   });
+  const [maxWords, setMaxWords] = useState(() => {
+    const c = councilStore.get(councilId);
+    return c?.deliberation?.maxWordsPerResponse ?? 0; // 0 = no limit
+  });
   const [isAddingPersona, setIsAddingPersona] = useState(false);
   const [editingPersona, setEditingPersona] = useState<Persona | null>(null);
   const ledgerEndRef = useRef<HTMLDivElement>(null);
+
+  // Clean JSON from display strings (for manager evaluation reasoning, etc.)
+  const cleanJsonForDisplay = (text: string): string => {
+    if (!text || typeof text !== 'string') return text;
+    const trimmed = text.trim();
+
+    // Extract JSON from raw or markdown-wrapped content
+    let jsonStr: string | null = null;
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      jsonStr = trimmed;
+    } else {
+      const match = trimmed.match(/```(?:json)?\s*\n?(\{[\s\S]*?\})\s*\n?```/);
+      if (match) jsonStr = match[1];
+    }
+
+    if (jsonStr) {
+      try {
+        const parsed = JSON.parse(jsonStr);
+        // Structured responses first
+        if (parsed.action || parsed.verdict) {
+          const parts: string[] = [];
+          if (parsed.verdict) parts.push(`Verdict: ${parsed.verdict}`);
+          if (parsed.action) parts.push(`Action: ${parsed.action}`);
+          if (parsed.reasoning) parts.push(parsed.reasoning);
+          if (parsed.feedback) parts.push(`Feedback: ${parsed.feedback}`);
+          if (parts.length > 0) return parts.join('\n\n');
+        }
+        // Text field extraction
+        const textFields = ['reasoning', 'content', 'message', 'summary', 'analysis', 'feedback'];
+        for (const field of textFields) {
+          if (parsed[field] && typeof parsed[field] === 'string') {
+            return parsed[field];
+          }
+        }
+      } catch {
+        // Not JSON
+      }
+    }
+    return text;
+  };
 
   // Load council and subscribe to updates
   useEffect(() => {
@@ -328,19 +376,32 @@ export default function DeliberationView({
     console.log('[DeliberationView] Task saved');
   };
 
+  // Clear all deliberation results (ledger, artifacts, state) without restarting
+  const handleClearResults = () => {
+    if (!council) return;
+
+    console.log('[DeliberationView] Clearing deliberation results...');
+
+    // Clear the ledger entries
+    ledgerStore.clear(councilId);
+
+    // Clear all artifacts (context, decision, plan, directive, outputs)
+    deleteAllArtifacts(councilId);
+
+    // Reset the deliberation state to 'created'
+    councilStore.update(councilId, {
+      deliberationState: undefined,
+      status: 'active',
+    });
+  };
+
   // Restart deliberation - clear results and start fresh
   const handleRestartDeliberation = async () => {
     if (!council || !onFrameProblem || !problemInput.trim()) return;
 
     console.log('[DeliberationView] Restarting deliberation...');
 
-    // Clear the ledger entries (this also notifies subscribers)
-    ledgerStore.clear(councilId);
-
-    // Reset the deliberation state to 'created'
-    councilStore.update(councilId, {
-      deliberationState: undefined,
-    });
+    handleClearResults();
 
     // Start fresh deliberation
     setIsGenerating(true);
@@ -531,7 +592,7 @@ export default function DeliberationView({
                                 <span className="eval-confidence"> ({Math.round(managerEval.confidence * 100)}% confidence)</span>
                               )}
                             </div>
-                            <div className="eval-reasoning">{managerEval.reasoning}</div>
+                            <div className="eval-reasoning">{cleanJsonForDisplay(managerEval.reasoning)}</div>
                             {managerEval.missingInformation && managerEval.missingInformation.length > 0 && (
                               <div className="eval-missing">
                                 <strong>Missing info:</strong> {managerEval.missingInformation.join(', ')}
@@ -563,14 +624,22 @@ export default function DeliberationView({
                       )}
 
                       <div className="deliberation-actions">
-                        <button
-                          className="deliberation-restart-btn"
-                          onClick={handleRestartDeliberation}
-                          disabled={!problemInput.trim() || isGenerating || !canStart}
-                        >
-                          {isGenerating ? 'Running...' : 'Restart Deliberation'}
-                        </button>
-                        <p className="action-hint">This will erase current results and start fresh.</p>
+                        {currentPhase === 'completed' || currentPhase === 'cancelled' || currentPhase === 'failed' ? (
+                          <button
+                            className="deliberation-restart-btn"
+                            onClick={handleClearResults}
+                          >
+                            Clear Deliberation Results
+                          </button>
+                        ) : (
+                          <button
+                            className="deliberation-restart-btn"
+                            onClick={handleRestartDeliberation}
+                            disabled={!problemInput.trim() || isGenerating || !canStart}
+                          >
+                            {isGenerating ? 'Running...' : 'Restart Deliberation'}
+                          </button>
+                        )}
                       </div>
                     </>
                   ) : (
@@ -859,6 +928,7 @@ export default function DeliberationView({
                         deliberation: council.deliberation || {
                           enabled: true,
                           roleAssignments: [],
+                          minRounds: 1,
                           maxRounds: 4,
                           maxRevisions: 3,
                           summaryMode: 'hybrid',
@@ -934,28 +1004,90 @@ export default function DeliberationView({
                 </div>
               )}
 
-              {/* Max Rounds - only show in deliberation mode */}
+              {/* Deliberation Rounds - only show in deliberation mode */}
               {council.orchestration.mode === 'deliberation' && (
                 <div className="setup-section">
-                  <h4>Max Rounds</h4>
-                  <p className="section-hint">Maximum number of deliberation rounds before forcing a decision</p>
+                  <h4>Deliberation Rounds</h4>
+                  <div className="rounds-row">
+                    <div className="rounds-field">
+                      <label className="rounds-label">Min</label>
+                      <p className="section-hint">Minimum rounds before manager can decide</p>
+                      <div className="max-rounds-selector">
+                        {[1, 2, 3, 4, 6].map((value) => (
+                          <button
+                            key={value}
+                            type="button"
+                            className={`rounds-option ${minRounds === value ? 'active' : ''} ${value > maxRounds ? 'disabled' : ''}`}
+                            disabled={value > maxRounds}
+                            onClick={() => {
+                              setMinRounds(value);
+                              const fresh = councilStore.get(councilId);
+                              if (fresh?.deliberation) {
+                                councilStore.update(councilId, {
+                                  deliberation: { ...fresh.deliberation, minRounds: value },
+                                });
+                              }
+                            }}
+                          >
+                            {value}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="rounds-field">
+                      <label className="rounds-label">Max</label>
+                      <p className="section-hint">Maximum rounds before forcing a decision</p>
+                      <div className="max-rounds-selector">
+                        {[2, 3, 4, 6, 8].map((value) => (
+                          <button
+                            key={value}
+                            type="button"
+                            className={`rounds-option ${maxRounds === value ? 'active' : ''} ${value < minRounds ? 'disabled' : ''}`}
+                            disabled={value < minRounds}
+                            onClick={() => {
+                              setMaxRounds(value);
+                              const fresh = councilStore.get(councilId);
+                              if (fresh?.deliberation) {
+                                councilStore.update(councilId, {
+                                  deliberation: { ...fresh.deliberation, maxRounds: value },
+                                });
+                              }
+                            }}
+                          >
+                            {value}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  {minRounds > maxRounds && (
+                    <p className="rounds-validation-error">Min rounds must be less than or equal to max rounds</p>
+                  )}
+                </div>
+              )}
+
+              {/* Max Words Per Response */}
+              {council.orchestration.mode === 'deliberation' && (
+                <div className="setup-section">
+                  <h4>Max Words Per Response</h4>
+                  <p className="section-hint">Soft limit — guides agents to keep responses concise (0 = no limit)</p>
                   <div className="max-rounds-selector">
-                    {[2, 3, 4, 6, 8].map((value) => (
+                    {[0, 150, 300, 500, 800].map((value) => (
                       <button
                         key={value}
                         type="button"
-                        className={`rounds-option ${maxRounds === value ? 'active' : ''}`}
+                        className={`rounds-option ${maxWords === value ? 'active' : ''}`}
                         onClick={() => {
-                          setMaxRounds(value);
+                          setMaxWords(value);
                           const fresh = councilStore.get(councilId);
                           if (fresh?.deliberation) {
                             councilStore.update(councilId, {
-                              deliberation: { ...fresh.deliberation, maxRounds: value },
+                              deliberation: { ...fresh.deliberation, maxWordsPerResponse: value || undefined },
                             });
                           }
                         }}
                       >
-                        {value}
+                        {value === 0 ? 'None' : value}
                       </button>
                     ))}
                   </div>
@@ -1128,18 +1260,6 @@ export default function DeliberationView({
                   disabled={!problemInput.trim() || taskSaved}
                 >
                   {taskSaved ? 'Saved ✓' : 'Save Task'}
-                </button>
-                <button
-                  className="task-start-btn"
-                  onClick={() => {
-                    // Save task data first
-                    handleSaveTask();
-                    // Then start deliberation
-                    handleFrameProblem();
-                  }}
-                  disabled={!problemInput.trim() || isGenerating || !canStart}
-                >
-                  {isGenerating ? 'Starting...' : 'Start Deliberation →'}
                 </button>
               </div>
 

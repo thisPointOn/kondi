@@ -122,7 +122,7 @@ const PROVIDER_META: ProviderMeta[] = [
     id: 'openai-cli',
     label: 'Codex CLI (Subscription)',
     shortLabel: 'Codex CLI',
-    color: '#10a37f',
+    color: '#3b82f6',
     legacyId: 'chatgpt',
     models: OPENAI_CLI_MODELS,
   },
@@ -130,7 +130,7 @@ const PROVIDER_META: ProviderMeta[] = [
     id: 'openai-api',
     label: 'OpenAI API',
     shortLabel: 'OpenAI',
-    color: '#10a37f',
+    color: '#3b82f6',
     legacyId: 'chatgpt',
     models: OPENAI_API_MODELS,
   },
@@ -529,7 +529,6 @@ const ChatArea: FC<ChatAreaProps> = ({
                           onClick={() => handleSelectModel(pm, model.id)}
                         >
                           <span className="model-option-name">{model.name}</span>
-                          <span className="model-option-cost">{model.costDisplay}</span>
                           {isCurrentModel && <span className="model-check">&#10003;</span>}
                         </button>
                       );

@@ -249,9 +249,29 @@ export function addPersona(councilId: string, persona: Persona): Council | null 
     throw new Error(`Persona "${persona.name}" already exists in this council`);
   }
 
-  return updateCouncil(councilId, {
+  // Also add a role assignment if deliberation config exists
+  const updates: Partial<Council> = {
     personas: [...council.personas, persona],
-  });
+  };
+
+  if (council.deliberation) {
+    const existingAssignment = council.deliberation.roleAssignments.find(
+      (r) => r.personaId === persona.id
+    );
+    if (!existingAssignment) {
+      // Default new personas to 'consultant' role
+      const role = persona.preferredDeliberationRole || 'consultant';
+      updates.deliberation = {
+        ...council.deliberation,
+        roleAssignments: [
+          ...council.deliberation.roleAssignments,
+          { personaId: persona.id, role },
+        ],
+      };
+    }
+  }
+
+  return updateCouncil(councilId, updates);
 }
 
 /**
@@ -286,9 +306,21 @@ export function removePersona(councilId: string, personaId: string): Council | n
   const council = getCouncil(councilId);
   if (!council) return null;
 
-  return updateCouncil(councilId, {
+  const updates: Partial<Council> = {
     personas: council.personas.filter((p) => p.id !== personaId),
-  });
+  };
+
+  // Also remove the role assignment if deliberation config exists
+  if (council.deliberation) {
+    updates.deliberation = {
+      ...council.deliberation,
+      roleAssignments: council.deliberation.roleAssignments.filter(
+        (r) => r.personaId !== personaId
+      ),
+    };
+  }
+
+  return updateCouncil(councilId, updates);
 }
 
 /**

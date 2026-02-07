@@ -196,11 +196,11 @@ async function initializeMcpSession(
     if (!response.ok && (response.status === 401 || response.status === 403) && !isRetry) {
       const text = await response.text();
       log(`[MCP Init] Got ${response.status} on first attempt: ${text}`);
-      log('[MCP Init] Retrying after 3-second delay (credential propagation)...');
+      log('[MCP Init] Retrying with delays (credential propagation)...');
 
-      // Retry up to 3 times with increasing delay
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        await new Promise(r => setTimeout(r, attempt * 2000)); // 2s, 4s, 6s
+      // Retry up to 5 times with increasing delay (total ~30s)
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        await new Promise(r => setTimeout(r, attempt * 2000)); // 2s, 4s, 6s, 8s, 10s
         log(`[MCP Init] Retry attempt ${attempt}/3...`);
 
         // Re-read config in case it was updated externally

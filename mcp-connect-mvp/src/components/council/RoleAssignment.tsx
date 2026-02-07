@@ -192,6 +192,12 @@ export default function RoleAssignment({
       if (newAssignments.length === 0 && filtered.length === prev.length) {
         return prev; // No changes
       }
+
+      // Mark as unsaved so user can re-save with the new persona included
+      if (newAssignments.length > 0 || filtered.length !== prev.length) {
+        setSaved(false);
+      }
+
       return [...filtered, ...newAssignments];
     });
   }, [council.personas]);

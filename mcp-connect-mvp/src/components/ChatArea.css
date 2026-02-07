@@ -471,11 +471,6 @@
   text-overflow: ellipsis;
 }
 
-.model-option-cost {
-  font-size: 11px;
-  color: #666;
-  white-space: nowrap;
-}
 
 .model-check {
   color: #60a5fa;
@@ -544,7 +539,7 @@
 }
 
 .avatar.assistant.chatgpt {
-  background: #10a37f;
+  background: #3b82f6;
 }
 
 /* Provider label in messages */
@@ -562,7 +557,7 @@
 }
 
 .provider-label.chatgpt {
-  color: #10a37f;
+  color: #3b82f6;
 }
 
 /* Message styling per provider */
@@ -573,7 +568,7 @@
 }
 
 .message.chatgpt {
-  border-left: 3px solid #10a37f;
+  border-left: 3px solid #3b82f6;
   padding-left: 12px;
   margin-left: -15px;
 }
@@ -584,7 +579,7 @@
 }
 
 .message.typing.chatgpt .typing-indicator span {
-  background: #10a37f;
+  background: #3b82f6;
 }
 
 /* File attachment styles */

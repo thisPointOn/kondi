@@ -121,6 +121,7 @@ export default function CouncilLibrary({
       deliberation: {
         enabled: true,
         roleAssignments,
+        minRounds: 1,
         maxRounds: 4,
         maxRevisions: 3,
         summaryMode: 'hybrid',

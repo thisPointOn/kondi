@@ -141,6 +141,7 @@ const PHASE_TRANSITIONS: Record<DeliberationPhase, {
 
 export class DeliberationOrchestrator {
   private config: OrchestratorConfig;
+  private activeCouncilId: string | null = null;
 
   constructor(config: OrchestratorConfig) {
     this.config = config;
@@ -156,6 +157,64 @@ export class DeliberationOrchestrator {
    */
   async runFullDeliberation(council: Council, rawProblem: string): Promise<void> {
     console.log('[Orchestrator] Starting full deliberation...');
+    this.activeCouncilId = council.id;
+
+    // Always read fresh from store to avoid stale React state
+    council = councilStore.get(council.id) || council;
+
+    // Pre-flight check: log role assignments and personas for debugging
+    const roleAssignments = council.deliberation?.roleAssignments || [];
+    const consultantAssignments = roleAssignments.filter(r => r.role === 'consultant');
+    const consultantPersonas = consultantAssignments
+      .map(r => council.personas.find(p => p.id === r.personaId))
+      .filter(Boolean);
+
+    console.log('[Orchestrator] PRE-FLIGHT CHECK:', {
+      totalPersonas: council.personas.length,
+      personaNames: council.personas.map(p => `${p.name} (${p.id.slice(0, 8)})`),
+      totalRoleAssignments: roleAssignments.length,
+      roleBreakdown: {
+        managers: roleAssignments.filter(r => r.role === 'manager').length,
+        consultants: consultantAssignments.length,
+        workers: roleAssignments.filter(r => r.role === 'worker').length,
+      },
+      consultantDetails: consultantAssignments.map(r => {
+        const p = council.personas.find(p => p.id === r.personaId);
+        return `${p?.name || 'MISSING'} (${r.personaId.slice(0, 8)})`;
+      }),
+      // Check for personas without role assignments
+      unassignedPersonas: council.personas
+        .filter(p => !roleAssignments.some(r => r.personaId === p.id))
+        .map(p => `${p.name} (${p.id.slice(0, 8)})`),
+      // Check for role assignments without matching personas
+      orphanedAssignments: roleAssignments
+        .filter(r => !council.personas.some(p => p.id === r.personaId))
+        .map(r => `${r.role}:${r.personaId.slice(0, 8)}`),
+    });
+
+    if (consultantAssignments.length < 2) {
+      console.warn(`[Orchestrator] WARNING: Only ${consultantAssignments.length} consultant(s) found. ` +
+        `If you expected more, check role assignments in Setup.`);
+    }
+
+    // Auto-repair: ensure every persona has a role assignment
+    const unassigned = council.personas.filter(
+      p => !roleAssignments.some(r => r.personaId === p.id)
+    );
+    if (unassigned.length > 0) {
+      console.warn(`[Orchestrator] REPAIRING: ${unassigned.length} persona(s) without role assignments:`,
+        unassigned.map(p => p.name));
+      const repairedAssignments = [
+        ...roleAssignments,
+        ...unassigned.map(p => ({
+          personaId: p.id,
+          role: (p.preferredDeliberationRole || 'consultant') as 'manager' | 'consultant' | 'worker',
+        })),
+      ];
+      councilStore.setRoleAssignments(council.id, repairedAssignments);
+      // Re-fetch council with repaired assignments
+      council = councilStore.get(council.id)!;
+    }
 
     // Phase 1: Frame the problem
     await this.frameProblem(council, rawProblem);
@@ -170,6 +229,7 @@ export class DeliberationOrchestrator {
    * Runs fully automatically — no manual step-by-step buttons needed.
    */
   async continueDeliberation(councilId: string): Promise<void> {
+    this.activeCouncilId = councilId;
     let council = councilStore.get(councilId)!;
 
     // Phase 2: Deliberation rounds
@@ -194,102 +254,162 @@ export class DeliberationOrchestrator {
         break; // Move past deliberation rounds
       }
 
-      if (phase === 'round_independent') {
-        console.log(`[Orchestrator] Running independent round...`);
-        await this.runIndependentRound(council);
-      } else if (phase === 'round_waiting_for_manager') {
-        console.log('[Orchestrator] Manager evaluating...');
-        await this.managerEvaluate(council);
-      } else if (phase === 'round_interactive') {
-        console.log('[Orchestrator] Running interactive round...');
-        await this.runInteractiveRound(council);
-      } else {
-        console.log(`[Orchestrator] Unexpected phase during deliberation: ${phase}`);
-        break;
+      try {
+        if (phase === 'round_independent') {
+          console.log(`[Orchestrator] Running independent round...`);
+          await this.runIndependentRound(council);
+          // Fallback: if phase didn't advance (isRoundComplete returned false), force it
+          const afterPhase = councilStore.get(councilId)?.deliberationState?.currentPhase;
+          if (afterPhase === 'round_independent') {
+            console.warn('[Orchestrator] Round did not advance after independent round — forcing transition');
+            this.transitionPhase(councilId, 'round_waiting_for_manager');
+          }
+        } else if (phase === 'round_waiting_for_manager') {
+          console.log('[Orchestrator] Manager evaluating...');
+          await this.managerEvaluate(council);
+        } else if (phase === 'round_interactive') {
+          console.log('[Orchestrator] Running interactive round...');
+          await this.runInteractiveRound(council);
+          // Fallback: if phase didn't advance, force it
+          const afterPhase = councilStore.get(councilId)?.deliberationState?.currentPhase;
+          if (afterPhase === 'round_interactive') {
+            console.warn('[Orchestrator] Round did not advance after interactive round — forcing transition');
+            this.transitionPhase(councilId, 'round_waiting_for_manager');
+          }
+        } else {
+          console.log(`[Orchestrator] Unexpected phase during deliberation: ${phase}`);
+          break;
+        }
+      } catch (error) {
+        const errMsg = (error as Error).message || String(error);
+        console.error(`[Orchestrator] Error during phase ${phase}:`, errMsg);
+
+        // Record the error as a ledger entry so user can see it
+        const manager = this.getManager(council);
+        this.createEntry(
+          councilId,
+          'manager',
+          manager.id,
+          'error',
+          phase || 'unknown',
+          `Deliberation error during ${phase}: ${errMsg}`,
+          0, 0, undefined,
+          council.deliberationState?.currentRound
+        );
+
+        // Transition to failed state so UI reflects the problem
+        this.transitionPhase(councilId, 'failed');
+        throw error; // Re-throw so caller can handle
       }
     }
 
     // Phase 3: Decision + Plan + Directive
-    council = councilStore.get(councilId)!;
-    let phase = council.deliberationState?.currentPhase;
-
-    // If still in round phases after max iterations, force to deciding
-    if (phase === 'round_waiting_for_manager' || phase === 'round_interactive' || phase === 'round_independent') {
-      console.log('[Orchestrator] Max rounds exhausted, forcing decision phase');
-      this.transitionPhase(councilId, 'deciding');
+    try {
       council = councilStore.get(councilId)!;
-      phase = council.deliberationState?.currentPhase;
-    }
+      let phase = council.deliberationState?.currentPhase;
 
-    if (phase === 'paused') return;
-
-    if (phase === 'deciding') {
-      console.log('[Orchestrator] Making decision...');
-      await this.makeDecision(council);
-      council = councilStore.get(councilId)!;
-      phase = council.deliberationState?.currentPhase;
-    }
-
-    if (phase === 'paused') return;
-
-    if (phase === 'planning') {
-      console.log('[Orchestrator] Creating plan...');
-      await this.createPlan(council);
-      council = councilStore.get(councilId)!;
-      phase = council.deliberationState?.currentPhase;
-    }
-
-    if (phase === 'paused') return;
-
-    if (phase === 'directing') {
-      console.log('[Orchestrator] Issuing directive...');
-      await this.issueDirective(council);
-      council = councilStore.get(councilId)!;
-      phase = council.deliberationState?.currentPhase;
-    }
-
-    // Phase 4: Execution loop
-    const maxRevisions = council.deliberation?.maxRevisions || 3;
-    let revisionCount = council.deliberationState?.revisionCount || 0;
-
-    while (revisionCount < maxRevisions + 1) {
-      council = councilStore.get(councilId)!;
-      phase = council.deliberationState?.currentPhase;
-
-      if (phase === 'paused') {
-        console.log('[Orchestrator] Deliberation paused — stopping auto-run');
-        return;
+      // If still in round phases after max iterations, force to deciding
+      if (phase === 'round_waiting_for_manager' || phase === 'round_interactive' || phase === 'round_independent') {
+        console.log('[Orchestrator] Max rounds exhausted, forcing decision phase');
+        this.transitionPhase(councilId, 'deciding');
+        council = councilStore.get(councilId)!;
+        phase = council.deliberationState?.currentPhase;
       }
 
-      if (phase === 'executing') {
-        console.log('[Orchestrator] Executing work...');
-        await this.executeWork(council);
-      } else if (phase === 'reviewing') {
-        console.log('[Orchestrator] Reviewing work...');
-        const { review } = await this.reviewWork(council);
+      if (phase === 'paused' || phase === 'failed') return;
 
-        if (review.verdict === 'accept') {
-          console.log('[Orchestrator] Work approved!');
-          break;
-        } else if (review.verdict === 'revise') {
-          revisionCount++;
-          console.log(`[Orchestrator] Revision requested (${revisionCount}/${maxRevisions})`);
-        } else if (review.verdict === 're_deliberate') {
-          console.log('[Orchestrator] Re-deliberation requested — looping back');
-          // Phase transitions back to round_interactive, re-enter deliberation loop
-          await this.continueDeliberation(councilId);
+      if (phase === 'deciding') {
+        console.log('[Orchestrator] Making decision...');
+        await this.makeDecision(council);
+        council = councilStore.get(councilId)!;
+        phase = council.deliberationState?.currentPhase;
+      }
+
+      if (phase === 'paused' || phase === 'failed') return;
+
+      if (phase === 'planning') {
+        console.log('[Orchestrator] Creating plan...');
+        await this.createPlan(council);
+        council = councilStore.get(councilId)!;
+        phase = council.deliberationState?.currentPhase;
+      }
+
+      if (phase === 'paused' || phase === 'failed') return;
+
+      if (phase === 'directing') {
+        console.log('[Orchestrator] Issuing directive...');
+        await this.issueDirective(council);
+        council = councilStore.get(councilId)!;
+        phase = council.deliberationState?.currentPhase;
+      }
+
+      // Phase 4: Execution loop
+      const maxRevisions = council.deliberation?.maxRevisions || 3;
+      let revisionCount = council.deliberationState?.revisionCount || 0;
+
+      while (revisionCount < maxRevisions + 1) {
+        council = councilStore.get(councilId)!;
+        phase = council.deliberationState?.currentPhase;
+
+        if (phase === 'paused' || phase === 'failed') {
+          console.log('[Orchestrator] Deliberation paused/failed — stopping auto-run');
           return;
         }
-      } else if (phase === 'revising') {
-        console.log('[Orchestrator] Revising work...');
-        await this.requestRevision(council);
-      } else if (phase === 'completed') {
-        console.log('[Orchestrator] Deliberation completed!');
-        break;
-      } else {
-        console.log(`[Orchestrator] Unexpected phase during execution: ${phase}`);
-        break;
+
+        if (phase === 'executing') {
+          console.log('[Orchestrator] Executing work...');
+          await this.executeWork(council);
+        } else if (phase === 'reviewing') {
+          console.log('[Orchestrator] Reviewing work...');
+          const { review } = await this.reviewWork(council);
+
+          if (review.verdict === 'accept') {
+            console.log('[Orchestrator] Work approved!');
+            break;
+          } else if (review.verdict === 'revise') {
+            revisionCount++;
+            console.log(`[Orchestrator] Revision requested (${revisionCount}/${maxRevisions})`);
+          } else if (review.verdict === 're_deliberate') {
+            console.log('[Orchestrator] Re-deliberation requested — looping back');
+            // Phase transitions back to round_interactive, re-enter deliberation loop
+            await this.continueDeliberation(councilId);
+            return;
+          }
+        } else if (phase === 'revising') {
+          console.log('[Orchestrator] Revising work...');
+          await this.requestRevision(council);
+        } else if (phase === 'completed') {
+          console.log('[Orchestrator] Deliberation completed!');
+          break;
+        } else {
+          console.log(`[Orchestrator] Unexpected phase during execution: ${phase}`);
+          break;
       }
+    }
+    } catch (error) {
+      const errMsg = (error as Error).message || String(error);
+      console.error(`[Orchestrator] Error during post-round phase:`, errMsg);
+
+      council = councilStore.get(councilId)!;
+      const errPhase = council.deliberationState?.currentPhase;
+
+      // Record error in ledger
+      try {
+        const manager = this.getManager(council);
+        this.createEntry(
+          councilId,
+          'manager',
+          manager.id,
+          'error',
+          errPhase || 'unknown',
+          `Deliberation error during ${errPhase}: ${errMsg}`,
+          0, 0, undefined,
+          council.deliberationState?.currentRound
+        );
+      } catch { /* best effort */ }
+
+      this.transitionPhase(councilId, 'failed');
+      throw error;
     }
 
     console.log('[Orchestrator] Auto-run finished');
@@ -357,6 +477,17 @@ export class DeliberationOrchestrator {
     this.validatePhase(council, 'round_independent');
     const consultants = this.getConsultants(council);
     const context = getCurrentContext(council.id);
+
+    // Detailed logging to debug missing consultant participation
+    const allRoleAssignments = council.deliberation?.roleAssignments || [];
+    const consultantRoles = allRoleAssignments.filter(r => r.role === 'consultant');
+    console.log(`[Orchestrator] Independent round: ${consultants.length} consultant(s) ` +
+      `from ${consultantRoles.length} consultant role assignment(s)`,
+      {
+        consultantNames: consultants.map(c => `${c.name} (${c.id.slice(0, 8)})`),
+        consultantRoleIds: consultantRoles.map(r => r.personaId.slice(0, 8)),
+        allPersonaIds: council.personas.map(p => `${p.name}:${p.id.slice(0, 8)}`),
+      });
 
     if (!context) {
       throw new Error('No context found - problem must be framed first');
@@ -462,7 +593,10 @@ export class DeliberationOrchestrator {
     const focusArea = assignment?.focusArea || consultant.predisposition.domain || 'general';
 
     // Build context per Section 9.3
-    const contextContent = this.buildRoundNContext(council);
+    // In sequential mode, include current round entries so later consultants
+    // can see and build on earlier consultants' responses from this round
+    const isSequential = council.deliberation?.consultantExecution === 'sequential';
+    const contextContent = this.buildRoundNContext(council, isSequential);
 
     // Build prompts
     const systemPrompt = consultant.predisposition.systemPrompt;
@@ -520,6 +654,17 @@ export class DeliberationOrchestrator {
     this.validatePhase(council, 'round_interactive');
     const consultants = this.getConsultants(council);
     const entries: LedgerEntry[] = [];
+
+    // Detailed logging to debug missing consultant participation
+    const allRoleAssignments = council.deliberation?.roleAssignments || [];
+    const consultantRoles = allRoleAssignments.filter(r => r.role === 'consultant');
+    console.log(`[Orchestrator] Interactive round ${council.deliberationState?.currentRound}: ` +
+      `${consultants.length} consultant(s) from ${consultantRoles.length} consultant role assignment(s)`,
+      {
+        consultantNames: consultants.map(c => `${c.name} (${c.id.slice(0, 8)})`),
+        consultantRoleIds: consultantRoles.map(r => r.personaId.slice(0, 8)),
+        allPersonaIds: council.personas.map(p => `${p.name}:${p.id.slice(0, 8)}`),
+      });
 
     if (consultants.length === 0) {
       console.warn('[Orchestrator] No consultants assigned - skipping interactive round');
@@ -679,10 +824,20 @@ export class DeliberationOrchestrator {
 
     // Handle action
     const currentRound = council.deliberationState?.currentRound || 1;
+    const minRounds = council.deliberation?.minRounds || 1;
     const maxRounds = council.deliberation?.maxRounds || 4;
 
-    if (evaluation.action === 'decide' || currentRound >= maxRounds) {
+    // Enforce min rounds: if manager wants to decide but we haven't hit minRounds, continue instead
+    const canDecide = currentRound >= minRounds;
+    const mustDecide = currentRound >= maxRounds;
+
+    if (mustDecide || (evaluation.action === 'decide' && canDecide)) {
       this.transitionPhase(council.id, 'deciding');
+    } else if (!canDecide && evaluation.action === 'decide') {
+      // Manager tried to decide too early — force another round
+      console.log(`[Orchestrator] Manager wanted to decide at round ${currentRound}, but minRounds is ${minRounds}. Continuing.`);
+      councilStore.advanceRound(council.id);
+      this.transitionPhase(council.id, 'round_interactive');
     } else if (evaluation.action === 'continue' || evaluation.action === 'redirect') {
       // Create question/redirect entry if provided
       if (evaluation.question) {
@@ -1314,8 +1469,10 @@ export class DeliberationOrchestrator {
   /**
    * Build context for Round 2+ (interactive deliberation) - Section 9.3
    * Context artifact + prior rounds (full or summarized) + manager notes
+   * When includeCurrentRound is true (sequential mode), appends current round
+   * entries so later consultants can see earlier consultants' contributions.
    */
-  buildRoundNContext(council: Council): string {
+  buildRoundNContext(council: Council, includeCurrentRound: boolean = false): string {
     const context = getCurrentContext(council.id);
     if (!context) {
       throw new Error('No context found');
@@ -1356,6 +1513,18 @@ export class DeliberationOrchestrator {
     if (managerNotes.length > 0) {
       result += `\n---\nMANAGER NOTES:\n`;
       result += formatEntriesForContext(managerNotes);
+    }
+
+    // In sequential mode, include current round entries so later consultants
+    // can see what earlier consultants said in this round
+    if (includeCurrentRound) {
+      const currentRoundEntries = getEntriesForRound(council.id, currentRound);
+      // Only include consultant entries (not manager entries which are from previous evaluation)
+      const consultantEntries = currentRoundEntries.filter(e => e.authorRole === 'consultant');
+      if (consultantEntries.length > 0) {
+        result += `\n---\nCURRENT ROUND (so far):\n`;
+        result += formatEntriesForContext(consultantEntries);
+      }
     }
 
     return result;
@@ -1580,6 +1749,18 @@ export class DeliberationOrchestrator {
     persona: Persona,
     context: string
   ): Promise<AgentResponse> {
+    // Inject brevity instruction if maxWordsPerResponse is configured
+    const wordLimit = this.activeCouncilId
+      ? councilStore.get(this.activeCouncilId)?.deliberation?.maxWordsPerResponse
+      : undefined;
+    if (wordLimit && wordLimit > 0) {
+      invocation = {
+        ...invocation,
+        userMessage: invocation.userMessage +
+          `\n\nIMPORTANT: Keep your response concise — aim for approximately ${wordLimit} words or fewer. Be direct and avoid unnecessary elaboration.`,
+      };
+    }
+
     try {
       this.config.onAgentThinkingStart?.(persona);
       const response = await this.config.invokeAgent(invocation, persona);
@@ -1590,6 +1771,100 @@ export class DeliberationOrchestrator {
       this.config.onError?.(error as Error, context);
       throw error;
     }
+  }
+
+  /**
+   * Clean JSON artifacts from LLM responses for display.
+   * LLMs sometimes respond with JSON when prompted for structured output.
+   * This extracts readable text from those responses.
+   */
+  cleanLLMResponse(content: string): string {
+    if (!content || typeof content !== 'string') return content;
+
+    const trimmed = content.trim();
+
+    // Try to extract JSON from various formats
+    const jsonStr = this.extractJsonString(trimmed);
+    if (jsonStr) {
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const formatted = this.formatParsedJson(parsed);
+        if (formatted) return formatted;
+      } catch {
+        // Not valid JSON, fall through
+      }
+    }
+
+    // Check if content is text followed by a raw JSON object at the end
+    const trailingJsonMatch = trimmed.match(/^([\s\S]+?)\n\s*(\{[\s\S]*\})\s*$/);
+    if (trailingJsonMatch) {
+      const textPart = trailingJsonMatch[1].trim();
+      try {
+        JSON.parse(trailingJsonMatch[2]);
+        if (textPart.length > 20) return textPart;
+      } catch {
+        // Not JSON, return as-is
+      }
+    }
+
+    return content;
+  }
+
+  /**
+   * Extract a JSON string from content that may be raw JSON, markdown-wrapped, etc.
+   */
+  private extractJsonString(trimmed: string): string | null {
+    // Raw JSON object
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      return trimmed;
+    }
+
+    // Markdown code block: ```json\n{...}\n```
+    const codeBlockMatch = trimmed.match(/```(?:json)?\s*\n?(\{[\s\S]*?\})\s*\n?```/);
+    if (codeBlockMatch) {
+      return codeBlockMatch[1];
+    }
+
+    return null;
+  }
+
+  /**
+   * Format a parsed JSON object into readable text.
+   * Handles evaluation/review/decision structured responses.
+   */
+  private formatParsedJson(parsed: Record<string, unknown>): string | null {
+    // Check for structured responses FIRST (action/verdict indicate eval/review)
+    // These have multiple important fields that should all be shown
+    if (parsed.action || parsed.verdict) {
+      const parts: string[] = [];
+      if (parsed.verdict && typeof parsed.verdict === 'string')
+        parts.push(`Verdict: ${parsed.verdict}`);
+      if (parsed.action && typeof parsed.action === 'string')
+        parts.push(`Action: ${parsed.action}`);
+      if (parsed.confidence != null)
+        parts.push(`Confidence: ${Math.round((parsed.confidence as number) * 100)}%`);
+      if (parsed.reasoning && typeof parsed.reasoning === 'string')
+        parts.push(parsed.reasoning);
+      if (parsed.feedback && typeof parsed.feedback === 'string')
+        parts.push(`Feedback: ${parsed.feedback}`);
+      if (parsed.question && typeof parsed.question === 'string')
+        parts.push(`Question: ${parsed.question}`);
+      if (parsed.newInformation && typeof parsed.newInformation === 'string')
+        parts.push(`New information: ${parsed.newInformation}`);
+      if (Array.isArray(parsed.missingInformation) && parsed.missingInformation.length)
+        parts.push(`Missing: ${parsed.missingInformation.join(', ')}`);
+      if (parts.length > 0) return parts.join('\n\n');
+    }
+
+    // For plain content responses, extract the main text field
+    const textFields = ['reasoning', 'content', 'message', 'summary', 'analysis', 'feedback', 'explanation'];
+    for (const field of textFields) {
+      if (parsed[field] && typeof parsed[field] === 'string') {
+        return parsed[field] as string;
+      }
+    }
+
+    return null;
   }
 
   private createEntry(
@@ -1606,6 +1881,9 @@ export class DeliberationOrchestrator {
     referencedEntries?: string[],
     reviewOutcome?: 'accept' | 'revise' | 're_deliberate'
   ): LedgerEntry {
+    // Clean JSON artifacts from LLM responses before storing
+    const cleanedContent = this.cleanLLMResponse(content);
+
     const entry: LedgerEntry = {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
@@ -1613,7 +1891,7 @@ export class DeliberationOrchestrator {
       authorPersonaId: authorId,
       entryType,
       phase,
-      content,
+      content: cleanedContent,
       tokensUsed,
       latencyMs,
       artifactRefs,

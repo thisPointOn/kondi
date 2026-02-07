@@ -1614,6 +1614,35 @@
   color: var(--text-primary, #e5e5e5);
 }
 
+.rounds-option.disabled,
+.rounds-option:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.rounds-row {
+  display: flex;
+  gap: 2rem;
+}
+
+.rounds-field {
+  flex: 1;
+}
+
+.rounds-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary, #e5e5e5);
+  margin-bottom: 0.25rem;
+  display: block;
+}
+
+.rounds-validation-error {
+  color: #f87171;
+  font-size: 0.8125rem;
+  margin-top: 0.5rem;
+}
+
 /* Participants Section */
 .setup-section-header {
   display: flex;

@@ -45,6 +45,55 @@ export interface ClaudeCallResult {
   error?: string;
 }
 
+/**
+ * Parse raw stream-json output from Claude Code CLI and extract clean text.
+ * This handles cases where the Tauri backend returns unparsed JSON lines.
+ */
+function parseStreamJsonOutput(rawOutput: string): string {
+  // If it doesn't look like stream-json (no JSON objects), return as-is
+  if (!rawOutput.includes('{"type":')) {
+    return rawOutput;
+  }
+
+  const lines = rawOutput.split('\n').filter(l => l.trim());
+  let resultText = '';
+  const textChunks: string[] = [];
+
+  for (const line of lines) {
+    try {
+      const json = JSON.parse(line);
+
+      // Extract final result (highest priority)
+      if (json.type === 'result' && json.result) {
+        resultText = typeof json.result === 'string' ? json.result : JSON.stringify(json.result);
+      }
+
+      // Collect text from assistant messages
+      if (json.type === 'assistant' && json.message?.content) {
+        for (const block of json.message.content) {
+          if (block.type === 'text' && block.text) {
+            textChunks.push(block.text);
+          }
+        }
+      }
+
+      // Collect streaming text deltas
+      if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta' && json.delta.text) {
+        textChunks.push(json.delta.text);
+      }
+    } catch {
+      // Not valid JSON, skip
+    }
+  }
+
+  // Prefer the explicit result, fall back to collected text chunks
+  if (resultText) return resultText;
+  if (textChunks.length > 0) return textChunks.join('');
+
+  // Last resort: return raw output (shouldn't normally reach here)
+  return rawOutput;
+}
+
 class ClaudeCodeWrapper {
   private isAvailable: boolean | null = null;
   private version: string | null = null;
@@ -117,12 +166,13 @@ class ClaudeCodeWrapper {
 
     try {
       // Use streaming call via Tauri
+      // Note: onEvent callback cannot work through Tauri invoke (IPC doesn't support JS callbacks),
+      // so we rely on the Rust side to parse the result, with JS-side parsing as fallback.
       const result = await invoke<{ success: boolean; output: string; sessionId?: string; error?: string }>(
         'run_claude_streaming',
         {
           args,
           cwd: opts.cwd || null,
-          onEvent: (event: StreamEvent) => this.handleStreamEvent(event, opts),
         }
       );
 
@@ -135,10 +185,14 @@ class ClaudeCodeWrapper {
         };
       }
 
+      // Parse raw output to extract clean text (handles cases where Rust-side
+      // parsing missed the result and returned raw stream-json lines)
+      const cleanOutput = parseStreamJsonOutput(result.output);
+
       return {
         success: true,
         sessionId: result.sessionId || null,
-        result: result.output,
+        result: cleanOutput,
       };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);

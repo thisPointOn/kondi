@@ -50,12 +50,94 @@ const ROLE_LABELS: Record<DeliberationRole, string> = {
   worker: 'Worker',
 };
 
+/** Get provider color: Anthropic=orange, OpenAI=blue, DeepSeek=indigo */
+function getProviderColor(provider?: string): string | null {
+  if (!provider) return null;
+  if (provider.startsWith('anthropic')) return '#f97316';
+  if (provider.startsWith('openai')) return '#3b82f6';
+  if (provider === 'deepseek') return '#6366f1';
+  if (provider === 'google') return '#4285f4';
+  return null;
+}
+
+/** Short display label for provider */
+function getProviderLabel(provider?: string): string {
+  if (!provider) return '';
+  if (provider.startsWith('anthropic')) return 'Anthropic';
+  if (provider.startsWith('openai')) return 'OpenAI';
+  if (provider === 'deepseek') return 'DeepSeek';
+  if (provider === 'google') return 'Google';
+  return provider;
+}
+
+/**
+ * Extract JSON string from content (raw or markdown-wrapped)
+ */
+function extractJsonString(text: string): string | null {
+  if (text.startsWith('{') && text.endsWith('}')) return text;
+  const match = text.match(/```(?:json)?\s*\n?(\{[\s\S]*?\})\s*\n?```/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Clean JSON from LLM response content for display.
+ * Handles review/evaluation JSON, plain content JSON, and markdown-wrapped JSON.
+ */
+function cleanJsonContent(content: string): string {
+  if (!content || typeof content !== 'string') return content;
+  const trimmed = content.trim();
+
+  const jsonStr = extractJsonString(trimmed);
+  if (jsonStr) {
+    try {
+      const parsed = JSON.parse(jsonStr);
+
+      // Structured responses (review/evaluation) — show all important fields
+      if (parsed.action || parsed.verdict) {
+        const parts: string[] = [];
+        if (parsed.verdict && typeof parsed.verdict === 'string')
+          parts.push(`Verdict: ${parsed.verdict}`);
+        if (parsed.action && typeof parsed.action === 'string')
+          parts.push(`Action: ${parsed.action}`);
+        if (parsed.confidence != null)
+          parts.push(`Confidence: ${Math.round(parsed.confidence * 100)}%`);
+        if (parsed.reasoning && typeof parsed.reasoning === 'string')
+          parts.push(parsed.reasoning);
+        if (parsed.feedback && typeof parsed.feedback === 'string')
+          parts.push(`Feedback: ${parsed.feedback}`);
+        if (parsed.question && typeof parsed.question === 'string')
+          parts.push(`Question: ${parsed.question}`);
+        if (parsed.newInformation && typeof parsed.newInformation === 'string')
+          parts.push(`New information: ${parsed.newInformation}`);
+        if (Array.isArray(parsed.missingInformation) && parsed.missingInformation.length)
+          parts.push(`Missing: ${parsed.missingInformation.join(', ')}`);
+        if (parts.length > 0) return parts.join('\n\n');
+      }
+
+      // Plain content — extract main text field
+      const textFields = ['reasoning', 'content', 'message', 'summary', 'analysis', 'feedback', 'explanation'];
+      for (const field of textFields) {
+        if (parsed[field] && typeof parsed[field] === 'string') {
+          return parsed[field];
+        }
+      }
+    } catch {
+      // Not valid JSON
+    }
+  }
+
+  return content;
+}
+
 /**
  * Generate a 1-sentence summary from the content
  */
 function generateSummary(content: string, entryType: LedgerEntryType): string {
+  // First, try to clean JSON from content
+  const baseContent = cleanJsonContent(content);
+
   // Clean up the content - remove markdown, extra whitespace
-  const cleanContent = content
+  const cleanContent = baseContent
     .replace(/^#+\s*/gm, '')  // Remove markdown headers
     .replace(/\*\*([^*]+)\*\*/g, '$1')  // Remove bold
     .replace(/\n+/g, ' ')  // Replace newlines with spaces
@@ -93,6 +175,8 @@ export default function LedgerEntryCard({
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const typeStyle = ENTRY_TYPE_STYLES[entry.entryType];
   const summary = generateSummary(entry.content, entry.entryType);
+  const providerColor = getProviderColor(persona?.provider);
+  const borderColor = providerColor || (persona ? persona.color : undefined);
 
   const formatTimestamp = (timestamp: string) => {
     const date = new Date(timestamp);
@@ -108,8 +192,11 @@ export default function LedgerEntryCard({
   };
 
   const formatContent = (content: string) => {
+    // Safety net: clean JSON from content that wasn't caught at the orchestrator level
+    const cleanedContent = cleanJsonContent(content);
+
     // Split into paragraphs
-    const paragraphs = content.split(/\n\n+/);
+    const paragraphs = cleanedContent.split(/\n\n+/);
 
     return paragraphs.map((p, i) => {
       // Check for section headers (e.g., "CONTEXT:", "DECISION:")
@@ -143,7 +230,7 @@ export default function LedgerEntryCard({
     <div
       className={`ledger-entry-card ledger-entry-${typeStyle.colorClass} ${isCollapsed ? 'collapsed' : ''}`}
       onClick={() => onEntryClick?.(entry)}
-      style={persona ? { borderLeftColor: persona.color } : undefined}
+      style={borderColor ? { borderLeftColor: borderColor } : undefined}
     >
       <div className="entry-header">
         <div className="entry-meta">
@@ -163,12 +250,26 @@ export default function LedgerEntryCard({
         </div>
         <div className="entry-author">
           {persona && (
-            <span
-              className="entry-author-badge"
-              style={{ backgroundColor: persona.color + '30', color: persona.color }}
-            >
-              {persona.avatar || '🤖'} {persona.name}
-            </span>
+            <>
+              <span
+                className="entry-author-badge"
+                style={{
+                  backgroundColor: (providerColor || persona.color) + '20',
+                  color: providerColor || persona.color,
+                }}
+              >
+                {persona.avatar || '🤖'} {persona.name}
+              </span>
+              {persona.provider && (
+                <span
+                  className="entry-provider-model"
+                  style={{ color: providerColor || undefined }}
+                >
+                  {getProviderLabel(persona.provider)}
+                  {persona.model && <span className="entry-model-id"> / {persona.model}</span>}
+                </span>
+              )}
+            </>
           )}
           <span className="entry-role">{ROLE_LABELS[entry.authorRole]}</span>
           {showTimestamp && (
