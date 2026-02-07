@@ -177,32 +177,218 @@ Each persona in a council can use a different provider and model. Mix frontier r
 
 ---
 
-## Getting Started
+## Installation
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) 18+
-- [Rust](https://www.rust-lang.org/tools/install) (for Tauri)
-- At least one LLM provider key (Anthropic API, OpenAI API, or DeepSeek) or a CLI subscription (Claude Code, Codex)
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| [Node.js](https://nodejs.org/) | 18+ | For frontend, proxy, and search server |
+| [Rust](https://www.rust-lang.org/tools/install) | 1.77.2+ | For Tauri backend |
+| [Tauri CLI](https://v2.tauri.app/start/prerequisites/) | 2.x | Install via `cargo install tauri-cli` |
+| System dependencies | — | See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS (webkit2gtk on Linux, Xcode on macOS) |
 
-### Install & Run
+**Linux (Debian/Ubuntu):**
+```bash
+sudo apt update
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+**macOS:**
+```bash
+xcode-select --install
+```
+
+**Windows:**
+Install [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
+
+### Clone the Repository
+
+```bash
+git clone git@github.com:thisPointOn/kondi.git
+cd kondi
+```
+
+### Install the Main Application
 
 ```bash
 cd mcp-connect-mvp
 npm install
-npm run tauri dev
 ```
 
-### Optional: Search Server
+This installs the React frontend, Tauri bindings, and all TypeScript dependencies. The Rust backend compiles automatically on first run.
+
+### Build the MCP Proxy
+
+The proxy is a dependency of the main app — it's spawned automatically when you connect to authenticated MCP servers.
 
 ```bash
-# Start SearXNG (Docker)
+cd mcp-connect-mvp/kondi-mcp-proxy
+npm install
+npm run build
+```
+
+### (Optional) Install the Search Server
+
+If you want agents to have web search capabilities:
+
+```bash
+# 1. Start SearXNG via Docker
 cd kondi-search-mcp
 docker-compose up -d
 
-# Start the MCP search server
+# 2. Install and build the MCP search server
 npm install
+npm run build
+```
+
+This starts a local SearXNG instance on port 8888 and builds the MCP server that wraps it.
+
+### (Optional) Install FlowForge
+
+For self-healing workflow orchestration:
+
+```bash
+cd flowforge
+npm install
+npm run build
+```
+
+---
+
+## Running
+
+### Development Mode
+
+```bash
+cd mcp-connect-mvp
+npm run tauri:dev
+```
+
+This starts both the Vite dev server (port 5175) and the Tauri desktop window with hot-reload. Changes to React/TypeScript code will hot-reload instantly. Changes to Rust code trigger an automatic recompile.
+
+### Production Build
+
+```bash
+cd mcp-connect-mvp
+npm run tauri build
+```
+
+This produces a native installer for your platform:
+- **Linux:** `.deb` and `.AppImage` in `src-tauri/target/release/bundle/`
+- **macOS:** `.dmg` in `src-tauri/target/release/bundle/`
+- **Windows:** `.msi` and `.exe` in `src-tauri/target/release/bundle/`
+
+### Running the Search Server
+
+```bash
+# Make sure SearXNG is running
+cd kondi-search-mcp
+docker-compose up -d
+
+# Start the MCP server (stdio mode for local use)
+npm run start
+
+# Or development mode with auto-reload
 npm run dev
+```
+
+Then connect to it from within Kondi as a local MCP server.
+
+### Running the Express Server
+
+For pipeline execution and API access:
+
+```bash
+cd mcp-connect-mvp
+npm run dev:server
+```
+
+---
+
+## Configuration
+
+### LLM Providers
+
+On first launch, Kondi will prompt you to configure at least one provider. You can set up:
+
+| Provider | What You Need |
+|----------|--------------|
+| **Anthropic API** | API key from [console.anthropic.com](https://console.anthropic.com/) |
+| **Anthropic CLI** | Active [Claude Code](https://claude.ai/) subscription with `claude` CLI installed |
+| **OpenAI API** | API key from [platform.openai.com](https://platform.openai.com/) |
+| **OpenAI CLI** | Active Codex subscription with `codex` CLI installed |
+| **DeepSeek** | API key from [platform.deepseek.com](https://platform.deepseek.com/) |
+
+API keys are stored locally on your machine and never sent anywhere except the provider's own API endpoint.
+
+### MCP Servers
+
+Connect to MCP servers from the sidebar in the app. Kondi supports:
+
+- **Local servers** via stdio (e.g., the search server above)
+- **Remote servers** via SSE/HTTP with automatic proxy authentication
+- **OAuth-authenticated servers** — Kondi opens your browser for the auth flow and stores tokens locally at `~/.local/share/kondi/proxies/`
+
+### Working Directory
+
+When creating a council, you can set a working directory. The Worker agent will operate within this directory for file-related tasks. Enable "Directory Constrained" to prevent the Worker from accessing files outside this path.
+
+---
+
+## Quick Start: Your First Council
+
+1. **Launch Kondi** — `npm run tauri:dev` from `mcp-connect-mvp/`
+2. **Configure a provider** — Add at least one API key or CLI subscription in Settings
+3. **Create a council** — Click "New Council" in the sidebar
+4. **Add personas** — Create at least 3 personas (they'll be assigned as Manager, Consultant, Worker)
+5. **Assign roles** — In the Setup tab, assign each persona a role and optionally set focus areas for consultants
+6. **Define the task** — In the Task tab, describe the problem and expected output
+7. **Save & Start** — Save the task, then start the deliberation from the Deliberation tab
+8. **Watch it run** — The ledger shows every agent's contribution in real-time as the deliberation progresses through rounds, decision, execution, and review
+
+---
+
+## Project Structure
+
+```
+kondi/
+├── mcp-connect-mvp/               # Main desktop application
+│   ├── src/                        # React/TypeScript frontend
+│   │   ├── App.tsx                 # Root component & state management
+│   │   ├── council/                # Deliberation engine (13 files)
+│   │   │   ├── deliberation-orchestrator.ts  # State machine
+│   │   │   ├── types.ts            # All deliberation types
+│   │   │   ├── prompts.ts          # Role-specific LLM prompts
+│   │   │   ├── ledger-store.ts     # Append-only audit trail
+│   │   │   ├── context-store.ts    # Versioned artifacts
+│   │   │   ├── store.ts            # Council CRUD
+│   │   │   └── llm-adapter.ts      # Provider routing
+│   │   ├── pipeline/               # Workflow orchestration
+│   │   ├── services/               # LLM clients, MCP, OAuth
+│   │   ├── components/             # React UI components
+│   │   │   ├── council/            # Deliberation UI
+│   │   │   ├── pipeline/           # Pipeline builder UI
+│   │   │   └── ChatArea.tsx        # Chat interface
+│   │   └── config/                 # Model definitions
+│   ├── src-tauri/                  # Rust backend
+│   │   └── src/commands.rs         # MCP process management, OAuth, proxy
+│   ├── kondi-mcp-proxy/            # Authentication proxy (Node.js)
+│   │   └── src/
+│   │       ├── proxy.ts            # SSE streaming, message forwarding
+│   │       └── auth/               # OAuth, API key, bearer, custom header
+│   └── server/                     # Express.js API server
+├── kondi-search-mcp/               # Web search MCP server
+│   ├── src/tools/                  # web_search, web_fetch tools
+│   ├── docker-compose.yml          # SearXNG container
+│   └── searxng-config/             # SearXNG settings
+├── flowforge/                      # Self-healing workflow library
+│   └── src/
+│       ├── providers/              # LLM adapters (10+ providers)
+│       ├── executor/               # Step execution & self-healing
+│       └── planner/                # Interactive workflow planning
+└── README.md
 ```
 
 ---
