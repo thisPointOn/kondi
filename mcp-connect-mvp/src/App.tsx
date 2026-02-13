@@ -1879,10 +1879,21 @@ function App() {
                 id: 'anthropic-cli',
                 name: 'Claude CLI',
                 description: 'Claude Code subscription - latest Claude 4+ models',
-                status: cliCredentials.claude.available ? 'active' : 'inactive',
+                status: (() => {
+                  const result = validationReport?.llmProviders.find(r => r.provider === 'Anthropic CLI');
+                  if (result?.status === 'error') return 'error';
+                  if (result?.status === 'ok') return 'active';
+                  return cliCredentials.claude.available ? 'active' : 'inactive';
+                })(),
                 cliTool: 'claude',
                 oauthAvailable: cliCredentials.claude.available,
                 activeAuthMethod: cliCredentials.claude.available ? 'oauth' : undefined,
+                validationError: (() => {
+                  const err = validationReport?.llmProviders.find(
+                    (r) => r.provider === 'Anthropic CLI' && r.status === 'error'
+                  );
+                  return err ? { message: err.message, details: err.details, action: err.action } : undefined;
+                })(),
                 config: {
                   expiresAt: cliCredentials.claude.expiresAt,
                 },
@@ -1890,12 +1901,23 @@ function App() {
               },
               {
                 id: 'openai-cli',
-                name: 'Codex CLI',
-                description: 'OpenAI Codex subscription - latest GPT-5+ models',
-                status: cliCredentials.codex.available ? 'active' : 'inactive',
+                name: 'ChatGPT CLI',
+                description: 'ChatGPT subscription - latest GPT-5+ models',
+                status: (() => {
+                  const result = validationReport?.llmProviders.find(r => r.provider === 'OpenAI CLI');
+                  if (result?.status === 'error') return 'error';
+                  if (result?.status === 'ok') return 'active';
+                  return cliCredentials.codex.available ? 'active' : 'inactive';
+                })(),
                 cliTool: 'codex',
                 oauthAvailable: cliCredentials.codex.available,
                 activeAuthMethod: cliCredentials.codex.available ? 'oauth' : undefined,
+                validationError: (() => {
+                  const err = validationReport?.llmProviders.find(
+                    (r) => r.provider === 'OpenAI CLI' && r.status === 'error'
+                  );
+                  return err ? { message: err.message, details: err.details, action: err.action } : undefined;
+                })(),
                 config: {
                   expiresAt: cliCredentials.codex.expiresAt,
                 },
@@ -1907,15 +1929,15 @@ function App() {
                 name: 'Anthropic API',
                 description: 'Direct API access - Claude 3.5 models',
                 status: (() => {
-                  const result = validationReport?.llmProviders.find(r => r.provider.includes('Anthropic'));
+                  const result = validationReport?.llmProviders.find(r => r.provider === 'Anthropic API');
                   if (result?.status === 'error') return 'error';
-                  if (result?.status === 'ok' && anthropicAuthMethod === 'api_key') return 'active';
+                  if (result?.status === 'ok') return 'active';
                   return anthropicKey ? 'inactive' : 'inactive';
                 })(),
                 activeAuthMethod: anthropicKey ? 'api_key' : undefined,
                 validationError: (() => {
                   const err = validationReport?.llmProviders.find(
-                    (r) => r.provider.includes('Anthropic') && r.status === 'error'
+                    (r) => r.provider === 'Anthropic API' && r.status === 'error'
                   );
                   return err ? { message: err.message, details: err.details, action: err.action } : undefined;
                 })(),
@@ -1929,7 +1951,7 @@ function App() {
                 name: 'OpenAI API',
                 description: 'Direct API access - GPT-4o, o1 models',
                 status: (() => {
-                  const result = validationReport?.llmProviders.find(r => r.provider.includes('OpenAI'));
+                  const result = validationReport?.llmProviders.find(r => r.provider === 'OpenAI API');
                   if (result?.status === 'error') return 'error';
                   if (result?.status === 'ok' && openaiAuthMethod === 'api_key') return 'active';
                   return openaiKey ? 'inactive' : 'inactive';
@@ -1937,7 +1959,7 @@ function App() {
                 activeAuthMethod: openaiKey ? 'api_key' : undefined,
                 validationError: (() => {
                   const err = validationReport?.llmProviders.find(
-                    (r) => r.provider.includes('OpenAI') && r.status === 'error'
+                    (r) => r.provider === 'OpenAI API' && r.status === 'error'
                   );
                   return err ? { message: err.message, details: err.details, action: err.action } : undefined;
                 })(),
@@ -2342,7 +2364,7 @@ function App() {
                   });
                   setValidationReport(report);
 
-                  if (report.llmProviders.find(r => r.provider.includes('Anthropic'))?.status === 'ok') {
+                  if (report.llmProviders.find(r => r.provider === 'Anthropic CLI')?.status === 'ok') {
                     alert('Claude subscription connected and verified!');
                   } else {
                     alert('Claude subscription connected but validation failed. Check the status for details.');
@@ -2355,10 +2377,10 @@ function App() {
 
                   if (!cliStatus.installed) {
                     alert(
-                      'Codex CLI is required to use your ChatGPT subscription.\n\n' +
+                      'The Codex CLI tool is required to use your ChatGPT subscription.\n\n' +
                       'Install it with:\n' +
                       'npm install -g @openai/codex\n\n' +
-                      'Then run "codex login" to log in with your OpenAI account.'
+                      'Then run "codex login" in your terminal to authenticate.'
                     );
                     return false;
                   }
@@ -2366,8 +2388,7 @@ function App() {
                   if (!cliStatus.authenticated) {
                     alert(
                       'Codex CLI is installed but not logged in.\n\n' +
-                      'Run "codex login" in your terminal to log in with your OpenAI account, ' +
-                      'then try connecting again.'
+                      'Run "codex login" in your terminal to authenticate, then try connecting again.'
                     );
                     return false;
                   }
@@ -2396,7 +2417,7 @@ function App() {
                   });
                   setValidationReport(report);
 
-                  if (report.llmProviders.find(r => r.provider.includes('OpenAI'))?.status === 'ok') {
+                  if (report.llmProviders.find(r => r.provider === 'OpenAI CLI')?.status === 'ok') {
                     alert('ChatGPT subscription connected and verified!');
                   } else {
                     alert('ChatGPT subscription connected but validation failed. Check the status for details.');
@@ -2439,14 +2460,14 @@ function App() {
                 });
                 setValidationReport(report);
 
-                if (report.llmProviders.find(r => r.provider.includes('OpenAI'))?.status === 'ok') {
-                  alert('Codex CLI login successful! ChatGPT subscription connected and verified.');
+                if (report.llmProviders.find(r => r.provider === 'OpenAI CLI')?.status === 'ok') {
+                  alert('ChatGPT subscription connected and verified!');
                 } else {
-                  alert('Codex CLI logged in but validation failed. Check the status for details.');
+                  alert('ChatGPT login succeeded but validation failed. Check the status for details.');
                 }
               } catch (err) {
                 console.error('[App] Codex CLI login failed:', err);
-                alert(`Codex CLI login failed: ${err instanceof Error ? err.message : String(err)}`);
+                alert(`ChatGPT login failed: ${err instanceof Error ? err.message : String(err)}`);
               } finally {
                 setIsCodexLoggingIn(false);
               }

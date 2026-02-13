@@ -120,8 +120,8 @@ const PROVIDER_META: ProviderMeta[] = [
   },
   {
     id: 'openai-cli',
-    label: 'Codex CLI (Subscription)',
-    shortLabel: 'Codex CLI',
+    label: 'ChatGPT CLI (Subscription)',
+    shortLabel: 'ChatGPT CLI',
     color: '#3b82f6',
     legacyId: 'chatgpt',
     models: OPENAI_CLI_MODELS,
@@ -202,7 +202,14 @@ const ChatArea: FC<ChatAreaProps> = ({
   const [activeProvider, setActiveProvider] = useState<'claude' | 'chatgpt' | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   // Chat input history (like bash shell — up/down arrow to cycle through previous entries)
-  const inputHistoryRef = useRef<string[]>([]);
+  const inputHistoryRef = useRef<string[]>(
+    (() => {
+      try {
+        const saved = localStorage.getItem('kondi-input-history');
+        return saved ? JSON.parse(saved) : [];
+      } catch { return []; }
+    })()
+  );
   const historyIndexRef = useRef(-1);
   const savedInputRef = useRef('');
   const [showModelDropdown, setShowModelDropdown] = useState(false);
@@ -469,6 +476,11 @@ const ChatArea: FC<ChatAreaProps> = ({
     const trimmed = inputValue.trim();
     if (trimmed && (inputHistoryRef.current.length === 0 || inputHistoryRef.current[inputHistoryRef.current.length - 1] !== trimmed)) {
       inputHistoryRef.current.push(trimmed);
+      // Keep last 50 entries, persist to localStorage
+      if (inputHistoryRef.current.length > 50) {
+        inputHistoryRef.current = inputHistoryRef.current.slice(-50);
+      }
+      try { localStorage.setItem('kondi-input-history', JSON.stringify(inputHistoryRef.current)); } catch {}
     }
     historyIndexRef.current = -1;
     savedInputRef.current = '';

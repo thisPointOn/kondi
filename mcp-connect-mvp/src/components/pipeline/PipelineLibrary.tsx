@@ -5,6 +5,7 @@
 import { useState, useEffect } from 'react';
 import type { Pipeline } from '../../pipeline/types';
 import { pipelineStore } from '../../pipeline/store';
+import CliSessionImportModal from './CliSessionImportModal';
 import './PipelineLibrary.css';
 
 interface PipelineLibraryProps {
@@ -18,6 +19,7 @@ export default function PipelineLibrary({
 }: PipelineLibraryProps) {
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -102,9 +104,14 @@ export default function PipelineLibrary({
           <h2>Pipelines</h2>
           <span className="header-subtitle">Councils as Workflow Steps</span>
         </div>
-        <button className="create-pipeline-btn" onClick={() => setShowCreateModal(true)}>
-          + New Pipeline
-        </button>
+        <div className="header-actions">
+          <button className="import-cli-btn" onClick={() => setShowImportModal(true)}>
+            Import CLI Session
+          </button>
+          <button className="create-pipeline-btn" onClick={() => setShowCreateModal(true)}>
+            + New Pipeline
+          </button>
+        </div>
       </div>
 
       <div className="pipeline-library-search">
@@ -138,16 +145,21 @@ export default function PipelineLibrary({
             >
               <div className="pipeline-card-header">
                 <h3>{pipeline.name}</h3>
-                <span
-                  className={`pipeline-status-badge${pipeline.status === 'running' ? ' running' : ''}`}
-                  style={{
-                    backgroundColor: getStatusColor(pipeline.status) + '20',
-                    color: getStatusColor(pipeline.status),
-                  }}
-                >
-                  {pipeline.status === 'running' && <span className="running-dot" />}
-                  {pipeline.status}
-                </span>
+                <div className="pipeline-badges">
+                  {pipeline.source === 'cli' && (
+                    <span className="pipeline-cli-badge">CLI</span>
+                  )}
+                  <span
+                    className={`pipeline-status-badge${pipeline.status === 'running' ? ' running' : ''}`}
+                    style={{
+                      backgroundColor: getStatusColor(pipeline.status) + '20',
+                      color: getStatusColor(pipeline.status),
+                    }}
+                  >
+                    {pipeline.status === 'running' && <span className="running-dot" />}
+                    {pipeline.status}
+                  </span>
+                </div>
               </div>
 
               {pipeline.description && (
@@ -260,6 +272,16 @@ export default function PipelineLibrary({
             </div>
           </div>
         </div>
+      )}
+
+      {showImportModal && (
+        <CliSessionImportModal
+          onClose={() => setShowImportModal(false)}
+          onImported={(pipelineId) => {
+            setShowImportModal(false);
+            onPipelineSelect(pipelineId);
+          }}
+        />
       )}
     </div>
   );

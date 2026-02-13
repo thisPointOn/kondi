@@ -170,4 +170,38 @@ export interface Pipeline {
   currentStageIndex: number;
   createdAt: string;
   updatedAt: string;
+  /** Where this pipeline was executed — 'cli' for CLI-imported sessions */
+  source?: 'cli' | 'gui';
+}
+
+// ============================================================================
+// CLI ↔ GUI Session Export/Import
+// ============================================================================
+
+export interface KondiSessionCouncilData {
+  ledgerIndex: any;
+  ledgerChunks: Record<number, any[]>;
+  context: any | null;
+  contextHistory: any[];
+  contextPatches: any[];
+  decision: any | null;
+  plan: any | null;
+  directive: any | null;
+  outputs: any[];
+}
+
+export interface KondiSession {
+  version: 1;
+  exportedAt: string;
+  source: 'cli';
+  pipeline: Pipeline;
+  councils: any[];
+  councilData: Record<string, KondiSessionCouncilData>;
+  execution: {
+    status: 'completed' | 'failed';
+    startedAt: string;
+    completedAt: string;
+    durationMs: number;
+    workingDirectory: string;
+  };
 }

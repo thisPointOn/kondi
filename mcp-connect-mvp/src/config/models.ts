@@ -214,7 +214,7 @@ export const OPENAI_API_MODELS: ModelDefinition[] = [
 ];
 
 // ============================================================================
-// OpenAI CLI Models (Codex subscription - newer models)
+// OpenAI CLI Models (ChatGPT subscription - newer models)
 // ============================================================================
 export const OPENAI_CLI_MODELS: ModelDefinition[] = [
   {

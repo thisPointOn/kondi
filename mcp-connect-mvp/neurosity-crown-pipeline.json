@@ -1,0 +1,131 @@
+{
+  "id": "neurosity-crown-002",
+  "name": "Neurosity Crown EEG Visualizer",
+  "description": "Plan and implement a Neurosity Crown EEG particle visualizer based on the spec in gptSpec.txt",
+  "initialInput": "Build a Neurosity Crown EEG visualizer application.\n\nThe full technical specification is at /home/erik/Documents/eegVis/gptSpec.txt — read it first.\n\nThe target directory is /home/erik/Documents/eegVis/. There is NO existing project scaffolding — you need to create everything from scratch.\n\nKey points from the spec:\n- Process A (Node.js): Connect to Crown via @neurosity/sdk, subscribe to brainwaves, forward over UDP\n- Process B (C++/CUDA/OpenGL): Receive UDP → ring buffer → GPU preprocessing + features → particle sim → render\n- Crown raw is 256 Hz, 8 EEG channels, 16 samples per epoch\n- Neurofeedback loop: alpha → coherence/viscosity, beta → turbulence/emission\n- Calibration phase (baseline calm + baseline active)\n\nThe planning stage should produce a detailed implementation directive covering project structure, build system, dependencies, and file-by-file implementation plan.\n\nThe coding stage should implement everything and verify it compiles.",
+  "stages": [
+    {
+      "id": "stage-1-planning",
+      "name": "Planning",
+      "executionMode": "sequential",
+      "steps": [
+        {
+          "id": "step-1-plan",
+          "name": "Create Implementation Plan",
+          "config": {
+            "type": "planning",
+            "councilSetup": {
+              "name": "Planning Council",
+              "personas": [
+                {
+                  "name": "Planning Lead",
+                  "role": "manager",
+                  "model": "claude-sonnet-4-5-20250929",
+                  "provider": "anthropic-cli",
+                  "avatar": "\uD83D\uDCCB",
+                  "color": "#6366f1",
+                  "suppressPersona": false,
+                  "traits": ["analytical", "strategic"]
+                },
+                {
+                  "name": "GPU/Graphics Expert",
+                  "role": "consultant",
+                  "model": "claude-sonnet-4-5-20250929",
+                  "provider": "anthropic-cli",
+                  "avatar": "\uD83C\uDF93",
+                  "color": "#16a34a",
+                  "traits": ["insightful", "collaborative"],
+                  "domain": "CUDA, OpenGL, GPU computing, real-time graphics"
+                },
+                {
+                  "name": "Plan Author",
+                  "role": "worker",
+                  "model": "claude-sonnet-4-5-20250929",
+                  "provider": "anthropic-cli",
+                  "avatar": "\u270D\uFE0F",
+                  "color": "#f59e0b",
+                  "suppressPersona": true,
+                  "traits": ["thorough", "detail-oriented"],
+                  "saveOutput": true
+                }
+              ],
+              "maxRounds": 4,
+              "maxRevisions": 3,
+              "expectedOutput": "A detailed implementation directive covering: CMake project structure, all source files with descriptions, CUDA kernel designs, OpenGL rendering pipeline, Node.js ingest script, build instructions, and dependency list."
+            },
+            "inputTemplate": "{{input}}",
+            "outputSelection": "output"
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "stage-2-coding",
+      "name": "Implementation",
+      "executionMode": "sequential",
+      "steps": [
+        {
+          "id": "step-2-code",
+          "name": "Implement Visualizer",
+          "config": {
+            "type": "coding",
+            "councilSetup": {
+              "name": "Coding Council",
+              "personas": [
+                {
+                  "name": "Tech Lead",
+                  "role": "manager",
+                  "model": "claude-sonnet-4-5-20250929",
+                  "provider": "anthropic-cli",
+                  "avatar": "\uD83D\uDC68\u200D\uD83D\uDCBB",
+                  "color": "#6366f1",
+                  "suppressPersona": false,
+                  "traits": ["analytical", "decisive"]
+                },
+                {
+                  "name": "Developer",
+                  "role": "worker",
+                  "model": "claude-sonnet-4-5-20250929",
+                  "provider": "anthropic-cli",
+                  "avatar": "\uD83D\uDCBB",
+                  "color": "#f59e0b",
+                  "suppressPersona": true,
+                  "traits": ["thorough", "detail-oriented"],
+                  "saveOutput": true
+                },
+                {
+                  "name": "Code Reviewer",
+                  "role": "reviewer",
+                  "model": "claude-sonnet-4-5-20250929",
+                  "provider": "anthropic-cli",
+                  "avatar": "\uD83D\uDD0D",
+                  "color": "#0ea5e9",
+                  "suppressPersona": true,
+                  "traits": ["critical", "quality-focused"]
+                }
+              ],
+              "maxRounds": 4,
+              "maxRevisions": 3,
+              "maxReviewCycles": 2,
+              "maxDebugCycles": 3,
+              "expectedOutput": "Working implementation of the Neurosity Crown EEG particle visualizer with all source files, CMakeLists.txt, and Node.js ingest script."
+            },
+            "inputTemplate": "Implement the project according to the plan from the previous stage.\n\nPrevious stage output:\n{{previousStageOutput}}\n\nWrite ALL files to /home/erik/Documents/eegVis/. After writing, verify the build compiles (cmake + make or equivalent). Fix any errors.",
+            "outputSelection": "output"
+          },
+          "status": "pending"
+        }
+      ]
+    }
+  ],
+  "settings": {
+    "workingDirectory": "/home/erik/Documents/eegVis",
+    "directoryConstrained": true,
+    "failurePolicy": "stop"
+  },
+  "status": "ready",
+  "currentStageIndex": 0,
+  "createdAt": "2026-02-13T00:00:00Z",
+  "updatedAt": "2026-02-13T00:00:00Z"
+}

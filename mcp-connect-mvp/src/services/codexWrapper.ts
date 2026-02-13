@@ -62,18 +62,19 @@ class CodexWrapper {
   }
 
   /**
-   * Check if Codex CLI is authenticated
+   * Check if Codex CLI is authenticated by running a real exec call
    */
   async checkAuthenticated(): Promise<boolean> {
     try {
-      // Quick test: run a simple exec command
       const result = await invoke<{ success: boolean; output: string; error?: string }>(
         'run_codex_command',
         {
-          args: ['exec', '--skip-git-repo-check', '--json', 'Say OK'],
-          timeoutMs: 30000
+          args: ['exec', '--skip-git-repo-check', '--json', '-'],
+          input: 'Say OK',
+          timeoutMs: 60000
         }
       );
+      console.log('[Codex] Auth check result:', { success: result.success, error: result.error });
       return result.success;
     } catch (err) {
       console.error('[Codex] Auth check failed:', err);

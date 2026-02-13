@@ -368,7 +368,7 @@ const ProviderCard: FC<ProviderCardProps> = ({
               )}
               {provider.validationError.action && (
                 <div className="error-action-row">
-                  {/* Show automated login button for Codex CLI */}
+                  {/* Show automated login button for ChatGPT CLI */}
                   {onCodexLogin && provider.validationError.action.toLowerCase().includes('codex login') ? (
                     <button
                       className="auto-login-btn"
@@ -381,7 +381,7 @@ const ProviderCard: FC<ProviderCardProps> = ({
                           Logging in...
                         </>
                       ) : (
-                        'Login to Codex'
+                        'Login to ChatGPT'
                       )}
                     </button>
                   ) : (

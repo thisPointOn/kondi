@@ -3020,7 +3020,8 @@ pub async fn run_claude_command(
     cmd.args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "true");
+        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "true")
+        .env_remove("CLAUDECODE");
 
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -3089,7 +3090,8 @@ pub async fn run_claude_streaming(
     cmd.args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "true");
+        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "true")
+        .env_remove("CLAUDECODE");
 
     // If we have stdin input, pipe it; otherwise inherit (no stdin needed)
     if stdin_input.is_some() {
@@ -3311,6 +3313,7 @@ pub async fn run_claude_login() -> Result<ClaudeCommandResult, String> {
         .arg("login")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .env_remove("CLAUDECODE")
         .spawn()
         .map_err(|e| format!("Failed to spawn claude login: {}", e))?
         .wait_with_output()
@@ -3368,9 +3371,11 @@ pub async fn run_codex_command(
     args: Vec<String>,
     cwd: Option<String>,
     timeout_ms: Option<u64>,
+    input: Option<String>,
 ) -> Result<CodexCommandResult, String> {
     use std::process::Stdio;
     use tokio::process::Command;
+    use tokio::io::AsyncWriteExt;
 
     let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(120000));
 
@@ -3379,15 +3384,31 @@ pub async fn run_codex_command(
     let mut cmd = Command::new("codex");
     cmd.args(&args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .env_remove("CLAUDECODE"); // Prevent Claude Code env from interfering
+
+    if input.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
 
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
 
-    let child = cmd.spawn().map_err(|e| {
+    let mut child = cmd.spawn().map_err(|e| {
         format!("Failed to spawn codex command: {}. Is Codex CLI installed?", e)
     })?;
+
+    // Pipe stdin if input was provided
+    if let Some(ref input_text) = input {
+        if let Some(mut stdin) = child.stdin.take() {
+            let text = input_text.clone();
+            tokio::spawn(async move {
+                let _ = stdin.write_all(text.as_bytes()).await;
+                let _ = stdin.shutdown().await;
+            });
+        }
+    }
 
     let output = tokio::time::timeout(timeout, child.wait_with_output())
         .await
