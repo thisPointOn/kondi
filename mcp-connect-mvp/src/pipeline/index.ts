@@ -4,4 +4,4 @@
 
 export * from './types';
 export { pipelineStore, PipelineStore } from './store';
-export { PipelineExecutor, type PipelineExecutorCallbacks } from './executor';
+export { PipelineExecutor, type PipelineExecutorCallbacks, type PlatformAdapter } from './executor';

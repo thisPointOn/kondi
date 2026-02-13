@@ -59,7 +59,7 @@ export interface Persona {
   muted?: boolean;
 
   /** Preferred role in deliberation mode (optional hint) */
-  preferredDeliberationRole?: 'manager' | 'consultant' | 'worker';
+  preferredDeliberationRole?: 'manager' | 'consultant' | 'worker' | 'reviewer';
 }
 
 export interface PresetPersona {
@@ -397,7 +397,7 @@ export interface ArgumentMap {
  * Personas define style, model choice, and personality.
  * Both are assigned per session.
  */
-export type DeliberationRole = 'manager' | 'consultant' | 'worker';
+export type DeliberationRole = 'manager' | 'consultant' | 'worker' | 'reviewer';
 
 /**
  * Ledger entry types - structured messaging for audit trail
@@ -420,7 +420,14 @@ export type LedgerEntryType =
   | 'revision_request'        // Manager sends back for revision
   | 're_deliberation'         // Manager requests re-deliberation with new info
   | 'cancellation'            // Workflow cancelled
-  | 'error';                  // Agent invocation error
+  | 'error'                   // Agent invocation error
+  // Coding orchestrator entry types
+  | 'decomposition'           // Manager's module breakdown
+  | 'module_directive'        // Per-module directive
+  | 'module_output'           // Per-module worker output
+  | 'code_review'             // Reviewer's findings
+  | 'test_result'             // Test command output
+  | 'debug_fix';              // Debugger's targeted fix
 
 /**
  * Workflow phases - deterministic state machine
@@ -437,6 +444,13 @@ export type DeliberationPhase =
   | 'executing'                   // Worker executing
   | 'reviewing'                   // Manager reviewing output
   | 'revising'                    // Worker revising based on feedback
+  // Coding orchestrator phases
+  | 'decomposing'                 // Manager decomposes spec into modules
+  | 'implementing'                // Workers implement modules in parallel
+  | 'code_reviewing'              // Reviewer reviews all worker output
+  | 'testing'                     // Running test command
+  | 'debugging'                   // Debugger worker fixing test failures
+  // Terminal states
   | 'paused'                      // User paused without losing state
   | 'completed'                   // Workflow done
   | 'cancelled'                   // User aborted
@@ -621,6 +635,20 @@ export interface ManagerReview {
 }
 
 /**
+ * Code reviewer's verdict on implementation quality
+ */
+export interface ReviewVerdict {
+  verdict: 'pass' | 'needs_revision';
+  issues: Array<{
+    module: string;
+    severity: 'critical' | 'major' | 'minor';
+    description: string;
+    suggestion: string;
+  }>;
+  summary: string;
+}
+
+/**
  * Summary mode for managing context window
  */
 export type SummaryMode =
@@ -678,6 +706,14 @@ export interface DeliberationConfig {
 
   /** Soft word limit per response — guides LLM to be concise, does not truncate */
   maxWordsPerResponse?: number;
+
+  // Pipeline step type (informs prompt behavior)
+  stepType?: 'planning' | 'coding';
+
+  // Coding orchestrator configuration
+  testCommand?: string;
+  maxDebugCycles?: number;     // default 3
+  maxReviewCycles?: number;    // default 2
 }
 
 /**
@@ -710,6 +746,23 @@ export interface DeliberationState {
 
   /** Summary generated on completion for the Decision panel */
   completionSummary?: string;
+
+  // Coding orchestrator state
+  moduleDecomposition?: {
+    modules: Array<{
+      name: string;
+      files: string[];
+      interfaces: string;
+      dependencies: string[];
+      directive: string;
+      assignedWorkerId?: string;
+    }>;
+    integrationNotes: string;
+    testStrategy: string;
+  };
+  moduleOutputs?: Record<string, string>;  // moduleName -> output content
+  debugCycleCount?: number;
+  reviewCycleCount?: number;
 }
 
 /**

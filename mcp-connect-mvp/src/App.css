@@ -753,3 +753,76 @@ select:focus {
   overflow-y: auto;
 }
 
+/* Provider error banner */
+.provider-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: rgba(234, 179, 8, 0.1);
+  border-bottom: 1px solid rgba(234, 179, 8, 0.25);
+  color: #eab308;
+  font-size: 13px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.provider-error-banner svg:first-child {
+  flex-shrink: 0;
+}
+
+.provider-error-banner span {
+  flex: 1;
+  color: #ccc;
+}
+
+.banner-link-btn {
+  background: none;
+  border: none;
+  color: #eab308;
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+  font-family: inherit;
+}
+
+.banner-link-btn:hover {
+  color: #facc15;
+}
+
+.banner-dismiss-btn {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.banner-dismiss-btn:hover {
+  color: #ccc;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.light-theme .provider-error-banner {
+  background: rgba(234, 179, 8, 0.08);
+  border-bottom-color: rgba(234, 179, 8, 0.2);
+}
+
+.light-theme .provider-error-banner span {
+  color: #444;
+}
+
+.light-theme .banner-dismiss-btn {
+  color: #999;
+}
+
+.light-theme .banner-dismiss-btn:hover {
+  color: #333;
+  background: rgba(0, 0, 0, 0.05);
+}
+

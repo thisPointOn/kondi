@@ -62,8 +62,20 @@ class AnthropicClient {
     console.log('[Anthropic] CLI wrapper mode:', use ? 'enabled' : 'disabled');
   }
 
+  getUseCliWrapper(): boolean {
+    return this.useCliWrapper;
+  }
+
+  getCurrentConversationId(): string | null {
+    return this.currentConversationId;
+  }
+
   setCurrentConversationId(id: string | null) {
     this.currentConversationId = id;
+  }
+
+  getWorkingDir(): string | null {
+    return this.workingDir;
   }
 
   setWorkingDir(dir: string | null) {
@@ -205,7 +217,7 @@ class AnthropicClient {
   async chat(
     messages: Message[],
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
-    model = 'claude-3-5-sonnet-latest',
+    model = 'claude-sonnet-4-5-20250929',
     serverSummary?: string,
     additionalSystemPrompt?: string
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
@@ -476,20 +488,27 @@ class AnthropicClient {
       messageWithContext += lastUserMessage.content;
     }
 
-    // Build tool description for the system prompt
-    const toolDescription = this.buildToolDescription(availableTools);
+    // Build tool description for the system prompt (only if tools are provided)
+    const hasTools = availableTools.size > 0;
+    const toolDescription = hasTools ? this.buildToolDescription(availableTools) : '';
     let fullSystemPrompt = systemPrompt || '';
     if (toolDescription) {
       fullSystemPrompt += '\n\n' + toolDescription;
       fullSystemPrompt += '\n\nThese MCP tools are connected and available for you to use. When the user asks about data or functionality these tools can provide, USE the tools to get real information rather than just describing what you would do.';
     }
 
-    // Build allowed tools list from connected MCP servers
-    const allowedTools = await claudeCodeWrapper.listMCPServers();
-
-    console.log('[Anthropic CLI] Tool count from app:', Array.from(availableTools.values()).reduce((sum, { tools }) => sum + tools.length, 0));
-    console.log('[Anthropic CLI] Claude Code MCP servers:', allowedTools);
-    console.log('[Anthropic CLI] Allowed tools being passed:', allowedTools.map(s => `mcp__${s}`));
+    // Only list and connect to MCP servers if tools are actually needed.
+    // This avoids the expensive `claude mcp list` call and MCP server
+    // connection overhead (which can hang if servers are unreachable).
+    let allowedTools: string[] = [];
+    if (hasTools) {
+      allowedTools = await claudeCodeWrapper.listMCPServers();
+      console.log('[Anthropic CLI] Tool count from app:', Array.from(availableTools.values()).reduce((sum, { tools }) => sum + tools.length, 0));
+      console.log('[Anthropic CLI] Claude Code MCP servers:', allowedTools);
+      console.log('[Anthropic CLI] Allowed tools being passed:', allowedTools.map(s => `mcp__${s}`));
+    } else {
+      console.log('[Anthropic CLI] No tools requested — skipping MCP server listing');
+    }
 
     let resultText = '';
     let newSessionId: string | null = null;
@@ -500,7 +519,7 @@ class AnthropicClient {
       model: cliModel,
       systemPrompt: fullSystemPrompt || undefined,
       allowedTools: allowedTools.length > 0 ? allowedTools.map(s => `mcp__${s}`) : undefined,
-      maxTurns: 5,
+      maxTurns: hasTools ? 15 : 1,
       cwd: this.workingDir || undefined,
       onToken: (token) => {
         resultText += token;
@@ -546,10 +565,10 @@ class AnthropicClient {
    */
   private mapModelName(apiModel: string): string {
     const modelMap: Record<string, string> = {
-      'claude-3-5-sonnet-latest': 'sonnet',
-      'claude-3-5-sonnet-20241022': 'sonnet',
-      'claude-3-5-haiku-latest': 'haiku',
-      'claude-3-opus-latest': 'opus',
+      'claude-opus-4-6': 'opus',
+      'claude-sonnet-4-5-20250929': 'sonnet',
+      'claude-haiku-4-5-20251001': 'haiku',
+      'claude-opus-4-5-20251101': 'opus',
       'claude-sonnet-4-20250514': 'sonnet',
       'claude-opus-4-20250514': 'opus',
     };
@@ -563,8 +582,8 @@ class AnthropicClient {
     system?: string
   ) {
     return this.request('/v1/messages', 'POST', {
-      model: model || 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
+      model: model || 'claude-sonnet-4-5-20250929',
+      max_tokens: 16384,
       messages,
       tools: tools && tools.length > 0 ? tools : undefined,
       system,

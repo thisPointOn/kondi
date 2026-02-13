@@ -107,6 +107,54 @@
   border-color: var(--text-secondary, #999);
 }
 
+.builder-view-results-btn {
+  padding: 0.5rem 1rem;
+  background: #3b82f620;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  color: #3b82f6;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.builder-view-results-btn:hover {
+  background: #3b82f640;
+}
+
+.builder-running-btn {
+  padding: 0.5rem 1rem;
+  background: #f59e0b20;
+  border: 1px solid #f59e0b;
+  border-radius: 6px;
+  color: #f59e0b;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.15s;
+}
+
+.builder-running-btn:hover {
+  background: #f59e0b40;
+}
+
+.builder-running-btn .running-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f59e0b;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+
 /* Meta Section */
 .pipeline-meta {
   margin-bottom: 1.5rem;
@@ -226,6 +274,34 @@
 
 .stage-name-input:focus {
   border-bottom-color: var(--accent-color, #3b82f6);
+}
+
+.stage-exec-mode-btn {
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  border: 1px solid;
+  transition: all 0.15s;
+}
+
+.stage-exec-mode-btn.sequential {
+  background: #16a34a15;
+  color: #16a34a;
+  border-color: #16a34a40;
+}
+
+.stage-exec-mode-btn.parallel {
+  background: #f59e0b15;
+  color: #f59e0b;
+  border-color: #f59e0b40;
+}
+
+.stage-exec-mode-btn:hover {
+  opacity: 0.8;
 }
 
 .stage-actions {
@@ -553,4 +629,245 @@
 
 .inline-fields .config-field {
   flex: 1;
+}
+
+/* ============================================================================
+   Directory Picker
+   ============================================================================ */
+
+.directory-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.directory-input-row input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-tertiary, #252525);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  color: var(--text-primary, #e5e5e5);
+  font-size: 0.8125rem;
+  font-family: inherit;
+  min-width: 0;
+}
+
+.directory-input-row input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.directory-browse-btn,
+.directory-clear-btn {
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-tertiary, #252525);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  color: var(--text-secondary, #999);
+  cursor: pointer;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.directory-browse-btn:hover {
+  color: var(--accent-color, #3b82f6);
+  border-color: var(--accent-color, #3b82f6);
+}
+
+.directory-clear-btn:hover {
+  color: #dc2626;
+  border-color: #dc262640;
+}
+
+.constraint-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.375rem;
+}
+
+.constraint-toggle input[type="checkbox"] {
+  width: auto;
+  accent-color: var(--accent-color, #3b82f6);
+  cursor: pointer;
+}
+
+.constraint-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.constraint-label.constrained {
+  color: #f59e0b;
+}
+
+.constraint-label.unconstrained {
+  color: var(--text-secondary, #999);
+}
+
+.directory-hint {
+  display: block;
+  font-size: 0.6875rem;
+  color: var(--text-secondary, #666);
+  margin-top: 0.25rem;
+  line-height: 1.4;
+}
+
+.inherited-badge {
+  display: inline-block;
+  font-size: 0.625rem;
+  font-weight: 600;
+  padding: 0.125rem 0.5rem;
+  background: #f59e0b20;
+  color: #f59e0b;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ============================================================================
+   Persona Cards
+   ============================================================================ */
+
+.persona-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.persona-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  background: var(--bg-tertiary, #252525);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.persona-card:hover {
+  border-color: var(--accent-color, #3b82f6);
+}
+
+.persona-card-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.persona-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.persona-card-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary, #e5e5e5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.persona-card-model {
+  font-size: 0.6875rem;
+  color: var(--text-secondary, #999);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.persona-card-right {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+}
+
+.persona-card-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-top: 0.375rem;
+  border-top: 1px solid var(--border-color, #333);
+  font-size: 0.75rem;
+  color: var(--text-secondary, #999);
+  cursor: pointer;
+}
+
+.persona-card-option input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-color, #3b82f6);
+  cursor: pointer;
+}
+
+.role-badge {
+  font-size: 0.625rem;
+  font-weight: 600;
+  padding: 0.125rem 0.5rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.role-manager {
+  background: #6366f120;
+  color: #6366f1;
+}
+
+.role-consultant {
+  background: #16a34a20;
+  color: #16a34a;
+}
+
+.role-worker {
+  background: #f59e0b20;
+  color: #f59e0b;
+}
+
+.role-reviewer {
+  background: #0ea5e920;
+  color: #0ea5e9;
+}
+
+.persona-card .persona-remove-btn {
+  padding: 0.25rem;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  font-size: 0.875rem;
+  line-height: 1;
+}
+
+.persona-card .persona-remove-btn:hover {
+  color: #dc2626;
+}
+
+/* Model picker within config panel — smaller max-height for narrow sidebar */
+.step-config-panel .model-groups {
+  max-height: 240px;
+}
+
+.step-config-panel .model-option {
+  padding: 0.375rem 0.625rem;
+}
+
+.step-config-panel .model-name {
+  font-size: 0.8125rem;
 }

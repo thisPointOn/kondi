@@ -3,6 +3,7 @@
  */
 
 import type { PipelineStage, PipelineStep, StepConfig } from '../../pipeline/types';
+import { isCouncilType } from '../../pipeline/types';
 
 interface StageRowProps {
   stage: PipelineStage;
@@ -12,27 +13,31 @@ interface StageRowProps {
   onStageName: (name: string) => void;
   onAddStep: () => void;
   onRemoveStage: () => void;
+  onExecutionModeChange?: (mode: 'sequential' | 'parallel') => void;
   readOnly?: boolean;
 }
 
 function getStepIcon(type: StepConfig['type']): string {
   switch (type) {
-    case 'council': return '\u2696\uFE0F';
+    case 'planning': return '\uD83D\uDCCB';
+    case 'decisioning': return '\uD83E\uDD14';
     case 'execution': return '\uD83E\uDD16';
+    case 'coding': return '\uD83D\uDCBB';
     case 'gate': return '\uD83D\uDEA7';
     default: return '\u2753';
   }
 }
 
 function getStepSummary(step: PipelineStep): string {
+  if (isCouncilType(step.config.type)) {
+    const c = step.config as { councilSetup: { personas: unknown[] }; outputSelection: string };
+    const count = c.councilSetup.personas.length;
+    return `${count} persona${count !== 1 ? 's' : ''} \u00B7 ${c.outputSelection}`;
+  }
   switch (step.config.type) {
-    case 'council': {
-      const c = step.config;
-      const count = c.councilSetup.personas.length;
-      return `${count} persona${count !== 1 ? 's' : ''} \u00B7 ${c.outputSelection}`;
-    }
+    case 'decisioning':
     case 'execution':
-      return step.config.model;
+      return (step.config as { model: string }).model;
     case 'gate':
       return 'Approval checkpoint';
     default:
@@ -48,8 +53,11 @@ export default function StageRow({
   onStageName,
   onAddStep,
   onRemoveStage,
+  onExecutionModeChange,
   readOnly,
 }: StageRowProps) {
+  const mode = stage.executionMode || 'sequential';
+
   return (
     <div className="stage-row">
       <div className="stage-header">
@@ -65,6 +73,15 @@ export default function StageRow({
               value={stage.name}
               onChange={(e) => onStageName(e.target.value)}
             />
+          )}
+          {!readOnly && stage.steps.length > 1 && (
+            <button
+              className={`stage-exec-mode-btn ${mode}`}
+              onClick={() => onExecutionModeChange?.(mode === 'sequential' ? 'parallel' : 'sequential')}
+              title={mode === 'sequential' ? 'Steps run one after another' : 'Steps run at the same time'}
+            >
+              {mode === 'sequential' ? 'Sequential' : 'Parallel'}
+            </button>
           )}
         </div>
         {!readOnly && (

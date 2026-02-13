@@ -14,6 +14,7 @@ import type {
   DeliberationState,
   DeliberationRoleAssignment,
   DeliberationPhase,
+  DeliberationRole,
 } from './types';
 import { validateCouncil } from './validation';
 import { deleteLedger } from './ledger-store';
@@ -73,12 +74,63 @@ function migrateCouncils(councils: Council[], fromVersion: number): Council[] {
   return migrated;
 }
 
+/**
+ * Free localStorage space by removing ledger/context data from resolved councils.
+ */
+function freeStorageForCouncils(): boolean {
+  console.warn('[CouncilStore] localStorage quota exceeded — freeing space...');
+
+  const keysToRemove: string[] = [];
+  const prefixes = [
+    'ledger-chunk-', 'ledger-index-',
+    'context-history-', 'context-patches-', 'outputs-',
+    'context-', 'decision-', 'plan-', 'directive-',
+  ];
+
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key) continue;
+    for (const prefix of prefixes) {
+      if (key.startsWith(prefix)) {
+        keysToRemove.push(key);
+        break;
+      }
+    }
+  }
+
+  if (keysToRemove.length === 0) return false;
+
+  // Remove largest items first (ledger chunks tend to be biggest)
+  const sorted = keysToRemove.sort((a, b) => {
+    const sizeA = localStorage.getItem(a)?.length || 0;
+    const sizeB = localStorage.getItem(b)?.length || 0;
+    return sizeB - sizeA;
+  });
+
+  // Remove up to half of the items to free substantial space
+  const removeCount = Math.max(1, Math.floor(sorted.length / 2));
+  console.log(`[CouncilStore] Removing ${removeCount} old artifact keys to free space`);
+  for (let i = 0; i < removeCount; i++) {
+    try { localStorage.removeItem(sorted[i]); } catch { /* ignore */ }
+  }
+  return true;
+}
+
 function saveToStorage(data: StorageData): void {
+  data.lastUpdated = new Date().toISOString();
+  const json = JSON.stringify(data);
   try {
-    data.lastUpdated = new Date().toISOString();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(STORAGE_KEY, json);
     console.log('[CouncilStore] Saved', data.councils.length, 'councils');
   } catch (error) {
+    // On quota error, free space and retry
+    if (freeStorageForCouncils()) {
+      try {
+        localStorage.setItem(STORAGE_KEY, json);
+        console.log('[CouncilStore] Saved after freeing space:', data.councils.length, 'councils');
+        return;
+      } catch { /* fall through */ }
+    }
     console.error('[CouncilStore] Failed to save to storage:', error);
     throw new Error('Failed to save councils to storage');
   }
@@ -170,6 +222,19 @@ export function createCouncil(params: {
     deliberationState: undefined,
   };
 
+  // Validate before saving
+  const validation = validateCouncil(council);
+  if (!validation.success) {
+    const issues = validation.error.issues
+      .map((issue) => {
+        const path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+        return `${path}: ${issue.message}`;
+      })
+      .join('; ');
+    console.error('[CouncilStore] Invalid council on create:', issues, validation.error);
+    throw new Error(`Invalid council data: ${issues}`);
+  }
+
   const data = loadFromStorage();
   data.councils.push(council);
   saveToStorage(data);
@@ -203,8 +268,14 @@ export function updateCouncil(
   // Validate the updated council
   const validation = validateCouncil(updated);
   if (!validation.success) {
-    console.error('[CouncilStore] Invalid council update:', validation.error);
-    throw new Error('Invalid council data');
+    const issues = validation.error.issues
+      .map((issue) => {
+        const path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+        return `${path}: ${issue.message}`;
+      })
+      .join('; ');
+    console.error('[CouncilStore] Invalid council update:', issues, validation.error);
+    throw new Error(`Invalid council data: ${issues}`);
   }
 
   data.councils[index] = updated;
@@ -812,7 +883,7 @@ export function addErrorToLog(councilId: string, error: string): Council | null 
  */
 export function getPersonaByRole(
   council: Council,
-  role: 'manager' | 'consultant' | 'worker'
+  role: DeliberationRole
 ): Persona[] {
   if (!council.deliberation) return [];
 

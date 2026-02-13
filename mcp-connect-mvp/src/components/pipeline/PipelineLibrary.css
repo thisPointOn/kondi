@@ -134,6 +134,27 @@
   padding: 0.25rem 0.5rem;
   border-radius: 9999px;
   text-transform: capitalize;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.pipeline-status-badge .running-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  animation: pulse-lib-dot 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-lib-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+
+.pipeline-action.primary.running {
+  background: #f59e0b;
+  color: #1a1a2e;
 }
 
 .pipeline-description {

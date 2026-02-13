@@ -60,6 +60,19 @@ export default function PipelineLibrary({
     if (dup) onPipelineSelect(dup.id);
   };
 
+  const handleExport = (id: string) => {
+    const pipeline = pipelineStore.get(id);
+    if (!pipeline) return;
+    const json = JSON.stringify(pipeline, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${pipeline.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const getStatusColor = (status: Pipeline['status']) => {
     switch (status) {
       case 'draft': return '#6b7280';
@@ -126,12 +139,13 @@ export default function PipelineLibrary({
               <div className="pipeline-card-header">
                 <h3>{pipeline.name}</h3>
                 <span
-                  className="pipeline-status-badge"
+                  className={`pipeline-status-badge${pipeline.status === 'running' ? ' running' : ''}`}
                   style={{
                     backgroundColor: getStatusColor(pipeline.status) + '20',
                     color: getStatusColor(pipeline.status),
                   }}
                 >
+                  {pipeline.status === 'running' && <span className="running-dot" />}
                   {pipeline.status}
                 </span>
               </div>
@@ -161,13 +175,13 @@ export default function PipelineLibrary({
 
               <div className="pipeline-card-actions">
                 <button
-                  className="pipeline-action primary"
+                  className={`pipeline-action primary${pipeline.status === 'running' ? ' running' : ''}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     onPipelineSelect(pipeline.id);
                   }}
                 >
-                  Open
+                  {pipeline.status === 'running' ? 'View Progress' : 'Open'}
                 </button>
                 <button
                   className="pipeline-action"
@@ -177,6 +191,15 @@ export default function PipelineLibrary({
                   }}
                 >
                   Duplicate
+                </button>
+                <button
+                  className="pipeline-action"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleExport(pipeline.id);
+                  }}
+                >
+                  Export
                 </button>
                 <button
                   className="pipeline-action danger"

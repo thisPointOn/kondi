@@ -227,7 +227,7 @@ class StartupValidator {
         const response = await anthropicClient.chat(
           [testMessage],
           new Map(), // no tools
-          'claude-3-5-haiku-latest', // fast model for test
+          'claude-haiku-4-5-20251001', // fast model for test
         );
 
         if (response.message && response.message.content) {
@@ -297,7 +297,7 @@ class StartupValidator {
                 content: 'Say "OK" and nothing else.',
                 timestamp: new Date(),
               };
-              await anthropicClient.chat([testMessage], new Map(), 'claude-3-5-haiku-latest');
+              await anthropicClient.chat([testMessage], new Map(), 'claude-haiku-4-5-20251001');
               return {
                 provider: 'Anthropic (Claude)',
                 status: 'ok',

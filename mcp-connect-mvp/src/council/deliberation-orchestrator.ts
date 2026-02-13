@@ -88,6 +88,10 @@ export interface AgentInvocation {
   personaId: string;
   systemPrompt: string;
   userMessage: string;
+  /** When true, the invoker should NOT pass MCP tools (avoids slow MCP connections) */
+  skipTools?: boolean;
+  /** Resume an existing CLI session (within a single step/council) */
+  conversationId?: string;
 }
 
 export interface AgentResponse {
@@ -95,6 +99,8 @@ export interface AgentResponse {
   tokensUsed: number;
   latencyMs: number;
   structured?: Record<string, unknown>;
+  /** Session ID returned by the CLI, for resuming within this step/council */
+  sessionId?: string;
 }
 
 export type AgentInvoker = (invocation: AgentInvocation, persona: Persona) => Promise<AgentResponse>;
@@ -142,6 +148,8 @@ const PHASE_TRANSITIONS: Record<DeliberationPhase, {
 export class DeliberationOrchestrator {
   private config: OrchestratorConfig;
   private activeCouncilId: string | null = null;
+  /** Per-persona session IDs for conversation persistence within a council */
+  private personaSessionIds: Map<string, string> = new Map();
 
   constructor(config: OrchestratorConfig) {
     this.config = config;
@@ -158,6 +166,7 @@ export class DeliberationOrchestrator {
   async runFullDeliberation(council: Council, rawProblem: string): Promise<void> {
     console.log('[Orchestrator] Starting full deliberation...');
     this.activeCouncilId = council.id;
+    this.personaSessionIds.clear();
 
     // Always read fresh from store to avoid stale React state
     council = councilStore.get(council.id) || council;
@@ -284,12 +293,16 @@ export class DeliberationOrchestrator {
         const errMsg = (error as Error).message || String(error);
         console.error(`[Orchestrator] Error during phase ${phase}:`, errMsg);
 
-        // Record the error as a ledger entry so user can see it
-        const manager = this.getManager(council);
+        // Record the error as a ledger entry — attribute to the phase's active role
+        const isConsultantPhase = phase === 'round_independent' || phase === 'round_interactive';
+        const role = isConsultantPhase ? 'consultant' : 'manager';
+        const fallbackPersona = isConsultantPhase
+          ? (council.personas.find(p => p.preferredDeliberationRole === 'consultant') || this.getManager(council))
+          : this.getManager(council);
         this.createEntry(
           councilId,
-          'manager',
-          manager.id,
+          role,
+          fallbackPersona.id,
           'error',
           phase || 'unknown',
           `Deliberation error during ${phase}: ${errMsg}`,
@@ -393,13 +406,17 @@ export class DeliberationOrchestrator {
       council = councilStore.get(councilId)!;
       const errPhase = council.deliberationState?.currentPhase;
 
-      // Record error in ledger
+      // Record error in ledger — attribute to the phase's active role
       try {
-        const manager = this.getManager(council);
+        const isWorkerPhase = errPhase === 'executing' || errPhase === 'revising';
+        const role = isWorkerPhase ? 'worker' : 'manager';
+        const persona = isWorkerPhase
+          ? (council.personas.find(p => p.preferredDeliberationRole === 'worker') || this.getManager(council))
+          : this.getManager(council);
         this.createEntry(
           councilId,
-          'manager',
-          manager.id,
+          role,
+          persona.id,
           'error',
           errPhase || 'unknown',
           `Deliberation error during ${errPhase}: ${errMsg}`,
@@ -1043,9 +1060,15 @@ export class DeliberationOrchestrator {
       throw new Error('No decision found - must make decision first');
     }
 
+    // Check if the worker has write permissions (informs the directive to emphasize implementation)
+    const worker = this.getWorker(council);
+    const workerAssignment = getRoleAssignment(council, worker.id);
+    const hasWritePermissions = !!(workerAssignment?.writePermissions && council.deliberation?.workingDirectory);
+    const stepType = council.deliberation?.stepType;
+
     // Build prompts per Section 9.6
     const systemPrompt = manager.predisposition.systemPrompt;
-    const userMessage = buildWorkDirectivePrompt(decision.content, plan?.content);
+    const userMessage = buildWorkDirectivePrompt(decision.content, plan?.content, hasWritePermissions, stepType);
 
     const response = await this.invokeAgentSafe(
       { personaId: manager.id, systemPrompt, userMessage },
@@ -1109,11 +1132,12 @@ export class DeliberationOrchestrator {
     };
 
     // Build prompts per Section 9.7
+    const stepType = council.deliberation?.stepType;
     const systemPrompt = suppressPersona
-      ? getMinimalWorkerSystemPrompt(workerPermissions)
+      ? getMinimalWorkerSystemPrompt(workerPermissions, stepType)
       : worker.predisposition.systemPrompt;
 
-    const userMessage = buildWorkerExecutionPrompt(directive.content);
+    const userMessage = buildWorkerExecutionPrompt(directive.content, workerPermissions, stepType);
 
     const response = await this.invokeAgentSafe(
       { personaId: worker.id, systemPrompt, userMessage },
@@ -1162,6 +1186,12 @@ export class DeliberationOrchestrator {
       throw new Error('Missing directive or output for review');
     }
 
+    // Check if worker had write permissions (affects review criteria)
+    const worker = this.getWorker(council);
+    const workerAssignment = getRoleAssignment(council, worker.id);
+    const hasWritePermissions = !!(workerAssignment?.writePermissions && council.deliberation?.workingDirectory);
+    const stepType = council.deliberation?.stepType;
+
     // Build prompts per Section 9.8
     const systemPrompt = manager.predisposition.systemPrompt;
     const expectedOutput = council.deliberation?.expectedOutput;
@@ -1169,7 +1199,9 @@ export class DeliberationOrchestrator {
       output.content,
       directive.content,
       decision?.acceptanceCriteria,
-      expectedOutput
+      expectedOutput,
+      hasWritePermissions,
+      stepType,
     );
 
     const response = await this.invokeAgentSafe(
@@ -1295,14 +1327,17 @@ export class DeliberationOrchestrator {
     };
 
     // Build prompts per Section 9.7.1
+    const stepType = council.deliberation?.stepType;
     const systemPrompt = suppressPersona
-      ? getMinimalWorkerSystemPrompt(workerPermissions)
+      ? getMinimalWorkerSystemPrompt(workerPermissions, stepType)
       : worker.predisposition.systemPrompt;
 
     const userMessage = buildWorkerRevisionPrompt(
       directive.content,
       previousOutput.content,
-      revisionRequest.content
+      revisionRequest.content,
+      workerPermissions,
+      stepType,
     );
 
     const response = await this.invokeAgentSafe(
@@ -1749,6 +1784,22 @@ export class DeliberationOrchestrator {
     persona: Persona,
     context: string
   ): Promise<AgentResponse> {
+    // Only execution and revision phases need MCP tools.
+    // All other phases (framing, analysis, evaluation, decision, planning,
+    // directing, review, summary) are pure LLM calls that don't use tools.
+    // Skipping tools avoids the expensive `claude mcp list` call and MCP
+    // server connection overhead, which can hang if servers are unreachable.
+    const toolPhases = ['execution', 'revision'];
+    if (!toolPhases.includes(context)) {
+      invocation = { ...invocation, skipTools: true };
+    }
+
+    // Inject per-persona session ID for conversation persistence within this council
+    const existingSessionId = this.personaSessionIds.get(persona.id);
+    if (existingSessionId) {
+      invocation = { ...invocation, conversationId: existingSessionId };
+    }
+
     // Inject brevity instruction if maxWordsPerResponse is configured
     const wordLimit = this.activeCouncilId
       ? councilStore.get(this.activeCouncilId)?.deliberation?.maxWordsPerResponse
@@ -1765,6 +1816,12 @@ export class DeliberationOrchestrator {
       this.config.onAgentThinkingStart?.(persona);
       const response = await this.config.invokeAgent(invocation, persona);
       this.config.onAgentThinkingEnd?.(persona);
+
+      // Store session ID for subsequent calls from this persona
+      if (response.sessionId) {
+        this.personaSessionIds.set(persona.id, response.sessionId);
+      }
+
       return response;
     } catch (error) {
       this.config.onAgentThinkingEnd?.(persona);
@@ -1930,13 +1987,22 @@ export class DeliberationOrchestrator {
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
+        // Filter patchDecisions to only include entries with valid UUID patchIds
+        // (the LLM may hallucinate non-UUID strings)
+        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const patchDecisions = Array.isArray(parsed.patchDecisions)
+          ? parsed.patchDecisions.filter(
+              (d: any) => d && typeof d.patchId === 'string' && UUID_RE.test(d.patchId)
+            )
+          : undefined;
+
         return {
           action: parsed.action || 'decide',
           reasoning: parsed.reasoning || content,
-          confidence: parsed.confidence,
-          missingInformation: parsed.missingInformation,
-          question: parsed.question,
-          patchDecisions: parsed.patchDecisions,
+          confidence: parsed.confidence ?? undefined,
+          missingInformation: parsed.missingInformation ?? undefined,
+          question: parsed.question ?? undefined,
+          patchDecisions: patchDecisions && patchDecisions.length > 0 ? patchDecisions : undefined,
         };
       }
     } catch {
@@ -1967,8 +2033,8 @@ export class DeliberationOrchestrator {
         return {
           verdict: parsed.verdict || 'accept',
           reasoning: parsed.reasoning || content,
-          feedback: parsed.feedback,
-          newInformation: parsed.newInformation,
+          feedback: parsed.feedback ?? undefined,
+          newInformation: parsed.newInformation ?? undefined,
         };
       }
     } catch {

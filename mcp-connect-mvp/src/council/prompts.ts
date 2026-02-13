@@ -337,7 +337,7 @@ export interface WorkerPermissions {
   directoryConstrained?: boolean;
 }
 
-export function getMinimalWorkerSystemPrompt(permissions?: WorkerPermissions): string {
+export function getMinimalWorkerSystemPrompt(permissions?: WorkerPermissions, stepType?: 'planning' | 'coding'): string {
   if (permissions?.writePermissions && permissions.workingDirectory) {
     const scopeNote = permissions.directoryConstrained
       ? `You have WRITE PERMISSIONS to the directory: ${permissions.workingDirectory}
@@ -346,20 +346,38 @@ All file operations MUST be within this directory. Do not write outside it.`
 Working directory: ${permissions.workingDirectory}
 You may write to any location on the system.`;
 
-    return `You are the Worker agent. Your job is to execute the directive precisely.
+    if (stepType === 'planning') {
+      return `You are the Worker agent — a planning specialist. Your job is to produce a DETAILED PLAN DOCUMENT, NOT code.
 
 ${scopeNote}
 
-When producing files, output them using labeled code blocks:
-\`\`\`filename: path/to/file.ts
-// file contents here
-\`\`\`
+You have tools available to create and edit files on disk. USE THEM to save your plan as a document file (e.g., plan.md or PLAN.md) in the working directory.
 
-Rules:
+CRITICAL RULES:
+- Produce a PLAN, not code. Do NOT write source code files, implementation files, or any executable code.
+- Your output is a structured, actionable plan document that a separate coding step will later implement.
+- Save the plan document to disk using your file-writing tools.
+- The plan should include: phases, steps, dependencies, architecture decisions, file structure, interfaces, and acceptance criteria.
 - Follow the directive exactly as written
-- If anything is unclear, flag it explicitly in your output — do not guess
+- If anything is unclear, flag it explicitly — do not guess
+- When DONE, you MUST end with a ## COMPLETION SUMMARY section (status, files created/modified, what was built, known issues)`;
+    }
+
+    return `You are the Worker agent — a hands-on implementer. Your job is to execute the directive by ACTUALLY WRITING CODE AND FILES, not by describing what should be done.
+
+${scopeNote}
+
+You have tools available to create, read, and edit files on disk. USE THEM.
+Do NOT just output code blocks in your response — actually write the files using your tools.
+
+CRITICAL RULES:
+- IMPLEMENT the code. Write real files to disk. Do not describe or summarize what to build.
+- Follow the directive exactly as written
+- If the directive says to create files, CREATE THEM using your file-writing tools
+- If anything is unclear, flag it explicitly — do not guess
 - If something seems incorrect or impossible, say so — do not silently deviate
-- Do not add features, optimizations, or changes not specified in the directive`;
+- Do not add features, optimizations, or changes not specified in the directive
+- When DONE, you MUST end with a ## COMPLETION SUMMARY section (status, files created/modified, what was built, known issues)`;
   }
 
   return `You are the Worker agent. Your job is to execute the directive precisely.
@@ -535,14 +553,31 @@ Keep the plan concrete and actionable.`;
 /**
  * Manager issues work directive - Section 9.6
  */
-export function buildWorkDirectivePrompt(decision: string, plan?: string): string {
+export function buildWorkDirectivePrompt(decision: string, plan?: string, hasWritePermissions?: boolean, stepType?: 'planning' | 'coding'): string {
   const planSection = plan ? `\nPLAN:\n${plan}\n` : '';
+
+  let outputNote = '';
+  if (stepType === 'planning') {
+    outputNote = `\nCRITICAL: This is a PLANNING step. The worker must produce a DETAILED PLAN — NOT code.
+The output should be a structured, actionable plan document with:
+- Clear steps and phases
+- Dependencies between steps
+- Specific deliverables for each step
+- Technical approach and architecture decisions
+- Success criteria and acceptance tests
+Do NOT tell the worker to write code, create files, or implement anything.
+The worker should produce a comprehensive plan that a separate coding step will later implement.\n`;
+  } else if (hasWritePermissions) {
+    outputNote = `\nCRITICAL: The worker has tools to create and edit files on disk.
+Your directive MUST tell the worker to ACTUALLY WRITE THE CODE — not describe it, not outline it, not summarize it.
+The worker should create every file, write every line of code, and produce a working implementation.\n`;
+  }
 
   return `Based on your decision, write a concrete work directive.
 
 YOUR DECISION:
 ${decision}
-${planSection}
+${planSection}${outputNote}
 The directive must be:
 - SPECIFIC: Exactly what to do
 - CONSTRAINED: Rules and limitations
@@ -561,7 +596,9 @@ export function buildManagerReviewPrompt(
   workOutput: string,
   directive: string,
   acceptanceCriteria?: string,
-  expectedOutput?: string
+  expectedOutput?: string,
+  hasWritePermissions?: boolean,
+  stepType?: 'planning' | 'coding',
 ): string {
   const criteriaSection = acceptanceCriteria
     ? `\nACCEPTANCE CRITERIA (from your decision):\n${acceptanceCriteria}\n`
@@ -571,9 +608,18 @@ export function buildManagerReviewPrompt(
     ? `\nEXPECTED OUTPUT (the deliverable MUST match this):\n${expectedOutput}\n`
     : '';
 
+  const implementationNote = stepType === 'planning'
+    ? `\nNOTE: This is a PLANNING step. The worker was expected to produce a detailed PLAN document,
+NOT code or implementation. Evaluate whether the plan is thorough, actionable, and covers all requirements.\n`
+    : hasWritePermissions
+    ? `\nNOTE: The worker had file-writing tools and was expected to ACTUALLY CREATE FILES on disk.
+If the worker only described or outlined what to build without actually writing the files,
+that is NOT acceptable — use REVISE and instruct them to actually implement the code.\n`
+    : '';
+
   return `WORK DIRECTIVE:
 ${directive}
-${criteriaSection}${expectedOutputSection}
+${criteriaSection}${expectedOutputSection}${implementationNote}
 WORKER OUTPUT:
 ${workOutput}
 
@@ -581,20 +627,34 @@ ${workOutput}
 
 Review the worker's output against the directive, acceptance criteria, and expected output.
 
+HOW TO EVALUATE:
+1. Look for the worker's "## COMPLETION SUMMARY" section at the end of their output.
+   This tells you what they built, what files they created/modified, and any known issues.
+2. If the summary says "Complete" and the files/description match the directive — ACCEPT.
+3. If the summary says "Partial" or is missing key deliverables — REVISE with specifics.
+4. If there is NO completion summary, the worker's output may be truncated or incomplete.
+   In that case, use REVISE and instruct the worker to finish the implementation and
+   include the mandatory completion summary.
+
 CRITICAL: The output MUST match what was specified in the expected output. If it doesn't,
 use REVISE with specific instructions to correct it, or RE-DELIBERATE if the approach
 needs to be reconsidered by the consultants.
 
+IMPORTANT: Your reasoning and verdict MUST be included in your JSON response below.
+Do NOT try to independently verify the work by reading files or running commands —
+evaluate based on the worker's reported output and completion summary.
+
 Decide:
-- ACCEPT: Output meets the directive, acceptance criteria, AND expected output. Explain briefly.
-- REVISE: Output needs changes to meet the expected output. Provide specific, actionable feedback.
-- RE-DELIBERATE: The approach taken doesn't satisfy the expected output and requires the
+- ACCEPT: Output meets the directive, acceptance criteria, AND expected output.
+  Include a brief summary of what was delivered in your reasoning.
+- REVISE: Output needs changes. Provide specific, actionable feedback.
+- RE-DELIBERATE: The approach doesn't satisfy the expected output and requires the
   consultants to reconsider. Explain what needs to change.
 
 Respond as JSON:
 {
   "verdict": "accept" | "revise" | "re_deliberate",
-  "reasoning": "...",
+  "reasoning": "what the worker delivered and whether it meets requirements",
   "feedback": "specific revision instructions (if revise)",
   "newInformation": "what changed (if re_deliberate)"
 }`;
@@ -696,13 +756,84 @@ Why: {rationale}`;
 /**
  * Worker execution - Section 9.7
  */
-export function buildWorkerExecutionPrompt(directive: string): string {
+export function buildWorkerExecutionPrompt(directive: string, permissions?: WorkerPermissions, stepType?: 'planning' | 'coding'): string {
+  if (permissions?.writePermissions && permissions.workingDirectory) {
+    if (stepType === 'planning') {
+      return `DIRECTIVE:
+${directive}
+
+---
+IMPORTANT: You are a planning agent with write access to the file system.
+Your job is to produce a DETAILED PLAN DOCUMENT — NOT code.
+
+USE YOUR TOOLS to save the plan as a document file (e.g., plan.md or PLAN.md) in the working directory.
+Do NOT write source code, implementation files, or any executable code.
+
+The plan should be thorough and actionable, covering:
+- Clear phases and steps
+- Dependencies between steps
+- Architecture and design decisions
+- File/module structure
+- Interface definitions
+- Success criteria and acceptance tests
+
+MANDATORY — When you are DONE, you MUST end your response with a completion summary
+in EXACTLY this format:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**Files created:**
+- path/to/plan.md — brief description
+**What was produced:** 1-3 sentence description of the plan
+**Known issues:** [None | list any issues]
+
+This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT skip it.`;
+    }
+
+    return `DIRECTIVE:
+${directive}
+
+---
+IMPORTANT: You are an implementation agent with write access to the file system.
+DO NOT just describe what needs to be done or output code blocks in your response.
+USE YOUR TOOLS to actually create and write the files to disk.
+
+Start implementing immediately. Write each file using your file-writing tools.
+
+MANDATORY — When you are DONE implementing, you MUST end your response with a completion summary
+in EXACTLY this format:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**Files created:**
+- path/to/file1.ts — brief description
+- path/to/file2.ts — brief description
+**Files modified:**
+- path/to/existing.ts — what changed
+**What was built:** 1-3 sentence description of the working result
+**Known issues:** [None | list any issues]
+
+This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT skip it.`;
+  }
+
   return `DIRECTIVE:
 ${directive}
 
 ---
 Remember: Produce all output directly in your response. Use labeled code blocks for any files or code.
-Do not attempt to access a file system or run commands — you are a text-only agent.`;
+Do not attempt to access a file system or run commands — you are a text-only agent.
+
+MANDATORY — When you are DONE, you MUST end your response with a completion summary
+in EXACTLY this format:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**Files/sections produced:**
+- filename or section — brief description
+**What was built:** 1-3 sentence description of the result
+**Known issues:** [None | list any issues]
+
+This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT skip it.`;
 }
 
 /**
@@ -711,8 +842,74 @@ Do not attempt to access a file system or run commands — you are a text-only a
 export function buildWorkerRevisionPrompt(
   directive: string,
   previousOutput: string,
-  feedback: string
+  feedback: string,
+  permissions?: WorkerPermissions,
+  stepType?: 'planning' | 'coding',
 ): string {
+  if (permissions?.writePermissions && permissions.workingDirectory) {
+    if (stepType === 'planning') {
+      return `DIRECTIVE:
+${directive}
+
+YOUR PREVIOUS PLAN:
+${previousOutput}
+
+REVISION FEEDBACK:
+${feedback}
+
+Revise your plan document to address the feedback. Follow the original directive.
+Only change what the feedback asks you to change.
+
+IMPORTANT: USE YOUR TOOLS to edit or rewrite the plan document on disk. Do not just describe the changes.
+Actually modify the plan file. Do NOT write source code or implementation files.
+
+MANDATORY — When you are DONE with revisions, you MUST end your response with a completion summary
+in EXACTLY this format:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**Files created:**
+- path/to/plan.md — brief description
+**Files modified:**
+- path/to/plan.md — what changed
+**What was produced:** 1-3 sentence description of the plan
+**What was revised:** 1-2 sentences on what the feedback asked for and what you changed
+**Known issues:** [None | list any issues]
+
+This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT skip it.`;
+    }
+
+    return `DIRECTIVE:
+${directive}
+
+YOUR PREVIOUS OUTPUT:
+${previousOutput}
+
+REVISION FEEDBACK:
+${feedback}
+
+Revise your implementation to address the feedback. Follow the original directive.
+Only change what the feedback asks you to change.
+
+IMPORTANT: USE YOUR TOOLS to edit or rewrite the files on disk. Do not just describe the changes.
+Actually modify the files.
+
+MANDATORY — When you are DONE with revisions, you MUST end your response with a completion summary
+in EXACTLY this format:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**Files created:**
+- path/to/file1.ts — brief description
+**Files modified:**
+- path/to/existing.ts — what changed
+**What was built:** 1-3 sentence description of the working result
+**What was revised:** 1-2 sentences on what the feedback asked for and what you changed
+**Known issues:** [None | list any issues]
+
+This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT skip it.`;
+  }
+
   return `DIRECTIVE:
 ${directive}
 
@@ -726,5 +923,275 @@ Revise your output to address the feedback. Follow the original
 directive. Only change what the feedback asks you to change.
 
 Remember: Produce all output directly in your response. Use labeled code blocks for any files or code.
-Do not attempt to access a file system or run commands — you are a text-only agent.`;
+Do not attempt to access a file system or run commands — you are a text-only agent.
+
+MANDATORY — When you are DONE with revisions, you MUST end your response with a completion summary
+in EXACTLY this format:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**Files/sections produced:**
+- filename or section — brief description
+**What was built:** 1-3 sentence description of the result
+**What was revised:** 1-2 sentences on what the feedback asked for and what you changed
+**Known issues:** [None | list any issues]
+
+This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT skip it.`;
+}
+
+// ============================================================================
+// Coding Orchestrator Prompts
+// ============================================================================
+
+/**
+ * Manager decomposes a spec into parallel modules for workers
+ */
+export function buildDecompositionPrompt(spec: string, workerCount: number): string {
+  if (workerCount <= 1) {
+    return `You are decomposing a specification into an implementation plan for a single worker.
+
+SPECIFICATION:
+${spec}
+
+---
+
+Since there is only 1 worker, produce a single module with the full implementation directive.
+
+Respond as JSON:
+{
+  "modules": [
+    {
+      "name": "main",
+      "files": ["list of files to create or modify"],
+      "interfaces": "public interfaces this module exposes (types, exports, APIs)",
+      "dependencies": [],
+      "directive": "complete implementation directive for the worker"
+    }
+  ],
+  "integrationNotes": "any notes about how the code fits together",
+  "testStrategy": "how to verify the implementation works"
+}`;
+  }
+
+  return `You are decomposing a specification into ${workerCount} parallel modules for worker agents.
+
+SPECIFICATION:
+${spec}
+
+---
+
+Break this spec into ${workerCount} modules that can be implemented in parallel.
+
+Requirements:
+- Each module should be as independent as possible
+- Define clear interfaces between modules so workers can code to a contract
+- Each module gets its own list of files, a directive, and declared dependencies
+- If modules depend on each other, list the dependency by module name
+- Directives must be concrete and self-contained — workers only see their own module
+
+Respond as JSON:
+{
+  "modules": [
+    {
+      "name": "descriptive-module-name",
+      "files": ["list of files this module creates or modifies"],
+      "interfaces": "public interfaces this module exposes (types, exports, APIs) that other modules may depend on",
+      "dependencies": ["names of other modules this depends on"],
+      "directive": "complete implementation directive for the worker assigned to this module"
+    }
+  ],
+  "integrationNotes": "how the modules connect — shared types, import paths, integration points",
+  "testStrategy": "how to verify the full implementation works end-to-end"
+}`;
+}
+
+/**
+ * Per-worker directive with module scope and interfaces of other modules
+ */
+export function buildModuleDirectivePrompt(
+  module: { name: string; files: string[]; interfaces: string; dependencies: string[]; directive: string },
+  otherModuleInterfaces: Array<{ name: string; interfaces: string }>,
+  integrationNotes: string,
+  permissions?: WorkerPermissions,
+): string {
+  const interfacesSection = otherModuleInterfaces.length > 0
+    ? `\n## OTHER MODULE INTERFACES (code to these contracts — do NOT implement them)\n${otherModuleInterfaces.map(
+        (m) => `### ${m.name}\n${m.interfaces}`
+      ).join('\n\n')}\n`
+    : '';
+
+  const depsSection = module.dependencies.length > 0
+    ? `\nDependencies: This module depends on: ${module.dependencies.join(', ')}\nImport from the interfaces above — do not reimplement them.\n`
+    : '';
+
+  const scopeNote = permissions?.writePermissions && permissions.workingDirectory
+    ? `\nIMPORTANT: You have WRITE PERMISSIONS. USE YOUR TOOLS to create and edit files on disk.
+Do NOT output code blocks in your response — actually write the files.
+${permissions.directoryConstrained
+  ? `All file operations MUST be within: ${permissions.workingDirectory}`
+  : `Working directory: ${permissions.workingDirectory}`}\n`
+    : `\nYou do NOT have write permissions. Output all code in labeled code blocks:\n\`\`\`filename: path/to/file.ts\n// contents\n\`\`\`\n`;
+
+  return `## MODULE: ${module.name}
+Files: ${module.files.join(', ')}
+
+## DIRECTIVE
+${module.directive}
+${interfacesSection}${depsSection}
+## INTEGRATION NOTES
+${integrationNotes}
+${scopeNote}
+MANDATORY — When DONE, end with:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**Files created/modified:** list each with brief description
+**What was built:** 1-3 sentence description
+**Known issues:** [None | list any issues]`;
+}
+
+/**
+ * Code reviewer evaluates all worker outputs against the original spec
+ */
+export function buildCodeReviewPrompt(
+  spec: string,
+  workerOutputs: Array<{ moduleName: string; output: string }>,
+  expectedOutput?: string,
+): string {
+  const outputsSection = workerOutputs
+    .map((w) => `### Module: ${w.moduleName}\n${w.output}`)
+    .join('\n\n---\n\n');
+
+  const expectedSection = expectedOutput
+    ? `\n## EXPECTED OUTPUT\n${expectedOutput}\n`
+    : '';
+
+  return `You are a code reviewer. Review all worker implementations against the original specification.
+
+## ORIGINAL SPECIFICATION
+${spec}
+${expectedSection}
+## WORKER IMPLEMENTATIONS
+${outputsSection}
+
+---
+
+Review for:
+1. **Correctness**: Does the implementation match the spec? Are all requirements met?
+2. **Integration**: Will the modules work together? Are interfaces compatible?
+3. **Quality**: Are there bugs, edge cases, or obvious issues?
+4. **Completeness**: Is anything missing from the spec?
+
+Respond as JSON:
+{
+  "verdict": "pass" | "needs_revision",
+  "issues": [
+    {
+      "module": "module-name",
+      "severity": "critical" | "major" | "minor",
+      "description": "what's wrong",
+      "suggestion": "how to fix it"
+    }
+  ],
+  "summary": "overall assessment of the implementation"
+}
+
+If there are no critical or major issues, verdict should be "pass".
+Only use "needs_revision" for issues that would prevent the code from working correctly.`;
+}
+
+/**
+ * Minimal system prompt for reviewer role (read-only)
+ */
+export function buildReviewerSystemPrompt(): string {
+  return `You are a Code Reviewer agent. Your job is to evaluate code quality and correctness.
+
+You do NOT write code or modify files. You only review and provide feedback.
+Your output must be structured JSON with a verdict and list of issues.
+
+Be thorough but practical — flag real problems, not style preferences.
+Focus on correctness, spec compliance, and integration issues.`;
+}
+
+/**
+ * Debugger worker fixes test failures
+ */
+export function buildDebugFixPrompt(
+  testOutput: string,
+  allCode: string,
+  spec: string,
+  permissions?: WorkerPermissions,
+): string {
+  const scopeNote = permissions?.writePermissions && permissions.workingDirectory
+    ? `\nIMPORTANT: You have WRITE PERMISSIONS. USE YOUR TOOLS to edit the files on disk.
+Do NOT just describe fixes — actually apply them.
+${permissions.directoryConstrained
+  ? `All file operations MUST be within: ${permissions.workingDirectory}`
+  : `Working directory: ${permissions.workingDirectory}`}\n`
+    : `\nYou do NOT have write permissions. Output all fixes in labeled code blocks.\n`;
+
+  return `You are a debugger. Tests are failing. Fix the code to make them pass.
+
+## TEST OUTPUT (failures)
+${testOutput}
+
+## CURRENT CODE
+${allCode}
+
+## ORIGINAL SPECIFICATION
+${spec}
+${scopeNote}
+Instructions:
+- Analyze the test failures and identify root causes
+- Make MINIMAL, targeted fixes — do not rewrite or refactor unrelated code
+- Fix only what's broken, preserve everything else
+- If a test failure reveals a spec misunderstanding, fix the code to match the spec
+
+MANDATORY — When DONE, end with:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial]
+**Files modified:** list each with what was fixed
+**Fixes applied:** brief description of each fix
+**Known issues:** [None | list any remaining issues]`;
+}
+
+/**
+ * Worker revision based on reviewer feedback
+ */
+export function buildRevisionFromReviewPrompt(
+  reviewFeedback: string,
+  previousOutput: string,
+  moduleDirective: string,
+  permissions?: WorkerPermissions,
+): string {
+  const scopeNote = permissions?.writePermissions && permissions.workingDirectory
+    ? `\nIMPORTANT: You have WRITE PERMISSIONS. USE YOUR TOOLS to edit the files on disk.
+Do NOT just describe changes — actually apply them.
+${permissions.directoryConstrained
+  ? `All file operations MUST be within: ${permissions.workingDirectory}`
+  : `Working directory: ${permissions.workingDirectory}`}\n`
+    : `\nYou do NOT have write permissions. Output all revised code in labeled code blocks.\n`;
+
+  return `## ORIGINAL DIRECTIVE
+${moduleDirective}
+
+## YOUR PREVIOUS OUTPUT
+${previousOutput}
+
+## REVIEWER FEEDBACK
+${reviewFeedback}
+
+---
+
+Revise your implementation to address the reviewer's feedback.
+Only change what the feedback asks you to change — do not rewrite unrelated code.
+${scopeNote}
+MANDATORY — When DONE, end with:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial]
+**Files created/modified:** list each with brief description
+**What was revised:** 1-2 sentences on what the feedback asked for and what you changed
+**Known issues:** [None | list any issues]`;
 }

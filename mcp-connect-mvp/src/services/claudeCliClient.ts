@@ -101,9 +101,10 @@ class ClaudeCliClient {
     if (model) {
       // Map model names to Claude CLI format
       const modelMap: Record<string, string> = {
-        'claude-3-5-sonnet-latest': 'sonnet',
-        'claude-3-opus-latest': 'opus',
-        'claude-3-haiku-latest': 'haiku',
+        'claude-opus-4-6': 'opus',
+        'claude-sonnet-4-5-20250929': 'sonnet',
+        'claude-haiku-4-5-20251001': 'haiku',
+        'claude-opus-4-5-20251101': 'opus',
         'claude-sonnet-4-20250514': 'sonnet',
         'claude-opus-4-20250514': 'opus',
       };

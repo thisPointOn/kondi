@@ -201,6 +201,10 @@ const ChatArea: FC<ChatAreaProps> = ({
   const [sending, setSending] = useState(false);
   const [activeProvider, setActiveProvider] = useState<'claude' | 'chatgpt' | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  // Chat input history (like bash shell — up/down arrow to cycle through previous entries)
+  const inputHistoryRef = useRef<string[]>([]);
+  const historyIndexRef = useRef(-1);
+  const savedInputRef = useRef('');
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const stopRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -330,6 +334,43 @@ const ChatArea: FC<ChatAreaProps> = ({
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
+      return;
+    }
+
+    // Up/Down arrow history navigation (like bash shell)
+    // Only activate when cursor is at the start/end of input or input is empty
+    const textarea = e.currentTarget;
+    const history = inputHistoryRef.current;
+
+    if (e.key === 'ArrowUp' && history.length > 0) {
+      // Only navigate history if cursor is at position 0 (start of input)
+      if (textarea.selectionStart !== 0 || textarea.selectionEnd !== 0) return;
+
+      e.preventDefault();
+      if (historyIndexRef.current === -1) {
+        // Save current input before navigating history
+        savedInputRef.current = inputValue;
+        historyIndexRef.current = history.length - 1;
+      } else if (historyIndexRef.current > 0) {
+        historyIndexRef.current--;
+      }
+      setInputValue(history[historyIndexRef.current]);
+    }
+
+    if (e.key === 'ArrowDown' && historyIndexRef.current !== -1) {
+      // Only navigate history if cursor is at the end of input
+      const len = textarea.value.length;
+      if (textarea.selectionStart !== len || textarea.selectionEnd !== len) return;
+
+      e.preventDefault();
+      if (historyIndexRef.current < history.length - 1) {
+        historyIndexRef.current++;
+        setInputValue(history[historyIndexRef.current]);
+      } else {
+        // Past the end of history — restore saved input
+        historyIndexRef.current = -1;
+        setInputValue(savedInputRef.current);
+      }
     }
   };
 
@@ -423,6 +464,14 @@ const ChatArea: FC<ChatAreaProps> = ({
       alert(`Please set your ${provider === 'chatgpt' ? 'OpenAI' : 'Anthropic'} API key or configure CLI auth in settings.`);
       return;
     }
+
+    // Push to input history (like bash shell)
+    const trimmed = inputValue.trim();
+    if (trimmed && (inputHistoryRef.current.length === 0 || inputHistoryRef.current[inputHistoryRef.current.length - 1] !== trimmed)) {
+      inputHistoryRef.current.push(trimmed);
+    }
+    historyIndexRef.current = -1;
+    savedInputRef.current = '';
 
     // Build message content including attached files
     let messageContent = inputValue;

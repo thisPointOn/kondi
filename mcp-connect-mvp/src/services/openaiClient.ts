@@ -79,8 +79,16 @@ export class OpenAIClient {
     console.log('[OpenAI] CLI wrapper mode:', use ? 'enabled' : 'disabled');
   }
 
+  getCurrentConversationId(): string | null {
+    return this.currentConversationId;
+  }
+
   setCurrentConversationId(id: string | null) {
     this.currentConversationId = id;
+  }
+
+  getUseCliWrapper(): boolean {
+    return this.useCliWrapper;
   }
 
   setWorkingDir(dir: string | null) {
@@ -210,8 +218,9 @@ export class OpenAIClient {
       messageWithContext += lastUserMessage.content;
     }
 
-    // Build tool description for the system prompt
-    const toolDescription = this.buildToolDescription(availableTools);
+    // Build tool description for the system prompt (only if tools are provided)
+    const hasTools = availableTools.size > 0;
+    const toolDescription = hasTools ? this.buildToolDescription(availableTools) : '';
     let fullSystemPrompt = systemPrompt || BASE_SYSTEM_PROMPT;
     if (toolDescription) {
       fullSystemPrompt += '\n\n' + toolDescription;
@@ -224,7 +233,8 @@ export class OpenAIClient {
       conversationId,
       messageLength: messageWithContext.length,
       hasSummary: !!summaryContext,
-      toolCount: Array.from(availableTools.values()).reduce((sum, { tools }) => sum + tools.length, 0),
+      hasTools,
+      toolCount: hasTools ? Array.from(availableTools.values()).reduce((sum, { tools }) => sum + tools.length, 0) : 0,
     });
 
     // Build accumulated content for streaming

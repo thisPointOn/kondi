@@ -1,0 +1,391 @@
+#!/usr/bin/env npx tsx
+/**
+ * CLI Pipeline Runner
+ *
+ * Usage:
+ *   npx tsx cli/run-pipeline.ts <pipeline.json> [--working-dir <path>] [--model <model>] [--dry-run]
+ *
+ * Loads a pipeline JSON exported from the Kondi app and runs it using the same
+ * executor/orchestrator code, with output printed to the terminal.
+ */
+
+// ── localStorage shim MUST be imported first ──
+import './localStorage-shim';
+
+import fs from 'node:fs';
+import path from 'node:path';
+import readline from 'node:readline';
+import { pipelineStore } from '../src/pipeline/store';
+import { PipelineExecutor } from '../src/pipeline/executor';
+import type { PlatformAdapter } from '../src/pipeline/executor';
+import type { Pipeline } from '../src/pipeline/types';
+import { callClaude } from './claude-caller';
+import { callCodex } from './codex-caller';
+import { createNodePlatform } from './node-platform';
+
+// Route to the right CLI caller based on model name
+function isOpenAIModel(model: string): boolean {
+  return /^(gpt-|o[1-9]|codex|davinci|chatgpt)/.test(model);
+}
+
+function callLLM(opts: {
+  systemPrompt: string;
+  userMessage: string;
+  model?: string;
+  workingDir?: string;
+  allowedTools?: string[];
+  skipTools?: boolean;
+  conversationId?: string;
+}) {
+  if (opts.model && isOpenAIModel(opts.model)) {
+    return callCodex(opts);
+  }
+  return callClaude(opts);
+}
+
+// ── ANSI colors ──
+const C = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  red: '\x1b[31m',
+  cyan: '\x1b[36m',
+  magenta: '\x1b[35m',
+  blue: '\x1b[34m',
+};
+
+function log(color: string, prefix: string, msg: string) {
+  const ts = new Date().toLocaleTimeString();
+  console.log(`${C.dim}${ts}${C.reset} ${color}${C.bold}[${prefix}]${C.reset} ${msg}`);
+}
+
+// ── Parse CLI args ──
+function parseArgs() {
+  const args = process.argv.slice(2);
+  let pipelineFile: string | null = null;
+  let workingDir: string | null = null;
+  let model: string | null = null;
+  let pipelineName: string | null = null;
+  let dryRun = false;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--working-dir' && args[i + 1]) {
+      workingDir = path.resolve(args[++i]);
+    } else if (args[i] === '--model' && args[i + 1]) {
+      model = args[++i];
+    } else if (args[i] === '--name' && args[i + 1]) {
+      pipelineName = args[++i];
+    } else if (args[i] === '--dry-run') {
+      dryRun = true;
+    } else if (args[i] === '--help' || args[i] === '-h') {
+      console.log(`
+${C.bold}Kondi CLI Pipeline Runner${C.reset}
+
+Usage:
+  npx tsx cli/run-pipeline.ts <pipeline.json> [options]
+
+Options:
+  --working-dir <path>   Override the pipeline's working directory
+  --model <model>        Override the model for all LLM steps
+  --name <name>          Select pipeline by name (when file contains multiple)
+  --dry-run              Print pipeline structure without running
+  --help                 Show this help
+
+Accepts two JSON formats:
+  1. Single pipeline (exported via "Export" button in the app)
+  2. Wrapped format: { "pipelines": [...] } — use --name to pick one
+`);
+      process.exit(0);
+    } else if (!args[i].startsWith('--')) {
+      pipelineFile = path.resolve(args[i]);
+    }
+  }
+
+  if (!pipelineFile) {
+    console.error(`${C.red}Error: No pipeline JSON file specified.${C.reset}`);
+    console.error(`Usage: npx tsx cli/run-pipeline.ts <pipeline.json> [--working-dir <path>]`);
+    process.exit(1);
+  }
+
+  return { pipelineFile, workingDir, model, pipelineName, dryRun };
+}
+
+// ── Load pipeline JSON ──
+function loadPipeline(
+  filePath: string,
+  workingDirOverride?: string | null,
+  modelOverride?: string | null,
+  pipelineName?: string | null,
+): Pipeline {
+  if (!fs.existsSync(filePath)) {
+    console.error(`${C.red}Error: File not found: ${filePath}${C.reset}`);
+    process.exit(1);
+  }
+
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  const parsed = JSON.parse(raw);
+
+  // Detect format: wrapped { pipelines: [...] } vs single Pipeline object
+  let pipeline: Pipeline;
+
+  if (Array.isArray(parsed.pipelines)) {
+    // Wrapped format (localStorage export or multi-pipeline file)
+    const list: Pipeline[] = parsed.pipelines;
+    if (list.length === 0) {
+      console.error(`${C.red}Error: No pipelines found in file.${C.reset}`);
+      process.exit(1);
+    }
+
+    if (pipelineName) {
+      const match = list.find(p =>
+        p.name.toLowerCase() === pipelineName.toLowerCase() ||
+        p.name.toLowerCase().includes(pipelineName.toLowerCase())
+      );
+      if (!match) {
+        console.error(`${C.red}Error: No pipeline matching "${pipelineName}". Available:${C.reset}`);
+        for (const p of list) console.error(`  - ${p.name}`);
+        process.exit(1);
+      }
+      pipeline = match;
+    } else if (list.length === 1) {
+      pipeline = list[0];
+    } else {
+      console.error(`${C.yellow}Multiple pipelines found. Use --name to select one:${C.reset}`);
+      for (const p of list) console.error(`  - ${p.name}`);
+      process.exit(1);
+    }
+  } else if (parsed.id && Array.isArray(parsed.stages)) {
+    // Single pipeline object (exported from app)
+    pipeline = parsed as Pipeline;
+  } else {
+    console.error(`${C.red}Error: Invalid pipeline JSON — expected a Pipeline object or { pipelines: [...] }.${C.reset}`);
+    process.exit(1);
+  }
+
+  // Apply overrides
+  if (workingDirOverride) {
+    pipeline.settings.workingDirectory = workingDirOverride;
+  }
+
+  // Reset execution state for a fresh run
+  pipeline.status = 'ready';
+  pipeline.currentStageIndex = 0;
+  for (const stage of pipeline.stages) {
+    for (const step of stage.steps) {
+      step.status = 'pending';
+      step.artifact = undefined;
+      step.error = undefined;
+      step.startedAt = undefined;
+      step.completedAt = undefined;
+    }
+  }
+
+  return pipeline;
+}
+
+// ── Print pipeline structure ──
+function printPipelineStructure(pipeline: Pipeline) {
+  console.log(`\n${C.bold}${C.cyan}Pipeline: ${pipeline.name}${C.reset}`);
+  if (pipeline.description) console.log(`${C.dim}${pipeline.description}${C.reset}`);
+  console.log(`${C.dim}Working directory: ${pipeline.settings.workingDirectory || '(not set)'}${C.reset}`);
+  console.log(`${C.dim}Initial input: ${pipeline.initialInput ? pipeline.initialInput.slice(0, 100) + '...' : '(none)'}${C.reset}`);
+  console.log();
+
+  for (let i = 0; i < pipeline.stages.length; i++) {
+    const stage = pipeline.stages[i];
+    console.log(`  ${C.bold}Stage ${i + 1}: ${stage.name}${C.reset} (${stage.executionMode || 'sequential'})`);
+    for (const step of stage.steps) {
+      const typeColor = step.config.type === 'gate' ? C.yellow :
+                        step.config.type === 'coding' ? C.magenta :
+                        step.config.type === 'planning' ? C.blue : C.green;
+      console.log(`    ${typeColor}[${step.config.type}]${C.reset} ${step.name}`);
+    }
+  }
+  console.log();
+}
+
+// ── Interactive gate prompt ──
+async function promptGate(stepId: string, prompt: string): Promise<boolean> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    console.log(`\n${C.yellow}${C.bold}⏸ GATE: ${prompt}${C.reset}`);
+    rl.question(`${C.yellow}Approve? (y/n): ${C.reset}`, (answer) => {
+      rl.close();
+      resolve(answer.toLowerCase().startsWith('y'));
+    });
+  });
+}
+
+// ── Main ──
+async function main() {
+  const { pipelineFile, workingDir, model, pipelineName, dryRun } = parseArgs();
+  const pipeline = loadPipeline(pipelineFile, workingDir, model, pipelineName);
+
+  printPipelineStructure(pipeline);
+
+  if (dryRun) {
+    console.log(`${C.dim}--dry-run: exiting without executing.${C.reset}`);
+    process.exit(0);
+  }
+
+  // Push pipeline into store (so executor can read/update it)
+  const storedPipelines = pipelineStore.getAll();
+  const existing = storedPipelines.find(p => p.id === pipeline.id);
+  if (existing) {
+    // Update in place
+    pipelineStore.update(pipeline.id, {
+      ...pipeline,
+      status: 'ready',
+      currentStageIndex: 0,
+    });
+    // Reset all steps
+    for (const stage of pipeline.stages) {
+      for (const step of stage.steps) {
+        pipelineStore.setStepStatus(pipeline.id, step.id, 'pending');
+      }
+    }
+  } else {
+    // Manually write into localStorage since create() generates a new id
+    const data = JSON.parse(localStorage.getItem('mcp-pipelines') || '{"version":2,"pipelines":[],"lastUpdated":""}');
+    data.pipelines.push(pipeline);
+    data.lastUpdated = new Date().toISOString();
+    localStorage.setItem('mcp-pipelines', JSON.stringify(data));
+  }
+
+  // Resolve and validate working dir
+  const effectiveWorkingDir = pipeline.settings.workingDirectory || process.cwd();
+  if (!fs.existsSync(effectiveWorkingDir)) {
+    console.error(`${C.red}Error: Working directory does not exist: ${effectiveWorkingDir}${C.reset}`);
+    console.error(`${C.dim}Set it in the pipeline JSON under settings.workingDirectory, or use --working-dir${C.reset}`);
+    process.exit(1);
+  }
+  console.log(`${C.dim}Working directory: ${effectiveWorkingDir}${C.reset}`);
+
+  // Create platform adapter
+  const platform: PlatformAdapter = createNodePlatform(effectiveWorkingDir);
+
+  // Track execution time
+  const startTime = Date.now();
+
+  // Create executor
+  const executor = new PipelineExecutor({
+    invokeAgent: async (invocation, persona) => {
+      log(C.cyan, persona.name, `Invoking (${persona.model})...`);
+      const result = await callLLM({
+        systemPrompt: invocation.systemPrompt,
+        userMessage: invocation.userMessage,
+        model: persona.model,
+        workingDir: platform.getWorkingDir(),
+        skipTools: invocation.skipTools,
+        conversationId: invocation.conversationId,
+      });
+      log(C.cyan, persona.name, `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);
+      return { ...result, sessionId: result.sessionId };
+    },
+
+    llmComplete: async (params) => {
+      log(C.green, 'LLM', `Calling ${params.model}...`);
+      const result = await callLLM({
+        systemPrompt: params.systemPrompt,
+        userMessage: params.userMessage,
+        model: params.model,
+        workingDir: platform.getWorkingDir(),
+        conversationId: params.conversationId,
+      });
+      log(C.green, 'LLM', `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);
+      return { content: result.content, tokensUsed: result.tokensUsed, sessionId: result.sessionId };
+    },
+
+    onStageStart: (idx) => {
+      const stage = pipelineStore.get(pipeline.id)?.stages[idx];
+      log(C.blue, 'Stage', `▶ Starting stage ${idx + 1}: ${stage?.name || '?'}`);
+    },
+
+    onStageComplete: (idx) => {
+      const stage = pipelineStore.get(pipeline.id)?.stages[idx];
+      log(C.green, 'Stage', `✓ Completed stage ${idx + 1}: ${stage?.name || '?'}`);
+    },
+
+    onStepStart: (stepId) => {
+      const p = pipelineStore.get(pipeline.id);
+      const step = p?.stages.flatMap(s => s.steps).find(s => s.id === stepId);
+      log(C.magenta, 'Step', `▶ ${step?.name || stepId} [${step?.config.type || '?'}]`);
+    },
+
+    onStepComplete: (stepId, artifact) => {
+      const p = pipelineStore.get(pipeline.id);
+      const step = p?.stages.flatMap(s => s.steps).find(s => s.id === stepId);
+      log(C.green, 'Step', `✓ ${step?.name || stepId} completed`);
+      if (artifact.metadata?.outputPath) {
+        log(C.dim, 'Step', `  Output: ${artifact.metadata.outputPath}`);
+      }
+      // Print a preview of the artifact content
+      const preview = artifact.content.slice(0, 200).replace(/\n/g, ' ');
+      console.log(`${C.dim}  ${preview}${artifact.content.length > 200 ? '...' : ''}${C.reset}`);
+    },
+
+    onStepError: (stepId, error) => {
+      const p = pipelineStore.get(pipeline.id);
+      const step = p?.stages.flatMap(s => s.steps).find(s => s.id === stepId);
+      log(C.red, 'Step', `✗ ${step?.name || stepId} failed: ${error}`);
+    },
+
+    onGateWaiting: promptGate,
+
+    onCouncilCreated: (stepId, councilId) => {
+      log(C.blue, 'Council', `Created ${councilId} for step ${stepId}`);
+    },
+
+    onAgentThinkingStart: (persona) => {
+      log(C.dim, 'Agent', `${persona.name} thinking...`);
+    },
+
+    onAgentThinkingEnd: (persona) => {
+      // Intentionally quiet
+    },
+  }, platform);
+
+  // Run!
+  log(C.bold, 'Pipeline', `Starting execution: ${pipeline.name}`);
+  console.log();
+
+  try {
+    await executor.run(pipeline.id);
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log();
+    log(C.green, 'Pipeline', `✓ Completed successfully in ${elapsed}s`);
+
+    // Print final artifacts
+    const finalPipeline = pipelineStore.get(pipeline.id);
+    if (finalPipeline) {
+      console.log(`\n${C.bold}Final Artifacts:${C.reset}`);
+      for (const stage of finalPipeline.stages) {
+        for (const step of stage.steps) {
+          if (step.artifact) {
+            console.log(`  ${C.cyan}${step.name}${C.reset}: ${step.artifact.artifactType}`);
+            if (step.artifact.metadata?.outputPath) {
+              console.log(`    ${C.dim}→ ${step.artifact.metadata.outputPath}${C.reset}`);
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log();
+    log(C.red, 'Pipeline', `✗ Failed after ${elapsed}s: ${(error as Error).message}`);
+    process.exit(1);
+  }
+}
+
+main().catch((err) => {
+  console.error(`${C.red}Unhandled error:${C.reset}`, err);
+  process.exit(1);
+});

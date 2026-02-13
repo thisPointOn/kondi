@@ -148,6 +148,19 @@ export default function CouncilLibrary({
     }
   };
 
+  const handleExport = (id: string) => {
+    const council = councilStore.get(id);
+    if (!council) return;
+    const json = JSON.stringify(council, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${council.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const getStatusColor = (status: Council['status']) => {
     switch (status) {
       case 'active':
@@ -330,6 +343,15 @@ export default function CouncilLibrary({
                   }}
                 >
                   Open
+                </button>
+                <button
+                  className="council-action"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleExport(council.id);
+                  }}
+                >
+                  Export
                 </button>
                 <button
                   className="council-action danger"

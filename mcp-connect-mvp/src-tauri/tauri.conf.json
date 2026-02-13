@@ -4,10 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.kondi.app",
   "build": {
-    "frontendDist": "../dist",
-    "devUrl": "http://localhost:5175",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "frontendDist": "ui",
+    "devUrl": "http://localhost:5175"
   },
   "app": {
     "windows": [

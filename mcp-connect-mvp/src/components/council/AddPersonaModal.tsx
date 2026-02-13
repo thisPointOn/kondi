@@ -81,6 +81,8 @@ export default function AddPersonaModal({
   const [customPrompt, setCustomPrompt] = useState(editingPersona?.predisposition?.systemPrompt || '');
   const [temperature, setTemperature] = useState(editingPersona?.temperature || 0.7);
   const [verbosity, setVerbosity] = useState<'concise' | 'balanced' | 'thorough'>(editingPersona?.verbosity || 'balanced');
+  const [traits, setTraits] = useState<string[]>(editingPersona?.predisposition?.traits || []);
+  const [customTrait, setCustomTrait] = useState('');
 
   // Deliberation mode fields
   const [selectedRole, setSelectedRole] = useState<DeliberationRole>(
@@ -93,6 +95,7 @@ export default function AddPersonaModal({
   // Check role availability (allow the role if it's the persona being edited)
   const hasManager = existingRoleAssignments.some((r) => r.role === 'manager' && r.personaId !== editingPersona?.id);
   const hasWorker = existingRoleAssignments.some((r) => r.role === 'worker' && r.personaId !== editingPersona?.id);
+  const hasReviewer = existingRoleAssignments.some((r) => r.role === 'reviewer' && r.personaId !== editingPersona?.id);
 
   const filteredTemplates = templates.filter((t) => {
     // Filter by category based on template characteristics
@@ -125,6 +128,7 @@ export default function AddPersonaModal({
     setCustomPrompt(template.predisposition.systemPrompt);
     setTemperature(template.temperature || 0.7);
     setVerbosity(template.verbosity || 'balanced');
+    setTraits(template.predisposition.traits || []);
   };
 
   const handleAdd = () => {
@@ -151,6 +155,7 @@ export default function AddPersonaModal({
         predisposition: {
           ...editingPersona.predisposition,
           systemPrompt: customPrompt || editingPersona.predisposition.systemPrompt,
+          traits: traits.length > 0 ? traits : editingPersona.predisposition.traits,
         },
       };
 
@@ -158,7 +163,7 @@ export default function AddPersonaModal({
         role: selectedRole,
         ...(selectedRole === 'consultant' && { focusArea: focusArea.trim() || undefined }),
         ...(selectedRole === 'consultant' && { stance: stance.trim() || undefined }),
-        suppressPersona: selectedRole === 'manager' || selectedRole === 'worker' ? suppressPersona : undefined,
+        suppressPersona: selectedRole === 'manager' || selectedRole === 'worker' || selectedRole === 'reviewer' ? suppressPersona : undefined,
       };
 
       console.log('[AddPersonaModal] Calling onUpdate', { personaId: editingPersona.id, updates, roleUpdates });
@@ -184,6 +189,14 @@ export default function AddPersonaModal({
       verbosity,
       // Store preferred deliberation role on persona
       preferredDeliberationRole: isDeliberationMode ? selectedRole : undefined,
+      // Include traits if modified from template defaults
+      ...(traits.length > 0 && {
+        predisposition: {
+          ...selectedTemplate.predisposition,
+          systemPrompt: customPrompt || selectedTemplate.predisposition.systemPrompt,
+          traits,
+        },
+      }),
     };
 
     if (isDeliberationMode && onAddWithRole) {
@@ -194,6 +207,7 @@ export default function AddPersonaModal({
         ...(selectedRole === 'consultant' && focusArea.trim() && { focusArea: focusArea.trim() }),
         ...(selectedRole === 'consultant' && stance.trim() && { stance: stance.trim() }),
         ...(selectedRole === 'worker' && { suppressPersona }),
+        ...(selectedRole === 'reviewer' && { suppressPersona: true }),
       };
 
       onAddWithRole(selectedTemplate, overrides, roleAssignment);
@@ -362,6 +376,78 @@ export default function AddPersonaModal({
               </div>
 
               <div className="config-section">
+                <label>Traits</label>
+                <div className="trait-chips">
+                  {traits.map((trait) => (
+                    <button
+                      key={trait}
+                      type="button"
+                      className="trait-chip active"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setTraits(traits.filter((t) => t !== trait));
+                      }}
+                    >
+                      {trait} &times;
+                    </button>
+                  ))}
+                </div>
+                <div className="trait-presets">
+                  {['analytical', 'creative', 'thorough', 'direct', 'empathetic', 'skeptical',
+                    'practical', 'ambitious', 'cautious', 'data-driven', 'patient', 'rigorous',
+                  ].filter((t) => !traits.includes(t)).map((trait) => (
+                    <button
+                      key={trait}
+                      type="button"
+                      className="trait-chip preset"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setTraits([...traits, trait]);
+                      }}
+                    >
+                      + {trait}
+                    </button>
+                  ))}
+                </div>
+                <div className="trait-custom-row">
+                  <input
+                    type="text"
+                    value={customTrait}
+                    onChange={(e) => setCustomTrait(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const val = customTrait.trim().toLowerCase();
+                        if (val && !traits.includes(val)) {
+                          setTraits([...traits, val]);
+                          setCustomTrait('');
+                        }
+                      }
+                    }}
+                    placeholder="Custom trait (Enter to add)"
+                  />
+                  <button
+                    type="button"
+                    className="trait-add-btn"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const val = customTrait.trim().toLowerCase();
+                      if (val && !traits.includes(val)) {
+                        setTraits([...traits, val]);
+                        setCustomTrait('');
+                      }
+                    }}
+                    disabled={!customTrait.trim()}
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+
+              <div className="config-section">
                 <label>System Prompt</label>
                 <textarea
                   value={customPrompt}
@@ -420,11 +506,26 @@ export default function AddPersonaModal({
                         <span className="role-label">Worker</span>
                         {hasWorker && <span className="role-status">Assigned</span>}
                       </button>
+                      <button
+                        type="button"
+                        className={`role-option ${selectedRole === 'reviewer' ? 'selected' : ''} ${hasReviewer ? 'disabled' : ''}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (!hasReviewer) setSelectedRole('reviewer');
+                        }}
+                        disabled={hasReviewer}
+                      >
+                        <span className="role-icon">🔍</span>
+                        <span className="role-label">Reviewer</span>
+                        {hasReviewer && <span className="role-status">Assigned</span>}
+                      </button>
                     </div>
                     <p className="role-hint">
                       {selectedRole === 'manager' && 'Frames problems, evaluates rounds, makes decisions, and reviews output.'}
                       {selectedRole === 'consultant' && 'Analyzes problems, proposes changes, and engages in discussion.'}
                       {selectedRole === 'worker' && 'Executes directives and produces deliverables.'}
+                      {selectedRole === 'reviewer' && 'Reviews code quality and correctness against the specification.'}
                     </p>
                   </div>
 
@@ -459,8 +560,8 @@ export default function AddPersonaModal({
                     </>
                   )}
 
-                  {/* Worker-specific fields */}
-                  {selectedRole === 'worker' && (
+                  {/* Worker/Reviewer-specific fields */}
+                  {(selectedRole === 'worker' || selectedRole === 'reviewer') && (
                     <div className="config-section">
                       <label className="checkbox-label">
                         <input

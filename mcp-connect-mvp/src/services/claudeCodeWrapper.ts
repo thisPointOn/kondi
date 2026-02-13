@@ -32,6 +32,7 @@ export interface ClaudeCallOptions {
   allowedTools?: string[];
   maxTurns?: number;
   cwd?: string;
+  timeoutMs?: number;         // Timeout in ms (default 300_000 = 5 min on Rust side)
   onToken?: (token: string) => void;
   onToolUse?: (toolName: string, input: any) => void;
   onSessionId?: (sessionId: string) => void;
@@ -57,18 +58,29 @@ function parseStreamJsonOutput(rawOutput: string): string {
 
   const lines = rawOutput.split('\n').filter(l => l.trim());
   let resultText = '';
+  let isErrorResult = false;
   const textChunks: string[] = [];
+  const errorChunks: string[] = [];
 
   for (const line of lines) {
     try {
       const json = JSON.parse(line);
 
-      // Extract final result (highest priority)
+      // Extract final result
       if (json.type === 'result' && json.result) {
         resultText = typeof json.result === 'string' ? json.result : JSON.stringify(json.result);
+        if (json.is_error) {
+          isErrorResult = true;
+        }
       }
 
-      // Collect text from assistant messages
+      // Capture error events
+      if (json.type === 'error') {
+        const errText = json.error || json.body || JSON.stringify(json);
+        errorChunks.push(typeof errText === 'string' ? errText : JSON.stringify(errText));
+      }
+
+      // Collect text from ALL assistant messages (including intermediate tool-use turns)
       if (json.type === 'assistant' && json.message?.content) {
         for (const block of json.message.content) {
           if (block.type === 'text' && block.text) {
@@ -86,9 +98,35 @@ function parseStreamJsonOutput(rawOutput: string): string {
     }
   }
 
-  // Prefer the explicit result, fall back to collected text chunks
-  if (resultText) return resultText;
-  if (textChunks.length > 0) return textChunks.join('');
+  // Build the output — include all text and any errors
+  const parts: string[] = [];
+
+  // All assistant text from all turns
+  if (textChunks.length > 0) {
+    parts.push(textChunks.join(''));
+  }
+
+  // Append result text if it wasn't already captured via assistant messages
+  if (resultText) {
+    const combined = parts.join('');
+    if (!combined.endsWith(resultText)) {
+      if (isErrorResult) {
+        parts.push('\n\nError: ' + resultText);
+      } else {
+        parts.push('\n\n' + resultText);
+      }
+    }
+  }
+
+  // Append any error events that weren't in the result
+  if (errorChunks.length > 0) {
+    const errText = errorChunks.join('; ');
+    if (!parts.some(p => p.includes(errText))) {
+      parts.push('\n\nError: ' + errText);
+    }
+  }
+
+  if (parts.length > 0) return parts.join('').trim();
 
   // Last resort: return raw output (shouldn't normally reach here)
   return rawOutput;
@@ -161,8 +199,11 @@ class ClaudeCodeWrapper {
    * Send a message to Claude via the CLI wrapper
    */
   async call(opts: ClaudeCallOptions): Promise<ClaudeCallResult> {
-    const args = this.buildArgs(opts);
+    const { args, stdinInput } = this.buildArgs(opts);
     console.log('[ClaudeCode] Calling with args:', args.join(' '));
+    if (stdinInput) {
+      console.log(`[ClaudeCode] Message piped via stdin (${stdinInput.length} chars)`);
+    }
 
     try {
       // Use streaming call via Tauri
@@ -173,6 +214,8 @@ class ClaudeCodeWrapper {
         {
           args,
           cwd: opts.cwd || null,
+          stdinInput: stdinInput || null,
+          timeoutMs: opts.timeoutMs || null,
         }
       );
 
@@ -211,7 +254,7 @@ class ClaudeCodeWrapper {
    * Synchronous call that returns the full result (for simpler use cases)
    */
   async callSync(opts: Omit<ClaudeCallOptions, 'onToken' | 'onToolUse' | 'onSessionId' | 'onError'>): Promise<ClaudeCallResult> {
-    const args = this.buildArgs({ ...opts });
+    const { args, stdinInput } = this.buildArgs({ ...opts });
 
     // Use non-streaming JSON output for sync calls
     const syncArgs = args.filter(a => a !== 'stream-json');
@@ -265,7 +308,7 @@ class ClaudeCodeWrapper {
     }
   }
 
-  private buildArgs(opts: ClaudeCallOptions): string[] {
+  private buildArgs(opts: ClaudeCallOptions): { args: string[]; stdinInput?: string } {
     const args: string[] = ['-p'];  // print mode (non-interactive)
 
     // Skip all permission prompts for MCP tools
@@ -300,10 +343,18 @@ class ClaudeCodeWrapper {
       args.push('--max-turns', String(opts.maxTurns));
     }
 
+    // For long messages, pipe via stdin instead of CLI arg to avoid OS arg-length limits.
+    // The Claude CLI in -p mode reads from stdin when no positional message is given.
+    const totalArgLength = args.join(' ').length + opts.message.length + (opts.systemPrompt?.length || 0);
+    if (totalArgLength > 100_000) {
+      console.log(`[ClaudeCode] Message too long for CLI args (${totalArgLength} chars), using stdin`);
+      return { args, stdinInput: opts.message };
+    }
+
     // The actual message (must be last)
     args.push(opts.message);
 
-    return args;
+    return { args };
   }
 
   private handleStreamEvent(event: StreamEvent, opts: ClaudeCallOptions): void {

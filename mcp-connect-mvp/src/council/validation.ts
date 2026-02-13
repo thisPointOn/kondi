@@ -63,7 +63,7 @@ export const predispositionSchema = z.object({
 // Persona Schema
 // ============================================================================
 
-export const deliberationRoleSchema = z.enum(['manager', 'consultant', 'worker']);
+export const deliberationRoleSchema = z.enum(['manager', 'consultant', 'worker', 'reviewer']);
 
 export const personaSchema = z.object({
   id: z.string().uuid(),
@@ -256,6 +256,12 @@ export const ledgerEntryTypeSchema = z.enum([
   're_deliberation',
   'cancellation',
   'error',
+  'decomposition',
+  'module_directive',
+  'module_output',
+  'code_review',
+  'test_result',
+  'debug_fix',
 ]);
 
 export const deliberationPhaseSchema = z.enum([
@@ -270,6 +276,11 @@ export const deliberationPhaseSchema = z.enum([
   'executing',
   'reviewing',
   'revising',
+  'decomposing',
+  'implementing',
+  'code_reviewing',
+  'testing',
+  'debugging',
   'paused',
   'completed',
   'cancelled',
@@ -405,17 +416,17 @@ export const patchDecisionSchema = z.object({
 export const managerEvaluationSchema = z.object({
   action: z.enum(['continue', 'decide', 'redirect']),
   reasoning: z.string(),
-  confidence: z.number().min(0).max(1).optional(),
-  missingInformation: z.array(z.string()).optional(),
-  question: z.string().optional(),
-  patchDecisions: z.array(patchDecisionSchema).optional(),
+  confidence: z.number().min(0).max(1).nullable().optional(),
+  missingInformation: z.array(z.string()).nullable().optional(),
+  question: z.string().nullable().optional(),
+  patchDecisions: z.array(patchDecisionSchema).nullable().optional(),
 });
 
 export const managerReviewSchema = z.object({
   verdict: reviewOutcomeSchema,
   reasoning: z.string(),
-  feedback: z.string().optional(),
-  newInformation: z.string().optional(),
+  feedback: z.string().nullable().optional(),
+  newInformation: z.string().nullable().optional(),
 });
 
 export const deliberationConfigSchema = z.object({
@@ -447,12 +458,12 @@ export const deliberationStateSchema = z.object({
   activeContextId: z.string(),
   activeContextVersion: z.number().int().min(0),
   pendingPatches: z.array(z.string()),
-  managerLastEvaluation: managerEvaluationSchema.optional(),
-  finalDecisionId: z.string().optional(),
-  workDirectiveId: z.string().optional(),
-  currentOutputId: z.string().optional(),
+  managerLastEvaluation: managerEvaluationSchema.nullable().optional(),
+  finalDecisionId: z.string().nullable().optional(),
+  workDirectiveId: z.string().nullable().optional(),
+  currentOutputId: z.string().nullable().optional(),
   errorLog: z.array(z.string()),
-  completionSummary: z.string().optional(),
+  completionSummary: z.string().nullable().optional(),
 });
 
 export const ledgerIndexSchema = z.object({

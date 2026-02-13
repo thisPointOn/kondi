@@ -705,13 +705,14 @@ pub async fn start_oauth(
         }
     });
 
-    // Wait for callback with 60 second timeout
+    // Wait for callback with 5 minute timeout — users may need time to
+    // log in, approve permissions, or complete MFA in the browser.
     let (code, returned_state) = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(300),
         rx
     )
     .await
-    .map_err(|_| "OAuth timed out after 60 seconds. Please try again.")?
+    .map_err(|_| "OAuth timed out after 5 minutes. Please try again.")?
     .map_err(|e| e.to_string())?;
     if returned_state != state {
         return Err("OAuth state mismatch".into());
@@ -931,13 +932,14 @@ pub async fn start_oauth_full(
         }
     });
 
-    // Wait for callback with 60 second timeout
+    // Wait for callback with 5 minute timeout — users may need time to
+    // log in, approve permissions, or complete MFA in the browser.
     let (code, returned_state) = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(300),
         rx
     )
     .await
-    .map_err(|_| "OAuth timed out after 60 seconds. Please try again.")?
+    .map_err(|_| "OAuth timed out after 5 minutes. Please try again.")?
     .map_err(|e| e.to_string())?;
 
     if returned_state != state {
@@ -3070,18 +3072,29 @@ pub async fn run_claude_command(
 pub async fn run_claude_streaming(
     args: Vec<String>,
     cwd: Option<String>,
+    stdin_input: Option<String>,
+    timeout_ms: Option<u64>,
 ) -> Result<ClaudeCommandResult, String> {
     use std::process::Stdio;
     use tokio::process::Command;
-    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    println!("[Claude CLI Streaming] Running: claude {}", args.join(" "));
+    let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(300_000)); // 5 min default
+    println!("[Claude CLI Streaming] Running: claude {} (timeout: {}s)", args.join(" "), timeout.as_secs());
+    if stdin_input.is_some() {
+        println!("[Claude CLI Streaming] Piping message via stdin ({} chars)", stdin_input.as_ref().unwrap().len());
+    }
 
     let mut cmd = Command::new("claude");
     cmd.args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "true");
+
+    // If we have stdin input, pipe it; otherwise inherit (no stdin needed)
+    if stdin_input.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
 
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -3091,6 +3104,16 @@ pub async fn run_claude_streaming(
         format!("Failed to spawn claude command: {}. Is Claude Code installed?", e)
     })?;
 
+    // Write stdin input if provided (for long messages that exceed CLI arg limits)
+    if let Some(input) = &stdin_input {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(input.as_bytes()).await.map_err(|e| {
+                format!("Failed to write to claude stdin: {}", e)
+            })?;
+            drop(stdin); // Close stdin to signal EOF
+        }
+    }
+
     let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
     let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
 
@@ -3098,62 +3121,179 @@ pub async fn run_claude_streaming(
     let mut stderr_reader = BufReader::new(stderr).lines();
 
     let mut full_output = String::new();
+    let mut stderr_output = String::new();
     let mut session_id: Option<String> = None;
     let mut final_result: Option<String> = None;
+    let mut stream_errors: Vec<String> = Vec::new();
 
-    // Read stdout line by line (stream-json format)
-    loop {
-        tokio::select! {
-            line = stdout_reader.next_line() => {
-                match line {
-                    Ok(Some(text)) => {
-                        full_output.push_str(&text);
-                        full_output.push('\n');
+    // Read stdout line by line (stream-json format) with timeout
+    let read_result = tokio::time::timeout(timeout, async {
+        loop {
+            tokio::select! {
+                line = stdout_reader.next_line() => {
+                    match line {
+                        Ok(Some(text)) => {
+                            full_output.push_str(&text);
+                            full_output.push('\n');
 
-                        // Try to parse as JSON and extract session_id or result
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if let Some(sid) = json.get("session_id").and_then(|v| v.as_str()) {
-                                session_id = Some(sid.to_string());
-                            }
-                            if json.get("type").and_then(|v| v.as_str()) == Some("result") {
-                                if let Some(result_val) = json.get("result") {
-                                    // Handle result as string, or stringify if it's another type
-                                    if let Some(s) = result_val.as_str() {
-                                        final_result = Some(s.to_string());
-                                    } else if !result_val.is_null() {
-                                        final_result = Some(result_val.to_string());
+                            // Try to parse as JSON and extract session_id, result, or errors
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                                if let Some(sid) = json.get("session_id").and_then(|v| v.as_str()) {
+                                    session_id = Some(sid.to_string());
+                                }
+                                let event_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                                if event_type == "result" {
+                                    if let Some(result_val) = json.get("result") {
+                                        // Handle result as string, or stringify if it's another type
+                                        if let Some(s) = result_val.as_str() {
+                                            final_result = Some(s.to_string());
+                                        } else if !result_val.is_null() {
+                                            final_result = Some(result_val.to_string());
+                                        }
+                                    }
+                                }
+                                // Capture error events from the stream:
+                                // - {"type":"error","error":"..."} — explicit error events
+                                // - {"type":"result","is_error":true,"result":"..."} — error results
+                                // - {"type":"assistant",...,"error":"rate_limit"} — rate limit / API errors
+                                if event_type == "error" {
+                                    if let Some(err_msg) = json.get("error").and_then(|v| v.as_str()) {
+                                        stream_errors.push(err_msg.to_string());
+                                    } else if let Some(err_body) = json.get("body").and_then(|v| v.as_str()) {
+                                        stream_errors.push(err_body.to_string());
+                                    } else {
+                                        stream_errors.push(text.clone());
+                                    }
+                                }
+                                if event_type == "result" {
+                                    if json.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                        if let Some(err_text) = json.get("result").and_then(|v| v.as_str()) {
+                                            stream_errors.push(err_text.to_string());
+                                        }
+                                    }
+                                }
+                                if event_type == "assistant" {
+                                    if let Some(err_kind) = json.get("error").and_then(|v| v.as_str()) {
+                                        // Extract user-facing text from the message content
+                                        let msg_text = json.pointer("/message/content/0/text")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or(err_kind);
+                                        stream_errors.push(msg_text.to_string());
                                     }
                                 }
                             }
                         }
-                    }
-                    Ok(None) => break,
-                    Err(e) => {
-                        println!("[Claude CLI] Error reading stdout: {}", e);
-                        break;
+                        Ok(None) => break,
+                        Err(e) => {
+                            println!("[Claude CLI] Error reading stdout: {}", e);
+                            break;
+                        }
                     }
                 }
-            }
-            line = stderr_reader.next_line() => {
-                match line {
-                    Ok(Some(text)) => {
-                        println!("[Claude CLI stderr] {}", text);
+                line = stderr_reader.next_line() => {
+                    match line {
+                        Ok(Some(text)) => {
+                            println!("[Claude CLI stderr] {}", text);
+                            stderr_output.push_str(&text);
+                            stderr_output.push('\n');
+                        }
+                        Ok(None) => {}
+                        Err(_) => {}
                     }
-                    Ok(None) => {}
-                    Err(_) => {}
                 }
             }
         }
+    }).await;
+
+    if read_result.is_err() {
+        // Timeout — kill the child process and return error
+        let _ = child.kill().await;
+        println!("[Claude CLI Streaming] TIMEOUT after {}s", timeout.as_secs());
+        return Ok(ClaudeCommandResult {
+            success: false,
+            output: final_result.unwrap_or(full_output),
+            error: Some(format!("Claude CLI timed out after {}s. This may be caused by unreachable MCP servers.", timeout.as_secs())),
+            session_id,
+        });
     }
 
     let status = child.wait().await.map_err(|e| format!("Failed to wait for process: {}", e))?;
 
     println!("[Claude CLI Streaming] Completed with status: {:?}", status.code());
 
+    if !status.success() {
+        // Build a detailed error message, preferring structured error info over raw stdout
+        let stderr_trimmed = stderr_output.trim();
+        let error_detail = if !stderr_trimmed.is_empty() {
+            format!("Command failed (exit code {:?}): {}", status.code(), stderr_trimmed)
+        } else if !stream_errors.is_empty() {
+            // Use errors captured from stream-json {"type":"error"} events
+            let errors_joined = stream_errors.join("; ");
+            format!("Command failed (exit code {:?}): {}", status.code(), errors_joined)
+        } else if !full_output.trim().is_empty() {
+            // Last resort: extract the tail of stdout which is more likely to contain the error
+            // than the head (which is typically just the init event with the tool list)
+            let trimmed = full_output.trim();
+            let preview = if trimmed.len() > 2000 {
+                // Show last 1500 chars — the error is usually near the end
+                format!("...(earlier output omitted)\n{}", &trimmed[trimmed.len()-1500..])
+            } else {
+                trimmed.to_string()
+            };
+            format!("Command failed (exit code {:?}). stdout: {}", status.code(), preview)
+        } else {
+            format!("Command failed with exit code: {:?} (no output)", status.code())
+        };
+
+        println!("[Claude CLI Streaming] Error: {}", error_detail);
+
+        return Ok(ClaudeCommandResult {
+            success: false,
+            output: final_result.unwrap_or(full_output),
+            error: Some(error_detail),
+            session_id,
+        });
+    }
+
+    // Even with exit code 0, the stream may contain errors:
+    // - {"type":"result","is_error":true} — e.g. tool result too large
+    // - {"type":"error"} — stream-level errors
+    // - stderr warnings that indicate problems
+    // Return these as failures so the user sees the error in chat.
+    if !stream_errors.is_empty() {
+        let errors_joined = stream_errors.join("; ");
+        println!("[Claude CLI Streaming] Stream errors (exit 0): {}", errors_joined);
+        return Ok(ClaudeCommandResult {
+            success: false,
+            output: final_result.unwrap_or(full_output),
+            error: Some(errors_joined),
+            session_id,
+        });
+    }
+
+    // Check stderr for errors even on exit code 0 (e.g. "Error: result exceeds maximum...")
+    let stderr_trimmed = stderr_output.trim();
+    if !stderr_trimmed.is_empty() && stderr_trimmed.to_lowercase().contains("error") {
+        println!("[Claude CLI Streaming] stderr error (exit 0): {}", stderr_trimmed);
+        return Ok(ClaudeCommandResult {
+            success: false,
+            output: final_result.unwrap_or(full_output),
+            error: Some(stderr_trimmed.to_string()),
+            session_id,
+        });
+    }
+
+    // Prefer the explicit result event, but fall back to full stream output
+    // if the result is missing or empty (e.g. max-turns reached before final answer)
+    let output = match final_result {
+        Some(ref r) if !r.trim().is_empty() => r.clone(),
+        _ => full_output,
+    };
+
     Ok(ClaudeCommandResult {
-        success: status.success(),
-        output: final_result.unwrap_or(full_output),
-        error: if status.success() { None } else { Some("Command failed".to_string()) },
+        success: true,
+        output,
+        error: None,
         session_id,
     })
 }
@@ -3439,6 +3579,14 @@ fn get_codex_config_path() -> Result<PathBuf, String> {
     Ok(home.join(".codex").join("config.toml"))
 }
 
+/// Sanitize a name for use as a TOML bare key.
+/// Replaces spaces and other invalid characters with underscores.
+fn sanitize_toml_key(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect()
+}
+
 /// Run mcp-remote to trigger OAuth and cache tokens
 /// This opens a browser for the user to authorize, then exits once connected
 #[tauri::command]
@@ -3549,7 +3697,8 @@ pub async fn update_codex_config(
     };
 
     // Build the new server block in TOML format
-    let mut server_block = format!("\n[mcp_servers.{}]\n", server_name);
+    let safe_name = sanitize_toml_key(&server_name);
+    let mut server_block = format!("\n[mcp_servers.{}]\n", safe_name);
 
     if let Some(command) = config.get("command").and_then(|v| v.as_str()) {
         server_block.push_str(&format!("command = \"{}\"\n", command));
@@ -3584,8 +3733,8 @@ pub async fn update_codex_config(
         }
     }
 
-    // Remove existing server block if present
-    let section_header = format!("[mcp_servers.{}]", server_name);
+    // Remove existing server block if present (check both sanitized and original names)
+    let section_header = format!("[mcp_servers.{}]", safe_name);
     if content.contains(&section_header) {
         // Use regex-like approach to remove the section
         let mut new_content = String::new();
@@ -4437,7 +4586,7 @@ pub fn sync_proxy_to_codex_config(proxy_id: String) -> Result<(), String> {
     let config = get_proxy_config(proxy_id)?;
 
     let local_url = format!("http://127.0.0.1:{}/mcp", config.local_port);
-    let proxy_entry_name = format!("{}_local_proxy", config.name);
+    let proxy_entry_name = sanitize_toml_key(&format!("{}_local_proxy", config.name));
 
     // Write the TOML directly
     let config_path = get_codex_config_path()?;
@@ -4498,8 +4647,8 @@ pub fn sync_proxy_to_codex_config(proxy_id: String) -> Result<(), String> {
 /// Remove proxy from Codex config
 #[tauri::command]
 pub fn remove_proxy_from_codex_config(proxy_name: String) -> Result<(), String> {
-    // Remove using _local_proxy suffix
-    let proxy_entry_name = format!("{}_local_proxy", proxy_name);
+    // Remove using _local_proxy suffix (sanitized for TOML bare key)
+    let proxy_entry_name = sanitize_toml_key(&format!("{}_local_proxy", proxy_name));
     tokio::runtime::Handle::current().block_on(async {
         remove_codex_mcp_server(proxy_entry_name).await
     })?;

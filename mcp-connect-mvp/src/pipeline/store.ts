@@ -25,18 +25,73 @@ interface StorageData {
 // Storage Helpers
 // ============================================================================
 
+function migrateV1toV2(data: StorageData): StorageData {
+  if (data.version >= 2) return data;
+
+  console.log('[PipelineStore] Migrating v1 → v2: council→planning, execution stays, gate stays');
+  for (const pipeline of data.pipelines) {
+    for (const stage of pipeline.stages) {
+      for (const step of stage.steps) {
+        if ((step.config as { type: string }).type === 'council') {
+          (step.config as { type: string }).type = 'planning';
+        }
+        // 'execution' and 'gate' stay unchanged
+      }
+    }
+  }
+  data.version = 2;
+  return data;
+}
+
 function loadFromStorage(): StorageData {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      return { version: 1, pipelines: [], lastUpdated: new Date().toISOString() };
+      return { version: 2, pipelines: [], lastUpdated: new Date().toISOString() };
     }
-    return JSON.parse(raw) as StorageData;
+    let data = JSON.parse(raw) as StorageData;
+    data = migrateV1toV2(data);
+    return data;
   } catch (error) {
     console.error('[PipelineStore] Failed to load from storage:', error);
-    return { version: 1, pipelines: [], lastUpdated: new Date().toISOString() };
+    return { version: 2, pipelines: [], lastUpdated: new Date().toISOString() };
   }
 }
+
+/**
+ * Reset any pipelines/steps that were left in a transient state (running, waiting)
+ * from a previous session. Called once on startup.
+ */
+function resetStaleExecutionStates(): void {
+  const data = loadFromStorage();
+  let dirty = false;
+
+  for (const pipeline of data.pipelines) {
+    if (pipeline.status === 'running' || pipeline.status === 'paused') {
+      pipeline.status = 'failed';
+      dirty = true;
+    }
+
+    for (const stage of pipeline.stages) {
+      for (const step of stage.steps) {
+        if (step.status === 'running' || step.status === 'waiting_approval') {
+          step.status = 'failed';
+          step.error = 'Interrupted: application was restarted';
+          step.completedAt = new Date().toISOString();
+          dirty = true;
+        }
+      }
+    }
+  }
+
+  if (dirty) {
+    saveToStorage(data);
+    console.log('[PipelineStore] Reset stale running/waiting states from previous session');
+  }
+}
+
+// Run once on module load
+resetStaleExecutionStates();
 
 function saveToStorage(data: StorageData): void {
   try {
@@ -81,6 +136,7 @@ export function createPipeline(params: {
     settings: {
       workingDirectory: params.settings?.workingDirectory,
       failurePolicy: params.settings?.failurePolicy || 'stop',
+      directoryConstrained: params.settings?.directoryConstrained ?? true,
     },
     status: 'draft',
     currentStageIndex: 0,
@@ -324,6 +380,9 @@ export function setStepStatus(
   const updates: Partial<PipelineStep> = { status };
   if (status === 'running') {
     updates.startedAt = new Date().toISOString();
+    // Clear previous error and completion when starting fresh
+    updates.error = undefined;
+    updates.completedAt = undefined;
   }
   if (status === 'completed' || status === 'failed') {
     updates.completedAt = new Date().toISOString();
@@ -376,7 +435,7 @@ export function resetExecution(pipelineId: string): Pipeline | null {
 
   return updatePipeline(pipelineId, {
     stages,
-    status: 'ready',
+    status: 'draft',
     currentStageIndex: 0,
   });
 }

@@ -5,13 +5,14 @@ import ChatArea from './components/ChatArea';
 import ToolsPanel from './components/ToolsPanel';
 import ProviderSettings from './components/ProviderSettings';
 import { PipelineLibrary, PipelineBuilder, PipelineExecutionView } from './components/pipeline';
-import { pipelineStore, PipelineExecutor, type PipelineExecutorCallbacks } from './pipeline';
+import { pipelineStore, PipelineExecutor, type PipelineExecutorCallbacks, type PlatformAdapter } from './pipeline';
 import SearchServicePanel from './components/SearchServicePanel';
 import { initializeSearchService, getSearchServiceStatus } from './services/searchService';
 import { CouncilLibrary, CouncilView } from './components/council';
 import { createOrchestrator, type Council, DeliberationOrchestrator, councilStore } from './council';
 import { ledgerStore } from './council/ledger-store';
 import { llmAdapter } from './council/llm-adapter';
+import { saveDeliberationOutput } from './services/deliberationSaveService';
 import { mcpClient } from './services/mcpClient';
 import { openaiClient } from './services/openaiClient';
 import { anthropicClient } from './services/anthropicClient';
@@ -1387,6 +1388,15 @@ function App() {
                 const resolverMap = new Map<string, (approved: boolean) => void>();
                 setGateResolvers(resolverMap);
 
+                const tauriPlatform: PlatformAdapter = {
+                  writeFile: (path, content) => invoke('write_local_file', { path, content }),
+                  readFile: (path) => invoke<string>('read_local_file', { path }).catch(() => null),
+                  runCommand: (cmd, cwd) => invoke('run_command', { command: cmd, workingDir: cwd }),
+                  setWorkingDir: (dir) => { anthropicClient.setWorkingDir(dir); localToolsService.setWorkingDirectory(dir); },
+                  getWorkingDir: () => anthropicClient.getWorkingDir() || '',
+                  saveDeliberationOutput: (council, mode) => saveDeliberationOutput(council, mode),
+                };
+
                 const executor = new PipelineExecutor({
                   invokeAgent: async (invocation, persona) => {
                     const result = await llmAdapter.complete({
@@ -1395,9 +1405,10 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
-                      availableTools,
+                      availableTools: invocation.skipTools ? undefined : availableTools,
+                      conversationId: invocation.conversationId,
                     });
-                    return result;
+                    return { ...result, sessionId: result.sessionId };
                   },
                   llmComplete: async (params) => {
                     const result = await llmAdapter.complete({
@@ -1406,8 +1417,9 @@ function App() {
                       systemPrompt: params.systemPrompt,
                       userMessage: params.userMessage,
                       availableTools,
+                      conversationId: params.conversationId,
                     });
-                    return { content: result.content, tokensUsed: result.tokensUsed };
+                    return { content: result.content, tokensUsed: result.tokensUsed, sessionId: result.sessionId };
                   },
                   onStageStart: (idx) => console.log(`[Pipeline] Stage ${idx} started`),
                   onStageComplete: (idx) => console.log(`[Pipeline] Stage ${idx} completed`),
@@ -1431,7 +1443,7 @@ function App() {
                   onAgentThinkingEnd: (persona) => {
                     setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
                   },
-                });
+                }, tauriPlatform);
 
                 setPipelineExecutor(executor);
                 setPipelineMode('execution');
@@ -1503,17 +1515,18 @@ function App() {
                 try {
                   const deliberator = new DeliberationOrchestrator({
                     invokeAgent: async (invocation, persona) => {
-                      console.log('[App] invokeAgent called', { personaName: persona.name, model: persona.model });
+                      console.log('[App] invokeAgent called', { personaName: persona.name, model: persona.model, skipTools: invocation.skipTools });
                       const result = await llmAdapter.complete({
                         model: persona.model,
                         provider: persona.provider,
                         systemPrompt: invocation.systemPrompt,
                         userMessage: invocation.userMessage,
                         temperature: persona.temperature,
-                        availableTools,
+                        availableTools: invocation.skipTools ? undefined : availableTools,
+                        conversationId: invocation.conversationId,
                       });
                       console.log('[App] invokeAgent completed', { personaName: persona.name });
-                      return result;
+                      return { ...result, sessionId: result.sessionId };
                     },
                     onPhaseChange: (from, to) => console.log(`[Deliberation] Phase: ${from} → ${to}`),
                     onError: (err, ctx) => console.error(`[Deliberation Error] ${ctx}:`, err),
@@ -1545,9 +1558,10 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
-                      availableTools,
+                      availableTools: invocation.skipTools ? undefined : availableTools,
+                      conversationId: invocation.conversationId,
                     });
-                    return result;
+                    return { ...result, sessionId: result.sessionId };
                   },
                   onAgentThinkingStart: (persona) => {
                     setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
@@ -1573,9 +1587,10 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
-                      availableTools,
+                      availableTools: invocation.skipTools ? undefined : availableTools,
+                      conversationId: invocation.conversationId,
                     });
-                    return result;
+                    return { ...result, sessionId: result.sessionId };
                   },
                   onAgentThinkingStart: (persona) => {
                     setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
@@ -1596,9 +1611,10 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
-                      availableTools,
+                      availableTools: invocation.skipTools ? undefined : availableTools,
+                      conversationId: invocation.conversationId,
                     });
-                    return result;
+                    return { ...result, sessionId: result.sessionId };
                   },
                   onAgentThinkingStart: (persona) => {
                     setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
@@ -1619,9 +1635,10 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
-                      availableTools,
+                      availableTools: invocation.skipTools ? undefined : availableTools,
+                      conversationId: invocation.conversationId,
                     });
-                    return result;
+                    return { ...result, sessionId: result.sessionId };
                   },
                   onAgentThinkingStart: (persona) => {
                     setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
@@ -1642,9 +1659,10 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
-                      availableTools,
+                      availableTools: invocation.skipTools ? undefined : availableTools,
+                      conversationId: invocation.conversationId,
                     });
-                    return result;
+                    return { ...result, sessionId: result.sessionId };
                   },
                   onAgentThinkingStart: (persona) => {
                     setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
@@ -1665,9 +1683,10 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
-                      availableTools,
+                      availableTools: invocation.skipTools ? undefined : availableTools,
+                      conversationId: invocation.conversationId,
                     });
-                    return result;
+                    return { ...result, sessionId: result.sessionId };
                   },
                   onAgentThinkingStart: (persona) => {
                     setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
@@ -1688,9 +1707,10 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
-                      availableTools,
+                      availableTools: invocation.skipTools ? undefined : availableTools,
+                      conversationId: invocation.conversationId,
                     });
-                    return result;
+                    return { ...result, sessionId: result.sessionId };
                   },
                   onAgentThinkingStart: (persona) => {
                     setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
@@ -1711,9 +1731,10 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
-                      availableTools,
+                      availableTools: invocation.skipTools ? undefined : availableTools,
+                      conversationId: invocation.conversationId,
                     });
-                    return result;
+                    return { ...result, sessionId: result.sessionId };
                   },
                 });
                 await deliberator.pause(council);
@@ -1727,9 +1748,10 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
-                      availableTools,
+                      availableTools: invocation.skipTools ? undefined : availableTools,
+                      conversationId: invocation.conversationId,
                     });
-                    return result;
+                    return { ...result, sessionId: result.sessionId };
                   },
                   onAgentThinkingStart: (persona) => {
                     setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
@@ -1752,9 +1774,10 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
-                      availableTools,
+                      availableTools: invocation.skipTools ? undefined : availableTools,
+                      conversationId: invocation.conversationId,
                     });
-                    return result;
+                    return { ...result, sessionId: result.sessionId };
                   },
                   onAgentThinkingStart: (persona) => {
                     setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
@@ -1776,9 +1799,10 @@ function App() {
                       systemPrompt: invocation.systemPrompt,
                       userMessage: invocation.userMessage,
                       temperature: persona.temperature,
-                      availableTools,
+                      availableTools: invocation.skipTools ? undefined : availableTools,
+                      conversationId: invocation.conversationId,
                     });
-                    return result;
+                    return { ...result, sessionId: result.sessionId };
                   },
                 });
                 await deliberator.abort(council);

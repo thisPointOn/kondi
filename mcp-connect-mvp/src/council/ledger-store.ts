@@ -39,12 +39,56 @@ function loadLedgerIndex(councilId: string): LedgerIndex {
   }
 }
 
+/**
+ * Free localStorage space by removing ledger data from other (non-active) councils.
+ * Ledger chunks are typically the largest items in localStorage.
+ */
+function freeStorageSpace(currentCouncilId: string): boolean {
+  console.warn('[LedgerStore] localStorage quota exceeded — freeing space...');
+
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key) continue;
+
+    // Target ledger chunks and indexes from OTHER councils
+    if (key.startsWith(LEDGER_CHUNK_PREFIX) || key.startsWith(LEDGER_INDEX_PREFIX)) {
+      const suffix = key.startsWith(LEDGER_CHUNK_PREFIX)
+        ? key.slice(LEDGER_CHUNK_PREFIX.length).replace(/-\d+$/, '')
+        : key.slice(LEDGER_INDEX_PREFIX.length);
+      if (suffix !== currentCouncilId) {
+        keysToRemove.push(key);
+      }
+    }
+    // Also target context/artifact data from other councils
+    const otherPrefixes = ['context-history-', 'context-patches-', 'outputs-'];
+    for (const prefix of otherPrefixes) {
+      if (key.startsWith(prefix) && !key.endsWith(currentCouncilId)) {
+        keysToRemove.push(key);
+        break;
+      }
+    }
+  }
+
+  if (keysToRemove.length === 0) return false;
+
+  console.log(`[LedgerStore] Removing ${keysToRemove.length} old keys to free space`);
+  for (const key of keysToRemove) {
+    try { localStorage.removeItem(key); } catch { /* ignore */ }
+  }
+  return true;
+}
+
 function saveLedgerIndex(index: LedgerIndex): void {
+  const key = getLedgerIndexKey(index.councilId);
+  index.lastUpdated = new Date().toISOString();
+  const data = JSON.stringify(index);
   try {
-    const key = getLedgerIndexKey(index.councilId);
-    index.lastUpdated = new Date().toISOString();
-    localStorage.setItem(key, JSON.stringify(index));
+    localStorage.setItem(key, data);
   } catch (error) {
+    if (freeStorageSpace(index.councilId)) {
+      try { localStorage.setItem(key, data); return; } catch { /* fall through */ }
+    }
     console.error('[LedgerStore] Failed to save index:', error);
     throw new Error('Failed to save ledger index');
   }
@@ -80,10 +124,14 @@ function loadChunk(councilId: string, chunkIndex: number): LedgerEntry[] {
 }
 
 function saveChunk(councilId: string, chunkIndex: number, entries: LedgerEntry[]): void {
+  const key = getLedgerChunkKey(councilId, chunkIndex);
+  const data = JSON.stringify(entries);
   try {
-    const key = getLedgerChunkKey(councilId, chunkIndex);
-    localStorage.setItem(key, JSON.stringify(entries));
+    localStorage.setItem(key, data);
   } catch (error) {
+    if (freeStorageSpace(councilId)) {
+      try { localStorage.setItem(key, data); return; } catch { /* fall through */ }
+    }
     console.error('[LedgerStore] Failed to save chunk:', chunkIndex, error);
     throw new Error('Failed to save ledger chunk');
   }

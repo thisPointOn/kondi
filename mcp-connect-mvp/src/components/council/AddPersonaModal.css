@@ -313,6 +313,95 @@
   color: var(--text-secondary, #999);
 }
 
+/* Trait Chips */
+.trait-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-bottom: 0.5rem;
+  min-height: 1.5rem;
+}
+
+.trait-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.trait-chip {
+  padding: 0.25rem 0.625rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: 1px solid var(--border-color, #333);
+  background: var(--bg-secondary, #1a1a1a);
+  color: var(--text-secondary, #999);
+}
+
+.trait-chip.active {
+  background: var(--accent-color, #3b82f6);
+  border-color: var(--accent-color, #3b82f6);
+  color: white;
+}
+
+.trait-chip.active:hover {
+  background: #2563eb;
+}
+
+.trait-chip.preset {
+  background: transparent;
+  border-style: dashed;
+}
+
+.trait-chip.preset:hover {
+  border-color: var(--accent-color, #3b82f6);
+  color: var(--accent-color, #3b82f6);
+}
+
+.trait-custom-row {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.trait-custom-row input {
+  flex: 1;
+  padding: 0.375rem 0.625rem;
+  background: var(--bg-secondary, #1a1a1a);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  color: var(--text-primary, #e5e5e5);
+  font-size: 0.8125rem;
+  font-family: inherit;
+}
+
+.trait-custom-row input:focus {
+  outline: none;
+  border-color: var(--accent-color, #3b82f6);
+}
+
+.trait-add-btn {
+  padding: 0.375rem 0.75rem;
+  background: var(--bg-secondary, #1a1a1a);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  color: var(--text-secondary, #999);
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition: all 0.15s;
+}
+
+.trait-add-btn:hover:not(:disabled) {
+  border-color: var(--accent-color, #3b82f6);
+  color: var(--accent-color, #3b82f6);
+}
+
+.trait-add-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Verbosity Options */
 .verbosity-options {
   display: flex;
@@ -498,4 +587,10 @@
   height: 16px;
   accent-color: var(--accent-color, #3b82f6);
   cursor: pointer;
+}
+
+/* Role Badge Colors */
+.role-reviewer {
+  background: #0ea5e920;
+  color: #0ea5e9;
 }

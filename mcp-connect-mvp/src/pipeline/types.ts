@@ -7,7 +7,7 @@
 // Step & Pipeline Status
 // ============================================================================
 
-export type PipelineStepType = 'council' | 'execution' | 'gate';
+export type PipelineStepType = 'planning' | 'decisioning' | 'execution' | 'coding' | 'gate';
 
 export type PipelineStepStatus =
   | 'pending'
@@ -39,8 +39,37 @@ export interface StepArtifact {
     outputId?: string;
     model?: string;
     tokensUsed?: number;
+    outputPath?: string;   // file path where output was saved (planning/coding steps)
+    stepName?: string;     // human-readable name of the producing step
+    stepType?: string;     // 'planning' | 'coding' | 'decisioning' | 'execution' | 'gate'
   };
   createdAt: string;
+}
+
+// ============================================================================
+// Pipeline Persona (full-featured, matches council persona capabilities)
+// ============================================================================
+
+export interface PipelinePersona {
+  templateId?: string;
+  name: string;
+  role: 'manager' | 'consultant' | 'worker' | 'reviewer';
+  model: string;
+  provider: string;
+  avatar?: string;
+  color?: string;
+  systemPrompt?: string;
+  stance?: 'advocate' | 'critic' | 'neutral' | 'wildcard';
+  traits?: string[];
+  interactionStyle?: 'debate' | 'build' | 'question' | 'synthesize' | 'review';
+  domain?: string;
+  temperature?: number;
+  verbosity?: 'concise' | 'balanced' | 'thorough';
+  focusArea?: string;
+  startingStance?: string;
+  suppressPersona?: boolean;
+  /** Worker-only: save the worker's output to the working directory (default: true) */
+  saveOutput?: boolean;
 }
 
 // ============================================================================
@@ -48,33 +77,33 @@ export interface StepArtifact {
 // ============================================================================
 
 export interface CouncilStepConfig {
-  type: 'council';
+  type: 'planning' | 'coding';
   councilSetup: {
     name: string;
-    personas: Array<{
-      templateId?: string;
-      name: string;
-      role: 'manager' | 'consultant' | 'worker';
-      model: string;
-      provider: string;
-    }>;
+    personas: PipelinePersona[];
     maxRounds?: number;
     maxRevisions?: number;
     expectedOutput?: string;
     decisionCriteria?: string[];
     workingDirectory?: string;
+    directoryConstrained?: boolean;
+    // Coding orchestrator config
+    testCommand?: string;
+    maxDebugCycles?: number;
+    maxReviewCycles?: number;
   };
   inputTemplate: string;
   outputSelection: 'decision' | 'output' | 'summary';
 }
 
-export interface ExecutionStepConfig {
-  type: 'execution';
+export interface LlmStepConfig {
+  type: 'decisioning' | 'execution';
   model: string;
   provider: string;
   systemPrompt: string;
   inputTemplate: string;
   workingDirectory?: string;
+  directoryConstrained?: boolean;
 }
 
 export interface GateStepConfig {
@@ -82,7 +111,17 @@ export interface GateStepConfig {
   approvalPrompt: string;
 }
 
-export type StepConfig = CouncilStepConfig | ExecutionStepConfig | GateStepConfig;
+export type StepConfig = CouncilStepConfig | LlmStepConfig | GateStepConfig;
+
+/** Helper: is this a council-based step type? */
+export function isCouncilType(type: PipelineStepType): boolean {
+  return type === 'planning' || type === 'coding';
+}
+
+/** Helper: is this an LLM (non-council) step type? */
+export function isLlmType(type: PipelineStepType): boolean {
+  return type === 'decisioning' || type === 'execution';
+}
 
 // ============================================================================
 // Pipeline Step
@@ -108,6 +147,8 @@ export interface PipelineStage {
   id: string;
   name: string;
   steps: PipelineStep[];
+  /** How steps in this stage are executed (default: 'sequential') */
+  executionMode?: 'sequential' | 'parallel';
 }
 
 // ============================================================================
@@ -122,6 +163,7 @@ export interface Pipeline {
   stages: PipelineStage[];
   settings: {
     workingDirectory?: string;
+    directoryConstrained?: boolean;
     failurePolicy: 'stop' | 'skip_step';
   };
   status: PipelineStatus;
