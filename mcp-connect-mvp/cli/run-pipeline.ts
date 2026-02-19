@@ -21,16 +21,12 @@ import readline from 'node:readline';
 import { pipelineStore } from '../src/pipeline/store';
 import { PipelineExecutor } from '../src/pipeline/executor';
 import type { PlatformAdapter } from '../src/pipeline/executor';
-import type { Pipeline, CouncilStepConfig, LlmStepConfig, StepArtifact } from '../src/pipeline/types';
+import type { Pipeline, CouncilStepConfig, LlmStepConfig } from '../src/pipeline/types';
 import { callClaude } from './claude-caller';
 import { callCodex } from './codex-caller';
 import { createNodePlatform } from './node-platform';
 import { exportSession } from './session-export';
-
-// Route to the right CLI caller based on model name
-function isOpenAIModel(model: string): boolean {
-  return /^(gpt-|o[1-9]|codex|davinci|chatgpt)/.test(model);
-}
+import { isOpenAIModel } from '../src/pipeline/output-parsers';
 
 function callLLM(opts: {
   systemPrompt: string;
@@ -488,6 +484,10 @@ async function main() {
   const executor = new PipelineExecutor({
     invokeAgent: async (invocation, persona) => {
       log(C.cyan, persona.name, `Invoking (${persona.model})...`);
+      // Build allowedTools from allowedServerIds if set
+      const allowedTools = invocation.allowedServerIds
+        ? ['Edit', 'Write', 'Read', 'Bash', 'Glob', 'Grep', ...invocation.allowedServerIds.map(id => `mcp__${id}`)]
+        : undefined;
       const result = await callLLM({
         systemPrompt: invocation.systemPrompt,
         userMessage: invocation.userMessage,
@@ -495,6 +495,7 @@ async function main() {
         workingDir: platform.getWorkingDir(),
         skipTools: invocation.skipTools,
         conversationId: invocation.conversationId,
+        allowedTools,
       });
       log(C.cyan, persona.name, `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);
       return { ...result, sessionId: result.sessionId };
@@ -502,12 +503,17 @@ async function main() {
 
     llmComplete: async (params) => {
       log(C.green, 'LLM', `Calling ${params.model}...`);
+      // Build allowedTools from allowedServerIds if set
+      const allowedTools = params.allowedServerIds
+        ? ['Edit', 'Write', 'Read', 'Bash', 'Glob', 'Grep', ...params.allowedServerIds.map(id => `mcp__${id}`)]
+        : undefined;
       const result = await callLLM({
         systemPrompt: params.systemPrompt,
         userMessage: params.userMessage,
         model: params.model,
         workingDir: platform.getWorkingDir(),
         conversationId: params.conversationId,
+        allowedTools,
       });
       log(C.green, 'LLM', `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);
       return { content: result.content, tokensUsed: result.tokensUsed, sessionId: result.sessionId };

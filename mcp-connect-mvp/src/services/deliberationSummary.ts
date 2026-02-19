@@ -12,11 +12,6 @@ export function buildAbbreviatedSummary(council: Council): string {
   const entries = getAllEntries(council.id);
   if (entries.length === 0) return 'No deliberation entries.';
 
-  const getPersonaName = (personaId: string): string => {
-    const persona = council.personas.find((p) => p.id === personaId);
-    return persona?.name || personaId;
-  };
-
   let summary = `=== Deliberation Summary: ${council.name} ===\n\n`;
 
   // Consultant highlights (mechanical summary)

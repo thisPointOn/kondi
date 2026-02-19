@@ -39,6 +39,7 @@ export interface PipelineExecutorCallbacks {
     systemPrompt: string;
     userMessage: string;
     conversationId?: string;
+    allowedServerIds?: string[];
   }) => Promise<{ content: string; tokensUsed: number; sessionId?: string }>;
 
   onStageStart?: (stageIndex: number) => void;
@@ -407,6 +408,7 @@ export class PipelineExecutor {
       temperature: p.temperature ?? 0.7,
       verbosity: p.verbosity || 'balanced' as const,
       preferredDeliberationRole: p.role,
+      allowedServerIds: p.allowedServerIds,
     }));
 
     // Create role assignments using full persona data
@@ -450,6 +452,8 @@ export class PipelineExecutor {
         testCommand: config.councilSetup.testCommand,
         maxDebugCycles: config.councilSetup.maxDebugCycles ?? 3,
         maxReviewCycles: config.councilSetup.maxReviewCycles ?? 2,
+        // MCP tool filtering
+        allowedServerIds: config.councilSetup.allowedServerIds,
       },
     });
 
@@ -601,6 +605,7 @@ export class PipelineExecutor {
         provider: config.provider,
         systemPrompt: config.systemPrompt,
         userMessage,
+        allowedServerIds: config.allowedServerIds,
       });
     } finally {
       // Restore previous working directory

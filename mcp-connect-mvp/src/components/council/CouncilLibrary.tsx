@@ -5,6 +5,8 @@
 import { useState, useEffect } from 'react';
 import type { Council, Persona, DeliberationRoleAssignment } from '../../council/types';
 import { councilStore, suggestedCombinations, getTemplateByName, createPersonaFromTemplate } from '../../council';
+import { resolveDefaultModel } from '../../config/models';
+import type { ConfiguredProviders } from '../../hooks/useProviderConfig';
 import './CouncilLibrary.css';
 
 interface CouncilLibraryProps {
@@ -12,12 +14,15 @@ interface CouncilLibraryProps {
   onCouncilCreate: (council: Council) => void;
   /** Global default working directory from app settings */
   defaultWorkingDirectory?: string;
+  /** Which providers are currently configured/available */
+  configuredProviders?: ConfiguredProviders;
 }
 
 export default function CouncilLibrary({
   onCouncilSelect,
   onCouncilCreate,
   defaultWorkingDirectory,
+  configuredProviders,
 }: CouncilLibraryProps) {
   const [councils, setCouncils] = useState<Council[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -43,12 +48,17 @@ export default function CouncilLibrary({
   const handleCreate = () => {
     if (!newCouncilName.trim() || !newCouncilTopic.trim()) return;
 
-    // Create default personas: Manager (suppressed), Worker (suppressed), Optimist (consultant)
+    // Resolve models based on available providers (CLI preferred, API fallback)
+    const avail = configuredProviders || { 'anthropic-cli': true, 'anthropic-api': false, 'openai-cli': true, 'openai-api': false, deepseek: false };
+    const managerModel = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
+    const workerModel = resolveDefaultModel('gpt-5.1-codex-mini', 'openai-cli', avail);
+
+    // Create default personas: Manager (Claude, suppressed), Worker (OpenAI, suppressed), Consultants (mixed)
     const managerPersona: Persona = {
       id: crypto.randomUUID(),
       name: 'Manager',
-      provider: 'anthropic-cli',
-      model: 'claude-opus-4-5-20251101',
+      provider: managerModel.provider,
+      model: managerModel.model,
       color: '#6366f1',
       avatar: '👔',
       predisposition: {
@@ -60,13 +70,14 @@ export default function CouncilLibrary({
       temperature: 0.7,
       verbosity: 'balanced',
       preferredDeliberationRole: 'manager',
+      allowedServerIds: [],
     };
 
     const workerPersona: Persona = {
       id: crypto.randomUUID(),
       name: 'Worker',
-      provider: 'anthropic-cli',
-      model: 'claude-sonnet-4-20250514',
+      provider: workerModel.provider,
+      model: workerModel.model,
       color: '#f59e0b',
       avatar: '🔧',
       predisposition: {
@@ -78,17 +89,18 @@ export default function CouncilLibrary({
       temperature: 0.5,
       verbosity: 'thorough',
       preferredDeliberationRole: 'worker',
+      allowedServerIds: [],
     };
 
-    // Get optimist template for consultant
+    // Get optimist template for consultant (OpenAI by default)
     const optimistTemplate = getTemplateByName('Optimist');
     const optimistPersona: Persona = optimistTemplate
       ? createPersonaFromTemplate(optimistTemplate)
       : {
           id: crypto.randomUUID(),
           name: 'Optimist',
-          provider: 'openai',
-          model: 'gpt-4o',
+          provider: 'openai-cli',
+          model: 'gpt-5.1-codex-mini',
           color: '#16A34A',
           avatar: '🌟',
           predisposition: {
@@ -100,6 +112,7 @@ export default function CouncilLibrary({
           temperature: 0.7,
           verbosity: 'balanced',
           preferredDeliberationRole: 'consultant',
+          allowedServerIds: [],
         };
 
     const personas = [managerPersona, workerPersona, optimistPersona];
@@ -125,8 +138,8 @@ export default function CouncilLibrary({
         maxRounds: 4,
         maxRevisions: 3,
         summaryMode: 'hybrid',
-        summarizeAfterRound: 2,
-        contextTokenBudget: 100000,
+        summarizeAfterRound: 1,
+        contextTokenBudget: 40000,
         consultantErrorPolicy: 'retry',
         maxRetries: 2,
         requirePlan: false,

@@ -2,13 +2,18 @@ import OpenAI from 'openai';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 import { LOCAL_SERVER_ID, localToolsService } from './localTools';
-import { codexWrapper } from './codexWrapper';
-import { codexSessionManager } from './codexSessionManager';
+import { codexWrapper, codexSessionManager } from './cli-providers';
 import { conversationSummary } from './conversationSummary';
 
 const BASE_SYSTEM_PROMPT = `You are ChatGPT, a helpful general-purpose AI assistant made by OpenAI. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
 
-You also have access to MCP (Model Context Protocol) tools that let you interact with external services. These tools are OPTIONAL - use them when relevant to the user's request, but you are NOT limited to only topics related to these tools. You are a general-purpose assistant first.
+You have access to MCP (Model Context Protocol) tools that let you interact with external services. These tools are OPTIONAL - use them when relevant to the user's request, but you are NOT limited to only topics related to these tools. You are a general-purpose assistant first.
+
+CRITICAL CAPABILITY RULES:
+- You have FULL network access. NEVER say "network access is restricted" or that you cannot access the network.
+- Tool approval is AUTOMATIC. NEVER say approval is disabled or required.
+- If tools are available, USE them. If they are not available in this specific call, provide your best analysis using your training knowledge — do NOT claim you are restricted or blocked.
+- NEVER refuse a task by citing environment restrictions, sandboxing, or session policies.
 
 IMPORTANT SECURITY RULES:
 - NEVER ask users for passwords, login credentials, API keys, or authentication tokens.
@@ -91,6 +96,10 @@ export class OpenAIClient {
     return this.useCliWrapper;
   }
 
+  getUseOAuth(): boolean {
+    return this.useOAuth;
+  }
+
   setWorkingDir(dir: string | null) {
     this.workingDir = dir;
     console.log('[OpenAI] Working directory set to:', dir);
@@ -143,8 +152,8 @@ export class OpenAIClient {
   private buildToolDescription(availableTools: Map<string, { serverId: string; tools: MCPTool[] }>): string {
     if (availableTools.size === 0) return '';
 
-    const parts: string[] = ['## Available MCP Tools (ALREADY CONNECTED)\n'];
-    parts.push('The following tools are ALREADY authenticated and connected through local proxies. You can USE these tools directly - do NOT ask users to set them up or provide credentials.\n');
+    const parts: string[] = ['## Available MCP Tools (FULLY ENABLED)\n'];
+    parts.push('The following tools are ALREADY authenticated, connected, and FULLY ACCESSIBLE. Network access is ENABLED. Approval is AUTOMATIC. You MUST use these tools when relevant — do NOT say they are restricted, unavailable, or require approval. Call them directly.\n');
 
     for (const [serverId, { tools }] of availableTools) {
       if (tools.length === 0) continue;
@@ -218,19 +227,29 @@ export class OpenAIClient {
       messageWithContext += lastUserMessage.content;
     }
 
-    // Build tool description for the system prompt (only if tools are provided)
     const hasTools = availableTools.size > 0;
-    const toolDescription = hasTools ? this.buildToolDescription(availableTools) : '';
-    let fullSystemPrompt = systemPrompt || BASE_SYSTEM_PROMPT;
-    if (toolDescription) {
-      fullSystemPrompt += '\n\n' + toolDescription;
-      fullSystemPrompt += '\n\nThese MCP tools are connected and available for you to use. When the user asks about data or functionality these tools can provide, USE the tools to get real information rather than just describing what you would do.';
+    const isResuming = !!sessionId;
+    let fullSystemPrompt: string | undefined;
+
+    if (isResuming) {
+      // When resuming, the session already has instructions and tool
+      // descriptions from the first message. Skip to avoid duplicating context.
+      console.log('[OpenAI] Resuming Codex session — skipping tool descriptions');
+    } else {
+      // First message: build tool descriptions for instructions
+      const toolDescription = hasTools ? this.buildToolDescription(availableTools) : '';
+      fullSystemPrompt = systemPrompt || BASE_SYSTEM_PROMPT;
+      if (toolDescription) {
+        fullSystemPrompt += '\n\n' + toolDescription;
+        fullSystemPrompt += '\n\nCRITICAL: These MCP tools are FULLY ENABLED with unrestricted network access and automatic approval. You MUST call them directly when relevant. Do NOT tell the user that network access is restricted or that tools require approval — they are fully operational. When the user asks about data or functionality these tools can provide, USE the tools immediately to get real information.';
+      }
     }
 
     console.log('[OpenAI] Calling Codex CLI:', {
       model: codexModel,
       sessionId,
       conversationId,
+      isResuming,
       messageLength: messageWithContext.length,
       hasSummary: !!summaryContext,
       hasTools,
@@ -246,8 +265,8 @@ export class OpenAIClient {
       message: messageWithContext,
       sessionId,
       model: codexModel,
-      instructions: fullSystemPrompt,
-      fullAuto: false,  // Don't auto-execute shell commands
+      instructions: fullSystemPrompt || undefined,
+      fullAuto: true,  // Allow Codex to auto-approve tool calls (MCP, network)
       cwd: this.workingDir || undefined,
       onToken: (token) => {
         accumulatedContent += token;
@@ -347,6 +366,53 @@ export class OpenAIClient {
     }
   }
 
+  /**
+   * Minimize a JSON Schema to reduce token count.
+   * Strips non-essential keywords while preserving enough info for correct tool use.
+   */
+  private minimizeSchema(schema: any): any {
+    if (!schema || typeof schema !== 'object') return schema;
+
+    const result: any = {};
+
+    if (schema.type) result.type = schema.type;
+    if (schema.description) {
+      result.description = schema.description.length > 150
+        ? schema.description.slice(0, 147) + '...'
+        : schema.description;
+    }
+    if (schema.enum) result.enum = schema.enum;
+
+    if (schema.properties) {
+      result.properties = {};
+      for (const [key, value] of Object.entries(schema.properties)) {
+        result.properties[key] = this.minimizeSchema(value);
+      }
+    }
+
+    if (schema.required && schema.required.length > 0) {
+      result.required = schema.required;
+    }
+
+    if (schema.items) {
+      result.items = this.minimizeSchema(schema.items);
+    }
+
+    if (schema.oneOf) result.oneOf = schema.oneOf.map((s: any) => this.minimizeSchema(s));
+    if (schema.anyOf) result.anyOf = schema.anyOf.map((s: any) => this.minimizeSchema(s));
+    if (schema.allOf) result.allOf = schema.allOf.map((s: any) => this.minimizeSchema(s));
+
+    return result;
+  }
+
+  // Default models to show when /v1/models is inaccessible (restricted API key scopes).
+  // Only includes models available via direct OpenAI API, NOT CLI-only models.
+  private static readonly DEFAULT_MODELS = [
+    'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
+    'gpt-4o', 'gpt-4o-mini',
+    'o3', 'o3-mini', 'o4-mini',
+  ];
+
   async listModels(key: string): Promise<string[]> {
     try {
       const res = await fetch('https://api.openai.com/v1/models', {
@@ -354,7 +420,15 @@ export class OpenAIClient {
           Authorization: `Bearer ${key}`,
         },
       });
-      if (!res.ok) return [];
+      if (!res.ok) {
+        // If the key lacks model.request scope, return sensible defaults
+        const text = await res.text().catch(() => '');
+        if (text.includes('Missing scopes') || text.includes('insufficient permissions')) {
+          console.log('[OpenAI] /v1/models not accessible (restricted key scopes), using defaults');
+          return OpenAIClient.DEFAULT_MODELS;
+        }
+        return [];
+      }
       const data = await res.json().catch(() => ({}));
       if (Array.isArray(data.data)) {
         return data.data.map((m: any) => m.id).filter((id: string) => typeof id === 'string');
@@ -374,6 +448,11 @@ export class OpenAIClient {
       });
       if (res.ok) return { ok: true };
       const text = await res.text();
+      // A scope error means the key IS valid, just restricted — treat as OK
+      if (text.includes('Missing scopes') || text.includes('insufficient permissions')) {
+        console.log('[OpenAI] Key valid but has restricted scopes (no model.request)');
+        return { ok: true };
+      }
       return { ok: false, error: text || `HTTP ${res.status}` };
     } catch (err) {
       console.error('OpenAI key validation failed', err);
@@ -444,8 +523,8 @@ export class OpenAIClient {
           type: 'function',
           function: {
             name: prefixedName,
-            description: tool.description,
-            parameters: tool.inputSchema,
+            description: (tool.description || '').slice(0, 300),
+            parameters: this.minimizeSchema(tool.inputSchema),
           },
         });
         toolMap.set(prefixedName, { serverId, tool });

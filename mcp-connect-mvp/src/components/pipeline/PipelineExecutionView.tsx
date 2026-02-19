@@ -4,10 +4,10 @@
  * The active council's deliberation is shown below.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { Pipeline, PipelineStep, StepArtifact } from '../../pipeline/types';
 import { isCouncilType } from '../../pipeline/types';
-import type { Persona } from '../../council/types';
+import type { Council, Persona } from '../../council/types';
 import { pipelineStore } from '../../pipeline/store';
 import DeliberationView from '../council/DeliberationView';
 import './PipelineExecutionView.css';
@@ -22,6 +22,18 @@ interface PipelineExecutionViewProps {
   activeCouncilId?: string | null;
   /** Personas currently thinking */
   thinkingPersonas?: Persona[];
+  /** Lifted council selection — persists across navigation */
+  selectedCouncilId?: string | null;
+  onSelectedCouncilChange?: (id: string | null) => void;
+  /** Lifted step selection — persists across navigation */
+  selectedStepId?: string | null;
+  onSelectedStepChange?: (id: string | null) => void;
+  /** Council deliberation handlers */
+  onPauseDeliberation?: (council: Council) => Promise<void>;
+  onResumeDeliberation?: (council: Council) => Promise<void>;
+  onForceDecision?: (council: Council) => Promise<void>;
+  onAbortDeliberation?: (council: Council) => Promise<void>;
+  onUserMessage?: (council: Council, message: string, lastResponderId: string) => Promise<void>;
 }
 
 function getStepIcon(type: string): string {
@@ -53,14 +65,43 @@ export default function PipelineExecutionView({
   gateResolvers,
   activeCouncilId,
   thinkingPersonas = [],
+  selectedCouncilId: selectedCouncilIdProp,
+  onSelectedCouncilChange,
+  selectedStepId: selectedStepIdProp,
+  onSelectedStepChange,
+  onPauseDeliberation,
+  onResumeDeliberation,
+  onForceDecision,
+  onAbortDeliberation,
+  onUserMessage,
 }: PipelineExecutionViewProps) {
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const [expandedArtifacts, setExpandedArtifacts] = useState<Set<string>>(new Set());
   const [pipelineCollapsed, setPipelineCollapsed] = useState(false);
   // Track all council IDs from step artifacts (for viewing completed deliberations)
-  const [selectedCouncilId, setSelectedCouncilId] = useState<string | null>(null);
+  const [selectedCouncilIdLocal, setSelectedCouncilIdLocal] = useState<string | null>(null);
   // Track selected non-council step for full-size output viewer
-  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [selectedStepIdLocal, setSelectedStepIdLocal] = useState<string | null>(null);
+
+  // Use lifted state if provided, otherwise fall back to local state
+  const selectedCouncilId = selectedCouncilIdProp ?? selectedCouncilIdLocal;
+  const setSelectedCouncilId = (id: string | null) => {
+    setSelectedCouncilIdLocal(id);
+    onSelectedCouncilChange?.(id);
+  };
+  const selectedStepId = selectedStepIdProp ?? selectedStepIdLocal;
+  const setSelectedStepId = (id: string | null) => {
+    setSelectedStepIdLocal(id);
+    onSelectedStepChange?.(id);
+  };
+
+  // Refs to avoid stale closures in the poll/subscribe callback
+  const selectedCouncilIdRef = useRef(selectedCouncilId);
+  selectedCouncilIdRef.current = selectedCouncilId;
+  const selectedStepIdRef = useRef(selectedStepId);
+  selectedStepIdRef.current = selectedStepId;
+  const activeCouncilIdRef = useRef(activeCouncilId);
+  activeCouncilIdRef.current = activeCouncilId;
 
   useEffect(() => {
     const load = () => {
@@ -75,6 +116,25 @@ export default function PipelineExecutionView({
           }
         }
         setExpandedArtifacts((prev) => prev.size > 0 ? prev : allStepIds);
+      }
+      // Auto-select the running step if nothing is selected (use refs for fresh values)
+      if (p && p.status === 'running' && !selectedCouncilIdRef.current && !selectedStepIdRef.current) {
+        for (const stage of p.stages) {
+          for (const step of stage.steps) {
+            if (step.status === 'running' || step.status === 'waiting_approval') {
+              // For council-type steps, try artifact metadata first, then fall back to activeCouncilId
+              const councilId = isCouncilType(step.config.type)
+                ? (step.artifact?.metadata?.councilId || activeCouncilIdRef.current)
+                : null;
+              if (councilId) {
+                setSelectedCouncilId(councilId);
+              } else {
+                setSelectedStepId(step.id);
+              }
+              return; // only select the first running step
+            }
+          }
+        }
       }
     };
     load();
@@ -188,9 +248,11 @@ export default function PipelineExecutionView({
                           expanded={expandedArtifacts.has(step.id)}
                           onToggleArtifact={() => toggleArtifact(step.id)}
                           gateResolver={gateResolvers.get(step.id)}
+                          activeCouncilId={activeCouncilId}
                           isActiveCouncil={
                             isCouncilType(step.config.type) &&
-                            step.artifact?.metadata?.councilId === displayCouncilId
+                            (step.artifact?.metadata?.councilId === displayCouncilId ||
+                              (step.status === 'running' && activeCouncilId === displayCouncilId))
                           }
                           isSelectedStep={!isCouncilType(step.config.type) && selectedStepId === step.id}
                           onSelectCouncil={(councilId) => {
@@ -218,6 +280,11 @@ export default function PipelineExecutionView({
           <DeliberationView
             councilId={displayCouncilId}
             thinkingPersonas={thinkingPersonas}
+            onPause={onPauseDeliberation}
+            onResume={onResumeDeliberation}
+            onForceDecision={onForceDecision}
+            onAbort={onAbortDeliberation}
+            onUserMessage={onUserMessage}
           />
         </div>
       ) : selectedStepId ? (
@@ -244,6 +311,7 @@ function ExecutionStepCard({
   expanded,
   onToggleArtifact,
   gateResolver,
+  activeCouncilId,
   isActiveCouncil,
   isSelectedStep,
   onSelectCouncil,
@@ -253,13 +321,17 @@ function ExecutionStepCard({
   expanded: boolean;
   onToggleArtifact: () => void;
   gateResolver?: (approved: boolean) => void;
+  activeCouncilId?: string | null;
   isActiveCouncil?: boolean;
   isSelectedStep?: boolean;
   onSelectCouncil?: (councilId: string) => void;
   onSelectStep?: (stepId: string) => void;
 }) {
   const statusColor = getStatusColor(step.status);
-  const councilId = isCouncilType(step.config.type) ? step.artifact?.metadata?.councilId : null;
+  // For running council steps, use activeCouncilId as fallback when artifact doesn't have councilId yet
+  const councilId = isCouncilType(step.config.type)
+    ? (step.artifact?.metadata?.councilId || (step.status === 'running' ? activeCouncilId : null))
+    : null;
 
   return (
     <div

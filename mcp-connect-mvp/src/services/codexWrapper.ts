@@ -175,7 +175,7 @@ class CodexWrapper {
             sessionId = event.thread_id;
             break;
           }
-        } catch {}
+        } catch { /* skip non-JSON lines */ }
       }
 
       return {

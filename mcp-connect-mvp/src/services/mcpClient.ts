@@ -1019,7 +1019,7 @@ export class MCPClient {
             accessToken: null,
             sessionId: server.sessionId || null,
           });
-        } catch (authErr) {
+        } catch {
           throw new Error(`Re-authentication required. Please reconnect the server.`);
         }
       } else if (unauthorized && this.onAuthRequired && server.authHint !== 'token') {
@@ -1123,8 +1123,11 @@ export class MCPClient {
         },
       });
 
-      // Auto-create/update proxy for remote servers (http/sse transport)
-      if (server.transport === 'http' || server.transport === 'sse') {
+      // Auto-create/update proxy for remote servers, but only if the server
+      // is currently connected or has autoConnect enabled.  Don't spin up a
+      // proxy for a disconnected server the user doesn't want auto-reconnected.
+      if ((server.transport === 'http' || server.transport === 'sse') &&
+          (server.status === 'connected' || server.status === 'connecting' || server.autoConnect)) {
         await this.ensureProxyForServer(server);
       }
     } catch (_e) {

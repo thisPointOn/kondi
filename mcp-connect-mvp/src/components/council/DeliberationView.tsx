@@ -9,22 +9,16 @@ import type {
   Council,
   Persona,
   LedgerEntry,
-  DeliberationPhase,
   ContextArtifact,
   ContextPatch,
   DeliberationRoleAssignment,
-  DecisionArtifact,
-  PlanArtifact,
-  DirectiveArtifact,
-  OutputArtifact,
 } from '../../council/types';
 import { councilStore, createPersonaFromTemplate, allTemplates, templateCategories } from '../../council';
 import { localToolsService } from '../../services/localTools';
 import { ledgerStore, getAllEntries } from '../../council/ledger-store';
-import { contextStore, getCurrentContext, getPendingPatches, getContextHistory, getDecision, getPlan, getDirective, getLatestOutput, getAllOutputs, deleteAllArtifacts } from '../../council/context-store';
+import { contextStore, getCurrentContext, getPendingPatches, getDecision, getPlan, getDirective, getLatestOutput, getAllOutputs, deleteAllArtifacts } from '../../council/context-store';
 import PhaseIndicator from './PhaseIndicator';
 import LedgerEntryCard from './LedgerEntryCard';
-import LedgerTimeline from './LedgerTimeline';
 import RoleAssignment from './RoleAssignment';
 import DeliberationControls from './DeliberationControls';
 import PatchReviewPanel from './PatchReviewPanel';
@@ -308,7 +302,6 @@ export default function DeliberationView({
   const currentRound = council?.deliberationState?.currentRound || 0;
 
   // Check if roles are assigned
-  const hasRoleAssignments = (council?.deliberation?.roleAssignments?.length ?? 0) > 0;
   const hasManager = council?.deliberation?.roleAssignments?.some((r) => r.role === 'manager');
   const hasConsultants = council?.deliberation?.roleAssignments?.some((r) => r.role === 'consultant');
   const hasWorker = council?.deliberation?.roleAssignments?.some((r) => r.role === 'worker');
@@ -350,30 +343,6 @@ export default function DeliberationView({
     } finally {
       setIsGenerating(false);
     }
-  };
-
-  // Save task (problem + expected output)
-  const handleSaveTask = () => {
-    if (!council || !problemInput.trim()) return;
-
-    const trimmedProblem = problemInput.trim();
-    const trimmedOutput = expectedOutput.trim();
-
-    // Read fresh council to avoid overwriting other settings
-    const freshC = councilStore.get(councilId);
-    if (freshC?.deliberation) {
-      councilStore.update(councilId, {
-        deliberation: {
-          ...freshC.deliberation,
-          savedProblem: trimmedProblem,
-          expectedOutput: trimmedOutput || undefined,
-        },
-      });
-    }
-
-    // Mark as saved
-    setTaskSaved(true);
-    console.log('[DeliberationView] Task saved');
   };
 
   // Clear all deliberation results (ledger, artifacts, state) without restarting
@@ -524,7 +493,7 @@ export default function DeliberationView({
           setup: canStart, // Roles are assigned
           task: !!council.deliberation?.savedProblem, // Task/problem saved
           deliberation: currentPhase !== 'created' && currentPhase !== 'problem_framing', // Deliberation in progress
-          decision: ['directing', 'executing', 'reviewing', 'revising', 'completed'].includes(currentPhase),
+          decision: ['directing', 'executing', 'reviewing', 'revising', 'decomposing', 'implementing', 'code_reviewing', 'testing', 'debugging', 'completed'].includes(currentPhase),
           execution: currentPhase === 'completed',
         }}
         activeStep={activePanel}
@@ -1159,7 +1128,7 @@ export default function DeliberationView({
                   council={council}
                   configuredProviders={configuredProviders}
                   onClose={() => setActivePanel(null)}
-                  onSave={(assignments, personaUpdates, saveOptions) => {
+                  onSave={(assignments, personaUpdates, _saveOptions) => {
                     // Step 1: Save role assignments
                     councilStore.setRoleAssignments(councilId, assignments);
                     // Step 2: Save persona model changes

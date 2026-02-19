@@ -30,6 +30,11 @@ const PHASE_DESCRIPTIONS: Record<DeliberationPhase, string> = {
   executing: 'Worker executing the directive...',
   reviewing: 'Manager reviewing the output...',
   revising: 'Worker revising based on feedback...',
+  decomposing: 'Manager decomposing spec into modules...',
+  implementing: 'Workers implementing modules...',
+  code_reviewing: 'Reviewer reviewing implementation...',
+  testing: 'Running tests...',
+  debugging: 'Debugger fixing test failures...',
   paused: 'Deliberation paused',
   completed: 'Deliberation complete',
   cancelled: 'Deliberation cancelled',
@@ -44,7 +49,7 @@ const FORCE_DECISION_PHASES: Set<DeliberationPhase> = new Set([
 ]);
 
 export default function DeliberationControls({
-  council,
+  council: _council,
   currentPhase,
   isGenerating,
   onPause,

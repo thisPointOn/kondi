@@ -10,8 +10,16 @@ import StageRow from './StageRow';
 import StepConfigPanel from './StepConfigPanel';
 import './PipelineBuilder.css';
 
+export interface ConnectedServerInfo {
+  id: string;
+  name: string;
+  toolCount: number;
+}
+
 interface PipelineBuilderProps {
   pipelineId: string;
+  connectedServers?: ConnectedServerInfo[];
+  configuredProviders?: import('../../hooks/useProviderConfig').ConfiguredProviders;
   onBack: () => void;
   onRun: (pipelineId: string) => void;
   onViewResults: (pipelineId: string) => void;
@@ -19,12 +27,15 @@ interface PipelineBuilderProps {
 
 export default function PipelineBuilder({
   pipelineId,
+  connectedServers,
+  configuredProviders,
   onBack,
   onRun,
   onViewResults,
 }: PipelineBuilderProps) {
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [confirmingReset, setConfirmingReset] = useState(false);
 
   useEffect(() => {
     const load = () => setPipeline(pipelineStore.get(pipelineId));
@@ -120,13 +131,19 @@ export default function PipelineBuilder({
 
   const handleRun = () => {
     if (!canRun) return;
+    // Reset all step statuses and currentStageIndex so we start fresh
+    // (without this, re-running a completed/imported pipeline skips all steps)
+    pipelineStore.resetExecution(pipelineId);
     pipelineStore.setPipelineStatus(pipelineId, 'ready');
     onRun(pipelineId);
   };
 
   const handleReset = () => {
-    if (confirm('Reset pipeline? All step outputs will be cleared.')) {
+    if (confirmingReset) {
       pipelineStore.resetExecution(pipelineId);
+      setConfirmingReset(false);
+    } else {
+      setConfirmingReset(true);
     }
   };
 
@@ -166,9 +183,21 @@ export default function PipelineBuilder({
               </button>
             )}
             {isFinished ? (
-              <button className="builder-reset-btn" onClick={handleReset}>
-                Reset
-              </button>
+              confirmingReset ? (
+                <>
+                  <span className="reset-confirm-label">Clear all results?</span>
+                  <button className="builder-reset-confirm-btn" onClick={handleReset}>
+                    Yes, Reset
+                  </button>
+                  <button className="builder-reset-cancel-btn" onClick={() => setConfirmingReset(false)}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button className="builder-reset-btn" onClick={handleReset}>
+                  Reset
+                </button>
+              )
             ) : !isRunning ? (
               <button
                 className="builder-run-btn"
@@ -293,6 +322,8 @@ export default function PipelineBuilder({
           pipelineSettings={pipeline.settings}
           isFirstStage={selectedStep.stageIndex === 0}
           availableInputSteps={availableInputSteps}
+          connectedServers={connectedServers}
+          configuredProviders={configuredProviders}
           onUpdate={(updates) =>
             pipelineStore.updateStep(pipelineId, selectedStep.step.id, updates)
           }

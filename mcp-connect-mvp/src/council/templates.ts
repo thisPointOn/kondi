@@ -12,8 +12,8 @@ import type { PresetPersona } from './types';
 export const strategicTemplates: PresetPersona[] = [
   {
     name: "Devil's Advocate",
-    defaultProvider: 'anthropic',
-    defaultModel: 'claude-opus-4-20250514',
+    defaultProvider: 'anthropic-cli',
+    defaultModel: 'claude-sonnet-4-5-20250929',
     color: '#DC2626',
     avatar: '😈',
     predisposition: {
@@ -30,8 +30,8 @@ questions. Point out what others are missing. Be direct but not dismissive.`,
   },
   {
     name: 'Optimist',
-    defaultProvider: 'openai',
-    defaultModel: 'gpt-4o',
+    defaultProvider: 'openai-cli',
+    defaultModel: 'gpt-5.1-codex-mini',
     color: '#16A34A',
     avatar: '🌟',
     predisposition: {
@@ -48,7 +48,7 @@ make it happen. Inspire confidence and momentum.`,
   },
   {
     name: 'Pragmatist',
-    defaultProvider: 'anthropic',
+    defaultProvider: 'anthropic-cli',
     defaultModel: 'claude-sonnet-4-20250514',
     color: '#CA8A04',
     avatar: '⚖️',
@@ -66,8 +66,8 @@ paths forward. Ask: "How would this actually work?"`,
   },
   {
     name: 'Visionary',
-    defaultProvider: 'anthropic',
-    defaultModel: 'claude-opus-4-20250514',
+    defaultProvider: 'anthropic-cli',
+    defaultModel: 'claude-sonnet-4-5-20250929',
     color: '#7C3AED',
     avatar: '🔮',
     predisposition: {
@@ -84,7 +84,7 @@ are warranted. Paint pictures of possible futures.`,
   },
   {
     name: 'Customer Voice',
-    defaultProvider: 'anthropic',
+    defaultProvider: 'anthropic-cli',
     defaultModel: 'claude-sonnet-4-20250514',
     color: '#0891B2',
     avatar: '👥',
@@ -109,8 +109,8 @@ doesn't serve users. Keep humans at the center.`,
 export const technicalTemplates: PresetPersona[] = [
   {
     name: 'Security Hawk',
-    defaultProvider: 'anthropic',
-    defaultModel: 'claude-opus-4-20250514',
+    defaultProvider: 'openai-cli',
+    defaultModel: 'gpt-5.1-codex-mini',
     color: '#B91C1C',
     avatar: '🦅',
     predisposition: {
@@ -145,7 +145,7 @@ throughput, and resource efficiency. You push for benchmarks and data.`,
   },
   {
     name: 'Simplicity Advocate',
-    defaultProvider: 'anthropic',
+    defaultProvider: 'anthropic-cli',
     defaultModel: 'claude-sonnet-4-20250514',
     color: '#059669',
     avatar: '🎯',
@@ -163,8 +163,8 @@ this? Can this be simpler?" You value readability over cleverness.`,
   },
   {
     name: 'Scale Thinker',
-    defaultProvider: 'openai',
-    defaultModel: 'gpt-4o',
+    defaultProvider: 'openai-cli',
+    defaultModel: 'gpt-5.1-codex-mini',
     color: '#2563EB',
     avatar: '📈',
     predisposition: {
@@ -189,8 +189,8 @@ future flexibility.`,
 export const creativeTemplates: PresetPersona[] = [
   {
     name: 'Wild Card',
-    defaultProvider: 'openai',
-    defaultModel: 'gpt-4o',
+    defaultProvider: 'openai-cli',
+    defaultModel: 'gpt-5.1-codex-mini',
     color: '#EC4899',
     avatar: '🃏',
     temperature: 0.9,
@@ -208,7 +208,7 @@ creativity through provocation.`,
   },
   {
     name: 'Editor',
-    defaultProvider: 'anthropic',
+    defaultProvider: 'anthropic-cli',
     defaultModel: 'claude-sonnet-4-20250514',
     color: '#6B7280',
     avatar: '✂️',
@@ -225,7 +225,7 @@ and strengthen. You identify redundancy, vagueness, and weakness. You ask:
   },
   {
     name: 'Audience Advocate',
-    defaultProvider: 'anthropic',
+    defaultProvider: 'anthropic-cli',
     defaultModel: 'claude-sonnet-4-20250514',
     color: '#8B5CF6',
     avatar: '👁️',
@@ -249,8 +249,8 @@ with our audience? Where would they tune out?"`,
 export const domainTemplates: PresetPersona[] = [
   {
     name: 'Finance Mind',
-    defaultProvider: 'anthropic',
-    defaultModel: 'claude-opus-4-20250514',
+    defaultProvider: 'openai-cli',
+    defaultModel: 'gpt-5.1-codex-mini',
     color: '#14532D',
     avatar: '💰',
     predisposition: {
@@ -268,8 +268,8 @@ return? When?"`,
   },
   {
     name: 'Legal Eagle',
-    defaultProvider: 'anthropic',
-    defaultModel: 'claude-opus-4-20250514',
+    defaultProvider: 'anthropic-cli',
+    defaultModel: 'claude-sonnet-4-5-20250929',
     color: '#1E3A8A',
     avatar: '⚖️',
     predisposition: {
@@ -372,6 +372,7 @@ export function createPersonaFromTemplate(
     temperature: overrides?.temperature ?? template.temperature ?? 0.7,
     verbosity: overrides?.verbosity ?? template.verbosity ?? 'balanced',
     muted: false,
+    allowedServerIds: [],
   };
 }
 

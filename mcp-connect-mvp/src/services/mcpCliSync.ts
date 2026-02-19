@@ -8,9 +8,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { claudeCodeWrapper } from './claudeCodeWrapper';
 import type { MCPServer } from '../types/mcp';
 
-// Codex config file path
-const CODEX_CONFIG_PATH = '~/.codex/config.toml';
-
 class McpCliSync {
   // Track synced servers with their URL+token fingerprint to detect changes
   private syncedServers: Map<string, string> = new Map(); // serverId -> url+token fingerprint

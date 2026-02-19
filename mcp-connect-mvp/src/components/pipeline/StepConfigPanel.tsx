@@ -18,8 +18,10 @@ import { isCouncilType, isLlmType } from '../../pipeline/types';
 import { detectTestCommand } from '../../pipeline/test-detect';
 import type { Persona, DeliberationRoleAssignment } from '../../council/types';
 import { allTemplates, templateCategories, createPersonaFromTemplate } from '../../council';
-import { getModelsForPersonaSelector } from '../../config/models';
+import { getModelsForPersonaSelector, resolveDefaultModel } from '../../config/models';
+import type { ConfiguredProviders } from '../../hooks/useProviderConfig';
 import AddPersonaModal from '../council/AddPersonaModal';
+import type { ConnectedServerInfo } from './PipelineBuilder';
 
 /** An available input step the current step can reference */
 export interface AvailableInputStep {
@@ -37,9 +39,9 @@ const AVAILABLE_MODELS = getModelsForPersonaSelector();
 function getProviderDisplayName(provider: string): string {
   switch (provider) {
     case 'anthropic-cli': return 'Anthropic (CLI)';
-    case 'anthropic': return 'Anthropic (API)';
+    case 'anthropic-api': return 'Anthropic (API)';
     case 'openai-cli': return 'OpenAI (CLI)';
-    case 'openai': return 'OpenAI (API)';
+    case 'openai-api': return 'OpenAI (API)';
     case 'deepseek': return 'DeepSeek';
     default: return provider;
   }
@@ -179,6 +181,7 @@ function pipelinePersonaToCouncilPersona(pp: PipelinePersona, index: number): Pe
     temperature: pp.temperature ?? 0.7,
     verbosity: pp.verbosity || 'balanced',
     preferredDeliberationRole: pp.role,
+    allowedServerIds: pp.allowedServerIds,
     predisposition: {
       systemPrompt: pp.systemPrompt || `You are ${pp.name}, a ${pp.role} in this deliberation.`,
       stance: pp.stance || 'neutral',
@@ -215,11 +218,14 @@ function councilPersonaToPipelinePersona(
     traits: persona.predisposition.traits,
     interactionStyle: persona.predisposition.interactionStyle,
     domain: persona.predisposition.domain,
+    saveOutput: role.role === 'worker',
+    allowedServerIds: persona.allowedServerIds ?? [],
     temperature: persona.temperature,
     verbosity: persona.verbosity,
     focusArea: role.focusArea,
     startingStance: role.stance,
     suppressPersona: role.suppressPersona,
+    allowedServerIds: persona.allowedServerIds,
   };
 }
 
@@ -325,46 +331,60 @@ interface StepConfigPanelProps {
   isFirstStage?: boolean;
   /** All steps whose output is available as input to this step */
   availableInputSteps?: AvailableInputStep[];
+  /** Connected MCP servers available for tool filtering */
+  connectedServers?: ConnectedServerInfo[];
+  /** Which providers are currently configured/available */
+  configuredProviders?: ConfiguredProviders;
   onUpdate: (updates: Partial<PipelineStep>) => void;
   onConfigUpdate: (config: StepConfig) => void;
   onDelete: () => void;
   onClose: () => void;
 }
 
-function defaultPlanningConfig(): CouncilStepConfig {
+/** Default provider availability when no configuredProviders is passed */
+const DEFAULT_AVAIL: Record<string, boolean> = { 'anthropic-cli': true, 'anthropic-api': false, 'openai-cli': true, 'openai-api': false, deepseek: false };
+
+function defaultPlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
+  const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
+  const consultant = resolveDefaultModel('gpt-5.1-codex-mini', 'openai-cli', avail);
+  const worker = resolveDefaultModel('claude-sonnet-4-20250514', 'anthropic-cli', avail);
   return {
     type: 'planning',
     councilSetup: {
       name: 'Planning Council',
       personas: [
-        { name: 'Planning Lead', role: 'manager', model: 'claude-sonnet-4-20250514', provider: 'anthropic-cli', avatar: '\uD83D\uDCCB', color: '#6366f1', suppressPersona: false, traits: ['analytical', 'strategic'] },
-        { name: 'Domain Expert', role: 'consultant', model: 'claude-sonnet-4-20250514', provider: 'anthropic-cli', avatar: '\uD83C\uDF93', color: '#16a34a', traits: ['insightful', 'collaborative'] },
-        { name: 'Plan Author', role: 'worker', model: 'claude-sonnet-4-20250514', provider: 'anthropic-cli', avatar: '\u270D\uFE0F', color: '#f59e0b', suppressPersona: true, traits: ['thorough', 'detail-oriented'], saveOutput: true },
+        { name: 'Planning Lead', role: 'manager', model: manager.model, provider: manager.provider, avatar: '\uD83D\uDCCB', color: '#6366f1', suppressPersona: false, traits: ['analytical', 'strategic'] },
+        { name: 'Domain Expert', role: 'consultant', model: consultant.model, provider: consultant.provider, avatar: '\uD83C\uDF93', color: '#16a34a', traits: ['insightful', 'collaborative'] },
+        { name: 'Plan Author', role: 'worker', model: worker.model, provider: worker.provider, avatar: '\u270D\uFE0F', color: '#f59e0b', suppressPersona: true, traits: ['thorough', 'detail-oriented'], saveOutput: true },
       ],
       maxRounds: 4,
       maxRevisions: 3,
       expectedOutput: 'A detailed, actionable plan with clear steps, dependencies, and success criteria.',
+      allowedServerIds: [],
     },
     inputTemplate: '{{input}}',
     outputSelection: 'output',
   };
 }
 
-function defaultDecisioningConfig(): LlmStepConfig {
+function defaultDecisioningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): LlmStepConfig {
+  const m = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'decisioning',
-    model: 'claude-sonnet-4-20250514',
-    provider: 'anthropic-cli',
+    model: m.model,
+    provider: m.provider,
     systemPrompt: 'You are a decision-making agent. Analyze the input, weigh the options, and provide a clear decision with rationale. Structure your response as: Decision, Rationale, Risks, and Next Steps.',
     inputTemplate: '{{input}}',
+    allowedServerIds: [],
   };
 }
 
-function defaultExecutionConfig(): LlmStepConfig {
+function defaultExecutionConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): LlmStepConfig {
+  const m = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'execution',
-    model: 'claude-sonnet-4-20250514',
-    provider: 'anthropic-cli',
+    model: m.model,
+    provider: m.provider,
     systemPrompt: `You are an execution agent with access to tools. Your job is to ACTUALLY EXECUTE the work described in the input — do not just describe what you would do.
 
 Use your available tools to:
@@ -375,25 +395,31 @@ Use your available tools to:
 
 After executing, report: what you did, what succeeded, what failed, and any remaining issues. Include actual command output and test results.`,
     inputTemplate: '{{input}}',
+    allowedServerIds: [],
   };
 }
 
-function defaultCodingConfig(): CouncilStepConfig {
+function defaultCodingConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
+  const manager = resolveDefaultModel('claude-sonnet-4-20250514', 'anthropic-cli', avail);
+  const dev1 = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
+  const dev2 = resolveDefaultModel('gpt-5.1-codex-mini', 'openai-cli', avail);
+  const reviewer = resolveDefaultModel('gpt-5.1-codex-mini', 'openai-cli', avail);
   return {
     type: 'coding',
     councilSetup: {
       name: 'Coding Council',
       personas: [
-        { name: 'Tech Lead', role: 'manager', model: 'claude-sonnet-4-20250514', provider: 'anthropic-cli', avatar: '\uD83D\uDC68\u200D\uD83D\uDCBB', color: '#6366f1', suppressPersona: false, traits: ['analytical', 'decisive'] },
-        { name: 'Developer 1', role: 'worker', model: 'claude-sonnet-4-20250514', provider: 'anthropic-cli', avatar: '\uD83D\uDCBB', color: '#f59e0b', suppressPersona: true, traits: ['thorough', 'detail-oriented'], saveOutput: true },
-        { name: 'Developer 2', role: 'worker', model: 'claude-sonnet-4-20250514', provider: 'anthropic-cli', avatar: '\u2328\uFE0F', color: '#ea580c', suppressPersona: true, traits: ['thorough', 'detail-oriented'], saveOutput: true },
-        { name: 'Code Reviewer', role: 'reviewer', model: 'claude-sonnet-4-20250514', provider: 'anthropic-cli', avatar: '\uD83D\uDD0D', color: '#0ea5e9', suppressPersona: true, traits: ['critical', 'quality-focused'] },
+        { name: 'Tech Lead', role: 'manager', model: manager.model, provider: manager.provider, avatar: '\uD83D\uDC68\u200D\uD83D\uDCBB', color: '#6366f1', suppressPersona: false, traits: ['analytical', 'decisive'] },
+        { name: 'Developer 1', role: 'worker', model: dev1.model, provider: dev1.provider, avatar: '\uD83D\uDCBB', color: '#f59e0b', suppressPersona: true, traits: ['thorough', 'detail-oriented'], saveOutput: true },
+        { name: 'Developer 2', role: 'worker', model: dev2.model, provider: dev2.provider, avatar: '\u2328\uFE0F', color: '#ea580c', suppressPersona: true, traits: ['thorough', 'detail-oriented'], saveOutput: true },
+        { name: 'Code Reviewer', role: 'reviewer', model: reviewer.model, provider: reviewer.provider, avatar: '\uD83D\uDD0D', color: '#0ea5e9', suppressPersona: true, traits: ['critical', 'quality-focused'] },
       ],
       maxRounds: 4,
       maxRevisions: 3,
       maxReviewCycles: 2,
       maxDebugCycles: 3,
       expectedOutput: 'Working code implementation that meets the requirements and passes review.',
+      allowedServerIds: [],
     },
     inputTemplate: '{{input}}',
     outputSelection: 'output',
@@ -407,12 +433,12 @@ function defaultGateConfig(): GateStepConfig {
   };
 }
 
-function getDefaultConfigForType(type: PipelineStepType): StepConfig {
+function getDefaultConfigForType(type: PipelineStepType, avail?: Record<string, boolean>): StepConfig {
   switch (type) {
-    case 'planning': return defaultPlanningConfig();
-    case 'decisioning': return defaultDecisioningConfig();
-    case 'execution': return defaultExecutionConfig();
-    case 'coding': return defaultCodingConfig();
+    case 'planning': return defaultPlanningConfig(avail);
+    case 'decisioning': return defaultDecisioningConfig(avail);
+    case 'execution': return defaultExecutionConfig(avail);
+    case 'coding': return defaultCodingConfig(avail);
     case 'gate': return defaultGateConfig();
   }
 }
@@ -422,6 +448,8 @@ export default function StepConfigPanel({
   pipelineSettings,
   isFirstStage,
   availableInputSteps,
+  connectedServers,
+  configuredProviders,
   onUpdate,
   onConfigUpdate,
   onDelete,
@@ -435,7 +463,7 @@ export default function StepConfigPanel({
 
   const handleTypeChange = (newType: PipelineStepType) => {
     if (newType === step.config.type) return;
-    onConfigUpdate(getDefaultConfigForType(newType));
+    onConfigUpdate(getDefaultConfigForType(newType, configuredProviders));
   };
 
   const handleNameBlur = () => {
@@ -485,6 +513,7 @@ export default function StepConfigPanel({
           pipelineSettings={pipelineSettings}
           isFirstStage={isFirstStage}
           availableInputSteps={availableInputSteps}
+          connectedServers={connectedServers}
           onChange={onConfigUpdate}
         />
       )}
@@ -495,6 +524,7 @@ export default function StepConfigPanel({
           pipelineSettings={pipelineSettings}
           isFirstStage={isFirstStage}
           availableInputSteps={availableInputSteps}
+          connectedServers={connectedServers}
           onChange={onConfigUpdate}
         />
       )}
@@ -514,6 +544,87 @@ export default function StepConfigPanel({
 }
 
 // ============================================================================
+// Tool Access Section (reusable for step-level and persona-level filtering)
+// External MCP tools only — built-in/local services are always available.
+// ============================================================================
+
+import { BUILTIN_SERVER_IDS } from '../../utils/filterTools';
+
+function ToolAccessSection({
+  allowedServerIds,
+  connectedServers,
+  onChange,
+}: {
+  allowedServerIds?: string[];
+  connectedServers?: ConnectedServerInfo[];
+  onChange: (ids: string[] | undefined) => void;
+}) {
+  // Only list external servers (exclude built-in like kondi-search)
+  const externalServers = (connectedServers || []).filter(s => !BUILTIN_SERVER_IDS.includes(s.id));
+
+  // Restricted = allowedServerIds is defined ([] = no external, [...ids] = specific external)
+  // Unrestricted = allowedServerIds is undefined (all servers available)
+  const isRestricted = allowedServerIds !== undefined;
+  const selectedIds = new Set(allowedServerIds || []);
+
+  return (
+    <div className="config-section">
+      <div className="config-section-title">External MCP Tool Access</div>
+      <label className="checkbox-label">
+        <input
+          type="checkbox"
+          checked={isRestricted}
+          onChange={(e) => {
+            if (e.target.checked) {
+              // Enable restriction — no external servers by default
+              onChange([]);
+            } else {
+              // Disable restriction — undefined means all servers
+              onChange(undefined);
+            }
+          }}
+        />
+        <span>Restrict external MCP tools</span>
+      </label>
+      {!isRestricted && (
+        <span className="hint">All external MCP servers available (built-in tools always included)</span>
+      )}
+      {isRestricted && (
+        <>
+          {externalServers.length === 0 ? (
+            <span className="hint">No external MCP servers connected. Built-in tools still available.</span>
+          ) : (
+            <div className="tool-access-list">
+              {externalServers.map((server) => (
+                <label key={server.id} className="checkbox-label tool-access-item">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(server.id)}
+                    onChange={(e) => {
+                      const next = new Set(selectedIds);
+                      if (e.target.checked) {
+                        next.add(server.id);
+                      } else {
+                        next.delete(server.id);
+                      }
+                      onChange(Array.from(next));
+                    }}
+                  />
+                  <span>{server.name}</span>
+                  <span className="hint" style={{ marginLeft: 'auto' }}>
+                    {server.toolCount} tool{server.toolCount !== 1 ? 's' : ''}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
 // Council Config
 // ============================================================================
 
@@ -522,12 +633,14 @@ function CouncilConfig({
   pipelineSettings,
   isFirstStage,
   availableInputSteps,
+  connectedServers,
   onChange,
 }: {
   config: CouncilStepConfig;
   pipelineSettings: Pipeline['settings'];
   isFirstStage?: boolean;
   availableInputSteps?: AvailableInputStep[];
+  connectedServers?: ConnectedServerInfo[];
   onChange: (c: StepConfig) => void;
 }) {
   const [showPersonaModal, setShowPersonaModal] = useState(false);
@@ -627,6 +740,7 @@ function CouncilConfig({
       focusArea: roleUpdates?.focusArea ?? existing.focusArea,
       startingStance: roleUpdates?.stance ?? existing.startingStance,
       suppressPersona: roleUpdates?.suppressPersona ?? existing.suppressPersona,
+      allowedServerIds: updates.allowedServerIds !== undefined ? updates.allowedServerIds : existing.allowedServerIds,
     };
 
     updateSetup({ personas });
@@ -843,6 +957,12 @@ function CouncilConfig({
         />
       </div>
 
+      <ToolAccessSection
+        allowedServerIds={config.councilSetup.allowedServerIds}
+        connectedServers={connectedServers}
+        onChange={(ids) => updateSetup({ allowedServerIds: ids })}
+      />
+
       {showPersonaModal && (
         <AddPersonaModal
           templates={allTemplates}
@@ -850,6 +970,7 @@ function CouncilConfig({
           existingPersonas={councilPersonas}
           isDeliberationMode={true}
           existingRoleAssignments={councilRoleAssignments}
+          connectedServers={connectedServers}
           editingPersona={editingPersona}
           existingRoleAssignment={editingRoleAssignment}
           onAdd={() => {}}
@@ -874,12 +995,14 @@ function LlmConfig({
   pipelineSettings,
   isFirstStage,
   availableInputSteps,
+  connectedServers,
   onChange,
 }: {
   config: LlmStepConfig;
   pipelineSettings: Pipeline['settings'];
   isFirstStage?: boolean;
   availableInputSteps?: AvailableInputStep[];
+  connectedServers?: ConnectedServerInfo[];
   onChange: (c: StepConfig) => void;
 }) {
   const update = (partial: Partial<LlmStepConfig>) => {
@@ -898,8 +1021,8 @@ function LlmConfig({
                 <div className="model-options">
                   {MODELS_BY_PROVIDER[providerName].map((model) => (
                     <div
-                      key={model.id}
-                      className={`model-option ${config.model === model.id ? 'selected' : ''}`}
+                      key={`${model.provider}:${model.id}`}
+                      className={`model-option ${config.model === model.id && config.provider === model.provider ? 'selected' : ''}`}
                       onClick={() => update({ model: model.id, provider: model.provider })}
                       role="button"
                       tabIndex={0}
@@ -942,6 +1065,12 @@ function LlmConfig({
           pipelineSettings={pipelineSettings}
         />
       </div>
+
+      <ToolAccessSection
+        allowedServerIds={config.allowedServerIds}
+        connectedServers={connectedServers}
+        onChange={(ids) => update({ allowedServerIds: ids })}
+      />
     </>
   );
 }

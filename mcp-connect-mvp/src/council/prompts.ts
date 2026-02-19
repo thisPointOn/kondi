@@ -715,7 +715,9 @@ What: {description of what to add/modify}
 Why: {rationale}
 
 Other consultants are analyzing this independently. You will see
-their perspectives and can respond in the next round.`;
+their perspectives and can respond in the next round.
+
+You have access to MCP tools including web search and URL fetching. Use them when external research would strengthen your analysis.`;
 }
 
 /**
@@ -746,7 +748,9 @@ should be updated:
 
 PROPOSED CONTEXT CHANGE:
 What: {description}
-Why: {rationale}`;
+Why: {rationale}
+
+You have access to MCP tools including web search and URL fetching. Use them to research and verify claims when it would strengthen your argument.`;
 }
 
 // ============================================================================

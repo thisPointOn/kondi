@@ -5,89 +5,13 @@
  */
 
 import { spawn } from 'node:child_process';
+import { parseStreamJsonOutput } from '../src/pipeline/output-parsers';
 
 export interface CallerResult {
   content: string;
   tokensUsed: number;
   latencyMs: number;
   sessionId?: string;
-}
-
-/**
- * Parse raw stream-json output from Claude CLI.
- * Adapted from claudeCodeWrapper.ts parseStreamJsonOutput().
- */
-function parseStreamJsonOutput(rawOutput: string): { text: string; tokensUsed: number; sessionId?: string } {
-  if (!rawOutput.includes('{"type":')) {
-    return { text: rawOutput, tokensUsed: 0 };
-  }
-
-  const lines = rawOutput.split('\n').filter(l => l.trim());
-  let resultText = '';
-  let isErrorResult = false;
-  const textChunks: string[] = [];
-  const errorChunks: string[] = [];
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let sessionId: string | undefined;
-
-  for (const line of lines) {
-    try {
-      const json = JSON.parse(line);
-
-      // Extract session_id from init event or result
-      if (json.session_id && !sessionId) {
-        sessionId = json.session_id;
-      }
-
-      if (json.type === 'result' && json.result) {
-        resultText = typeof json.result === 'string' ? json.result : JSON.stringify(json.result);
-        if (json.is_error) isErrorResult = true;
-        if (json.session_id) sessionId = json.session_id;
-      }
-
-      if (json.type === 'error') {
-        const errText = json.error || json.body || JSON.stringify(json);
-        errorChunks.push(typeof errText === 'string' ? errText : JSON.stringify(errText));
-      }
-
-      if (json.type === 'assistant' && json.message?.content) {
-        for (const block of json.message.content) {
-          if (block.type === 'text' && block.text) {
-            textChunks.push(block.text);
-          }
-        }
-        if (json.message?.usage) {
-          inputTokens += json.message.usage.input_tokens || 0;
-          outputTokens += json.message.usage.output_tokens || 0;
-        }
-      }
-
-      if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta' && json.delta.text) {
-        textChunks.push(json.delta.text);
-      }
-    } catch {
-      // Not valid JSON, skip
-    }
-  }
-
-  const parts: string[] = [];
-  if (textChunks.length > 0) parts.push(textChunks.join(''));
-  if (resultText) {
-    const combined = parts.join('');
-    if (!combined.endsWith(resultText)) {
-      parts.push(isErrorResult ? '\n\nError: ' + resultText : '\n\n' + resultText);
-    }
-  }
-  if (errorChunks.length > 0) {
-    const errText = errorChunks.join('; ');
-    if (!parts.some(p => p.includes(errText))) {
-      parts.push('\n\nError: ' + errText);
-    }
-  }
-
-  const text = parts.length > 0 ? parts.join('').trim() : rawOutput;
-  return { text, tokensUsed: inputTokens + outputTokens, sessionId };
 }
 
 /**

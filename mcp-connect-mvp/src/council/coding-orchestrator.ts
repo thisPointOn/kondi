@@ -54,6 +54,8 @@ export interface AgentInvocation {
   skipTools?: boolean;
   /** Resume an existing CLI session (within a single step) */
   conversationId?: string;
+  /** MCP servers this invocation can access (undefined = all servers) */
+  allowedServerIds?: string[];
 }
 
 export interface AgentResponse {
@@ -105,6 +107,8 @@ export class CodingOrchestrator {
   private config: CodingOrchestratorConfig;
   /** Per-persona session IDs for conversation persistence within this step */
   private personaSessionIds: Map<string, string> = new Map();
+  /** Active council ID for the current workflow */
+  private activeCouncilId: string | null = null;
 
   constructor(config: CodingOrchestratorConfig) {
     this.config = config;
@@ -116,6 +120,7 @@ export class CodingOrchestrator {
   async runCodingWorkflow(council: Council, spec: string): Promise<void> {
     console.log('[CodingOrchestrator] Starting coding workflow...');
     this.personaSessionIds.clear();
+    this.activeCouncilId = council.id;
 
     // Always read fresh from store
     council = councilStore.get(council.id) || council;
@@ -426,7 +431,7 @@ export class CodingOrchestrator {
     console.log(`[CodingOrchestrator] Reviewer ${reviewer.name} reviewing ${workerOutputs.length} module(s)`);
 
     const response = await this.invokeAgentSafe(
-      { personaId: reviewer.id, systemPrompt, userMessage, skipTools: true },
+      { personaId: reviewer.id, systemPrompt, userMessage },
       reviewer,
       'code_review'
     );
@@ -622,10 +627,27 @@ export class CodingOrchestrator {
     persona: Persona,
     context: string
   ): Promise<AgentResponse> {
-    // Only implementation and debug phases need MCP tools
+    // Only pass MCP tools to worker phases where they're useful:
+    // - module_implementation, debug_fix (workers writing/fixing code)
+    // Skip tools for decomposition and code_review (already set skipTools: true inline).
     const toolPhases = ['module_implementation', 'debug_fix'];
-    if (!toolPhases.includes(context)) {
+    if (!toolPhases.includes(context) && !invocation.skipTools) {
       invocation = { ...invocation, skipTools: true };
+    }
+    console.log(`[CodingOrchestrator] invokeAgentSafe context=${context} skipTools=${invocation.skipTools} persona=${persona.name} provider=${persona.provider}`);
+
+    // Compute effective allowed servers (intersection of step + persona)
+    const council = this.activeCouncilId ? councilStore.get(this.activeCouncilId) : null;
+    const stepServers = council?.deliberation?.allowedServerIds;
+    const personaServers = persona.allowedServerIds;
+    let effectiveServers: string[] | undefined;
+    if (stepServers && personaServers) {
+      effectiveServers = stepServers.filter(id => personaServers.includes(id));
+    } else {
+      effectiveServers = personaServers || stepServers;
+    }
+    if (effectiveServers) {
+      invocation = { ...invocation, allowedServerIds: effectiveServers };
     }
 
     // Inject per-persona session ID for conversation persistence within this step

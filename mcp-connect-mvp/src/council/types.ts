@@ -60,6 +60,9 @@ export interface Persona {
 
   /** Preferred role in deliberation mode (optional hint) */
   preferredDeliberationRole?: 'manager' | 'consultant' | 'worker' | 'reviewer';
+
+  /** MCP servers this persona can access (undefined = all servers) */
+  allowedServerIds?: string[];
 }
 
 export interface PresetPersona {
@@ -714,6 +717,9 @@ export interface DeliberationConfig {
   testCommand?: string;
   maxDebugCycles?: number;     // default 3
   maxReviewCycles?: number;    // default 2
+
+  /** MCP servers this step/council can access (undefined = all servers) */
+  allowedServerIds?: string[];
 }
 
 /**

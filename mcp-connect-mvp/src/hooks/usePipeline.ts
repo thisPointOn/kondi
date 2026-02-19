@@ -1,0 +1,163 @@
+import { useState } from 'react';
+import { PipelineExecutor, type PlatformAdapter } from '../pipeline';
+import { callLLM } from '../pipeline/gui-caller';
+import { filterToolsByServerIds } from '../utils/filterTools';
+import { saveDeliberationOutput } from '../services/deliberationSaveService';
+import { anthropicClient } from '../services/anthropicClient';
+import { localToolsService } from '../services/localTools';
+import type { MCPTool } from '../types/mcp';
+import type { Persona } from '../council/types';
+import { invoke } from '@tauri-apps/api/core';
+
+interface UsePipelineParams {
+  availableTools: Map<string, { serverId: string; tools: MCPTool[] }>;
+  setThinkingPersonas: React.Dispatch<React.SetStateAction<Persona[]>>;
+}
+
+export function usePipeline({ availableTools, setThinkingPersonas }: UsePipelineParams) {
+  const [currentPipelineId, setCurrentPipelineId] = useState<string | null>(null);
+  const [pipelineMode, setPipelineMode] = useState<'library' | 'builder' | 'execution'>('library');
+  const [gateResolvers, setGateResolvers] = useState<Map<string, (approved: boolean) => void>>(new Map());
+  const [pipelineExecutor, setPipelineExecutor] = useState<PipelineExecutor | null>(null);
+  const [activePipelineCouncilId, setActivePipelineCouncilId] = useState<string | null>(null);
+  const [pipelineSelectedCouncilId, setPipelineSelectedCouncilId] = useState<string | null>(null);
+  const [pipelineSelectedStepId, setPipelineSelectedStepId] = useState<string | null>(null);
+
+  const handlePipelineSelect = (id: string) => {
+    setCurrentPipelineId(id);
+    setPipelineMode('builder');
+  };
+
+  const handlePipelineCreate = (pipeline: { id: string }) => {
+    setCurrentPipelineId(pipeline.id);
+    setPipelineMode('builder');
+  };
+
+  const handlePipelineBack = () => {
+    setCurrentPipelineId(null);
+    setPipelineMode('library');
+  };
+
+  const handlePipelineViewResults = () => {
+    setPipelineMode('execution');
+  };
+
+  const handleExecutionBack = () => {
+    setPipelineMode('builder');
+    setPipelineSelectedCouncilId(null);
+    setPipelineSelectedStepId(null);
+  };
+
+  const handleExecutionAbort = () => {
+    pipelineExecutor?.abort();
+    setPipelineMode('builder');
+    setActivePipelineCouncilId(null);
+    setPipelineSelectedCouncilId(null);
+    setPipelineSelectedStepId(null);
+  };
+
+  const handlePipelineRun = (id: string) => {
+    const resolverMap = new Map<string, (approved: boolean) => void>();
+    setGateResolvers(resolverMap);
+
+    const tauriPlatform: PlatformAdapter = {
+      writeFile: (path, content) => invoke('write_local_file', { path, content }),
+      readFile: (path) => invoke<string>('read_local_file', { path }).catch(() => null),
+      runCommand: (cmd, cwd) => invoke('run_command', { command: cmd, workingDir: cwd }),
+      setWorkingDir: (dir) => { anthropicClient.setWorkingDir(dir); localToolsService.setWorkingDirectory(dir); },
+      getWorkingDir: () => anthropicClient.getWorkingDir() || '',
+      saveDeliberationOutput: (council, mode) => saveDeliberationOutput(council, mode),
+    };
+
+    const executor = new PipelineExecutor({
+      invokeAgent: async (invocation, persona) => {
+        const filteredTools = invocation.skipTools
+          ? undefined
+          : filterToolsByServerIds(availableTools, invocation.allowedServerIds);
+        const result = await callLLM({
+          model: persona.model,
+          provider: persona.provider,
+          systemPrompt: invocation.systemPrompt,
+          userMessage: invocation.userMessage,
+          skipTools: invocation.skipTools,
+          allowedTools: invocation.allowedTools,
+          conversationId: invocation.conversationId,
+          temperature: persona.temperature,
+          workingDir: tauriPlatform.getWorkingDir() || undefined,
+          availableTools: filteredTools,
+        });
+        return { ...result, sessionId: result.sessionId };
+      },
+      llmComplete: async (params) => {
+        const filteredTools = filterToolsByServerIds(availableTools, params.allowedServerIds);
+        const result = await callLLM({
+          model: params.model,
+          provider: params.provider,
+          systemPrompt: params.systemPrompt,
+          userMessage: params.userMessage,
+          conversationId: params.conversationId,
+          workingDir: tauriPlatform.getWorkingDir() || undefined,
+          availableTools: filteredTools,
+        });
+        return { content: result.content, tokensUsed: result.tokensUsed, sessionId: result.sessionId };
+      },
+      onStageStart: (idx) => console.log(`[Pipeline] Stage ${idx} started`),
+      onStageComplete: (idx) => console.log(`[Pipeline] Stage ${idx} completed`),
+      onStepStart: (stepId) => console.log(`[Pipeline] Step ${stepId} started`),
+      onStepComplete: (stepId) => console.log(`[Pipeline] Step ${stepId} completed`),
+      onStepError: (stepId, error) => console.error(`[Pipeline] Step ${stepId} failed:`, error),
+      onGateWaiting: (stepId, _prompt) => {
+        return new Promise<boolean>((resolve) => {
+          setGateResolvers((prev) => {
+            const next = new Map(prev);
+            next.set(stepId, resolve);
+            return next;
+          });
+        });
+      },
+      onCouncilCreated: (stepId, councilId) => {
+        console.log(`[Pipeline] Council ${councilId} created for step ${stepId}`);
+        setActivePipelineCouncilId(councilId);
+      },
+      onAgentThinkingStart: (persona) => {
+        setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+      },
+      onAgentThinkingEnd: (persona) => {
+        setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+      },
+    }, tauriPlatform);
+
+    setPipelineExecutor(executor);
+    setPipelineMode('execution');
+
+    // Run asynchronously
+    executor.run(id).then(() => {
+      console.log('[Pipeline] Execution completed');
+      setThinkingPersonas([]);
+      setActivePipelineCouncilId(null);
+    }).catch((err) => {
+      console.error('[Pipeline] Execution failed:', err);
+      setThinkingPersonas([]);
+      setActivePipelineCouncilId(null);
+    });
+  };
+
+  return {
+    currentPipelineId,
+    pipelineMode,
+    gateResolvers,
+    pipelineExecutor,
+    activePipelineCouncilId,
+    pipelineSelectedCouncilId,
+    setPipelineSelectedCouncilId,
+    pipelineSelectedStepId,
+    setPipelineSelectedStepId,
+    handlePipelineSelect,
+    handlePipelineCreate,
+    handlePipelineBack,
+    handlePipelineViewResults,
+    handleExecutionBack,
+    handleExecutionAbort,
+    handlePipelineRun,
+  } as const;
+}

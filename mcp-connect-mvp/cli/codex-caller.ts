@@ -5,57 +5,8 @@
  */
 
 import { spawn } from 'node:child_process';
+import { parseCodexJsonOutput } from '../src/pipeline/output-parsers';
 import type { CallerResult } from './claude-caller';
-
-/**
- * Parse JSONL output from `codex exec --json`.
- *
- * Event types:
- *   {"type":"thread.started","thread_id":"..."}
- *   {"type":"turn.started"}
- *   {"type":"item.completed","item":{"id":"...","type":"agent_message","text":"..."}}
- *   {"type":"item.completed","item":{"id":"...","type":"reasoning","text":"..."}}
- *   {"type":"turn.completed","usage":{"input_tokens":N,"cached_input_tokens":N,"output_tokens":N}}
- */
-function parseCodexJsonOutput(rawOutput: string): { text: string; tokensUsed: number; sessionId?: string } {
-  const lines = rawOutput.split('\n').filter(l => l.trim());
-  const textChunks: string[] = [];
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let sessionId: string | undefined;
-
-  for (const line of lines) {
-    try {
-      const json = JSON.parse(line);
-
-      if (json.type === 'thread.started' && json.thread_id) {
-        sessionId = json.thread_id;
-      }
-
-      if (json.type === 'item.completed' && json.item) {
-        if (json.item.type === 'agent_message' && json.item.text) {
-          textChunks.push(json.item.text);
-        }
-        // Skip reasoning items — they're internal thought, not output
-      }
-
-      if (json.type === 'turn.completed' && json.usage) {
-        inputTokens += json.usage.input_tokens || 0;
-        outputTokens += json.usage.output_tokens || 0;
-      }
-
-      if (json.type === 'error') {
-        const errText = json.message || json.error || JSON.stringify(json);
-        textChunks.push(`\n\nError: ${errText}`);
-      }
-    } catch {
-      // Not valid JSON, skip
-    }
-  }
-
-  const text = textChunks.join('\n').trim() || rawOutput;
-  return { text, tokensUsed: inputTokens + outputTokens, sessionId };
-}
 
 /**
  * Call Codex CLI and return the result.
@@ -77,7 +28,7 @@ export async function callCodex(opts: {
     args.push('resume', opts.conversationId);
   }
 
-  args.push('--json');
+  args.push('--json', '--skip-git-repo-check');
 
   if (opts.model) {
     args.push('--model', opts.model);
@@ -99,9 +50,10 @@ export async function callCodex(opts: {
   // Prompt from stdin
   args.push('-');
 
-  // Build the full prompt (include system prompt as prefix since codex exec
-  // doesn't have a --system-prompt flag)
-  const fullPrompt = opts.systemPrompt
+  // Include system prompt as prefix only on first message (not when resuming).
+  // Codex exec doesn't have a --system-prompt flag, so we prepend it to the message.
+  // When resuming, the session already has the context from the first call.
+  const fullPrompt = opts.systemPrompt && !opts.conversationId
     ? `${opts.systemPrompt}\n\n---\n\n${opts.userMessage}`
     : opts.userMessage;
 

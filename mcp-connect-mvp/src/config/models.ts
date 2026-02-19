@@ -263,39 +263,6 @@ export const OPENAI_CLI_MODELS: ModelDefinition[] = [
     costDisplay: '~$0.003/msg',
     tier: 3,
   },
-  {
-    id: 'o3-mini',
-    name: 'o3 Mini (Reasoning)',
-    provider: 'openai-cli',
-    contextWindow: 200000,
-    capabilities: ['text', 'code', 'reasoning'],
-    inputCostPer1K: 0.0011,
-    outputCostPer1K: 0.0044,
-    costDisplay: '~$0.002/msg',
-    tier: 2,
-  },
-  {
-    id: 'gpt-4o',
-    name: 'GPT-4o',
-    provider: 'openai-cli',
-    contextWindow: 128000,
-    capabilities: ['text', 'vision', 'code'],
-    inputCostPer1K: 0.005,
-    outputCostPer1K: 0.015,
-    costDisplay: '~$0.01/msg',
-    tier: 2,
-  },
-  {
-    id: 'gpt-4o-mini',
-    name: 'GPT-4o Mini',
-    provider: 'openai-cli',
-    contextWindow: 128000,
-    capabilities: ['text', 'code'],
-    inputCostPer1K: 0.00015,
-    outputCostPer1K: 0.0006,
-    costDisplay: '~$0.001/msg',
-    tier: 3,
-  },
 ];
 
 // ============================================================================
@@ -416,18 +383,6 @@ export function getModelsForPersonaSelector(): Array<{
   provider: string;
   cost: string;
 }> {
-  // For council, we want to show all usable models grouped logically
-  // We'll use a display provider name that's cleaner
-  const getDisplayProvider = (provider: ModelProvider): string => {
-    switch (provider) {
-      case 'anthropic-api': return 'anthropic';
-      case 'anthropic-cli': return 'anthropic-cli';
-      case 'openai-api': return 'openai';
-      case 'openai-cli': return 'openai-cli';
-      default: return provider;
-    }
-  };
-
   const providerOrder: Record<string, number> = {
     'anthropic-cli': 0,
     'anthropic-api': 1,
@@ -449,7 +404,7 @@ export function getModelsForPersonaSelector(): Array<{
     .map(m => ({
       id: m.id,
       name: m.name,
-      provider: getDisplayProvider(m.provider),
+      provider: m.provider,
       cost: m.costDisplay,
     }));
 }
@@ -493,4 +448,62 @@ export function resolveProvider(
     return authMethod === 'cli' ? 'anthropic-cli' : 'anthropic-api';
   }
   return authMethod === 'cli' ? 'openai-cli' : 'openai-api';
+}
+
+/**
+ * CLI-to-API fallback mapping for OpenAI models.
+ * Anthropic model IDs are the same across CLI and API.
+ * OpenAI CLI has newer models not available via API.
+ */
+const OPENAI_CLI_TO_API_MODEL: Record<string, string> = {
+  'gpt-5.2': 'gpt-4o',
+  'gpt-5.2-codex': 'gpt-4o',
+  'gpt-5.1-codex-max': 'gpt-4o',
+  'gpt-5.1-codex-mini': 'gpt-4o-mini',
+};
+
+/**
+ * Resolve a CLI model+provider to the best available option.
+ * If the CLI provider is available, returns it as-is.
+ * Otherwise falls back to the equivalent API model+provider.
+ *
+ * @param model - The preferred CLI model ID
+ * @param provider - The preferred CLI provider (e.g. 'anthropic-cli', 'openai-cli')
+ * @param available - Map of provider availability (e.g. { 'anthropic-cli': true, 'openai-api': true })
+ */
+export function resolveDefaultModel(
+  model: string,
+  provider: string,
+  available: Record<string, boolean>,
+): { model: string; provider: string } {
+  // If the preferred provider is available, use it
+  if (available[provider]) {
+    return { model, provider };
+  }
+
+  // Fall back to API equivalent
+  if (provider === 'anthropic-cli' && available['anthropic-api']) {
+    // Anthropic model IDs are the same for CLI and API
+    return { model, provider: 'anthropic-api' };
+  }
+  if (provider === 'openai-cli' && available['openai-api']) {
+    return {
+      model: OPENAI_CLI_TO_API_MODEL[model] || 'gpt-4o',
+      provider: 'openai-api',
+    };
+  }
+
+  // If neither CLI nor API is available for that vendor, try the other vendor
+  if (provider.startsWith('anthropic') && (available['openai-cli'] || available['openai-api'])) {
+    const oProvider = available['openai-cli'] ? 'openai-cli' : 'openai-api';
+    const oModel = oProvider === 'openai-cli' ? 'gpt-5.1-codex-mini' : 'gpt-4o';
+    return { model: oModel, provider: oProvider };
+  }
+  if (provider.startsWith('openai') && (available['anthropic-cli'] || available['anthropic-api'])) {
+    const aProvider = available['anthropic-cli'] ? 'anthropic-cli' : 'anthropic-api';
+    return { model: 'claude-sonnet-4-5-20250929', provider: aProvider };
+  }
+
+  // Last resort: return as-is
+  return { model, provider };
 }

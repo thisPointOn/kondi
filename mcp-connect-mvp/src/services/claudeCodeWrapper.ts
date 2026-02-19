@@ -135,6 +135,9 @@ function parseStreamJsonOutput(rawOutput: string): string {
 class ClaudeCodeWrapper {
   private isAvailable: boolean | null = null;
   private version: string | null = null;
+  private cachedMCPServers: string[] | null = null;
+  private mcpServersCacheTime = 0;
+  private readonly MCP_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
   /**
    * Check if Claude Code is installed and return version
@@ -390,6 +393,12 @@ class ClaudeCodeWrapper {
    * List configured MCP servers
    */
   async listMCPServers(): Promise<string[]> {
+    // Return cached list if still fresh (avoids expensive subprocess call)
+    if (this.cachedMCPServers && Date.now() - this.mcpServersCacheTime < this.MCP_CACHE_TTL) {
+      console.log('[ClaudeCode] Using cached MCP server list');
+      return this.cachedMCPServers;
+    }
+
     try {
       const result = await invoke<{ success: boolean; output: string }>(
         'run_claude_command',
@@ -414,6 +423,8 @@ class ClaudeCodeWrapper {
           })
           .filter((name): name is string => name !== null && name.length > 0);
         console.log('[ClaudeCode] Parsed MCP servers:', servers);
+        this.cachedMCPServers = servers;
+        this.mcpServersCacheTime = Date.now();
         return servers;
       }
       return [];
@@ -421,6 +432,12 @@ class ClaudeCodeWrapper {
       console.error('[ClaudeCode] Failed to list MCP servers:', err);
       return [];
     }
+  }
+
+  /** Invalidate the cached MCP server list (call after adding/removing servers) */
+  invalidateMCPCache(): void {
+    this.cachedMCPServers = null;
+    this.mcpServersCacheTime = 0;
   }
 
   /**
@@ -433,6 +450,7 @@ class ClaudeCodeWrapper {
         'run_claude_command',
         { args: ['mcp', 'add-json', '--scope', 'user', name, jsonConfig] }
       );
+      if (result.success) this.invalidateMCPCache();
       return result.success;
     } catch (err) {
       console.error('[ClaudeCode] Failed to add MCP server:', err);
@@ -449,6 +467,7 @@ class ClaudeCodeWrapper {
         'run_claude_command',
         { args: ['mcp', 'remove', name] }
       );
+      if (result.success) this.invalidateMCPCache();
       return result.success;
     } catch {
       return false;

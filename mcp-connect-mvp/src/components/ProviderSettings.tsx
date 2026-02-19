@@ -1,6 +1,5 @@
 import { useState, useEffect, type FC } from 'react';
 import {
-  Settings,
   Check,
   X,
   RefreshCw,

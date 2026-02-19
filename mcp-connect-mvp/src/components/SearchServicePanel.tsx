@@ -37,6 +37,26 @@ import {
 import { MCPClient } from '../services/mcpClient';
 import './SearchServicePanel.css';
 
+// Status badge component (module-scoped to avoid re-creation on each render)
+const StatusBadge: FC<{ variant: 'ready' | 'starting' | 'stopped' | 'error' | 'not_setup' }> = ({ variant }) => {
+  const config = {
+    ready: { icon: CheckCircle, text: 'Ready', className: 'status-ready' },
+    starting: { icon: Loader2, text: 'Starting', className: 'status-starting' },
+    stopped: { icon: Square, text: 'Stopped', className: 'status-stopped' },
+    error: { icon: AlertCircle, text: 'Error', className: 'status-error' },
+    not_setup: { icon: Settings, text: 'Not Set Up', className: 'status-not-setup' },
+  }[variant];
+
+  const Icon = config.icon;
+
+  return (
+    <span className={`status-badge ${config.className}`}>
+      <Icon size={14} className={variant === 'starting' ? 'spinning' : ''} />
+      {config.text}
+    </span>
+  );
+};
+
 interface SearchServicePanelProps {
   mcpClient: MCPClient;
   onStatusChange?: (status: SearchServiceStatus) => void;
@@ -212,26 +232,6 @@ export const SearchServicePanel: FC<SearchServicePanelProps> = ({
   };
 
   const overallStatus = getOverallStatus();
-
-  // Status badge component
-  const StatusBadge = ({ variant }: { variant: 'ready' | 'starting' | 'stopped' | 'error' | 'not_setup' }) => {
-    const config = {
-      ready: { icon: CheckCircle, text: 'Ready', className: 'status-ready' },
-      starting: { icon: Loader2, text: 'Starting', className: 'status-starting' },
-      stopped: { icon: Square, text: 'Stopped', className: 'status-stopped' },
-      error: { icon: AlertCircle, text: 'Error', className: 'status-error' },
-      not_setup: { icon: Settings, text: 'Not Set Up', className: 'status-not-setup' },
-    }[variant];
-
-    const Icon = config.icon;
-
-    return (
-      <span className={`status-badge ${config.className}`}>
-        <Icon size={14} className={variant === 'starting' ? 'spinning' : ''} />
-        {config.text}
-      </span>
-    );
-  };
 
   return (
     <div className="search-service-panel">

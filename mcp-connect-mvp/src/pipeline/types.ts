@@ -70,6 +70,8 @@ export interface PipelinePersona {
   suppressPersona?: boolean;
   /** Worker-only: save the worker's output to the working directory (default: true) */
   saveOutput?: boolean;
+  /** MCP servers this persona can access (undefined = all servers) */
+  allowedServerIds?: string[];
 }
 
 // ============================================================================
@@ -91,6 +93,8 @@ export interface CouncilStepConfig {
     testCommand?: string;
     maxDebugCycles?: number;
     maxReviewCycles?: number;
+    /** MCP servers this step can access (undefined = all servers) */
+    allowedServerIds?: string[];
   };
   inputTemplate: string;
   outputSelection: 'decision' | 'output' | 'summary';
@@ -104,6 +108,8 @@ export interface LlmStepConfig {
   inputTemplate: string;
   workingDirectory?: string;
   directoryConstrained?: boolean;
+  /** MCP servers this step can access (undefined = all servers) */
+  allowedServerIds?: string[];
 }
 
 export interface GateStepConfig {

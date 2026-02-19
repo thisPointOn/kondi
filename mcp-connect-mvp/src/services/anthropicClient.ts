@@ -2,10 +2,8 @@ import { invoke } from '@tauri-apps/api/core';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 import { LOCAL_SERVER_ID, localToolsService } from './localTools';
-import { claudeCliClient } from './claudeCliClient';
+import { claudeCliClient, claudeCodeWrapper, claudeSessionManager } from './cli-providers';
 import { oauthService } from './oauthService';
-import { claudeCodeWrapper } from './claudeCodeWrapper';
-import { claudeSessionManager } from './claudeSessionManager';
 import { conversationSummary } from './conversationSummary';
 
 type AnthropicMessage = {
@@ -64,6 +62,10 @@ class AnthropicClient {
 
   getUseCliWrapper(): boolean {
     return this.useCliWrapper;
+  }
+
+  getUseOAuth(): boolean {
+    return this.useOAuth;
   }
 
   getCurrentConversationId(): string | null {
@@ -273,8 +275,8 @@ class AnthropicClient {
           toolMap.set(name, { serverId, tool });
           return {
             name,
-            description: tool.description || '',
-            input_schema: tool.inputSchema,
+            description: (tool.description || '').slice(0, 300),
+            input_schema: this.minimizeSchema(tool.inputSchema),
           };
         });
       }) || undefined;
@@ -488,26 +490,37 @@ class AnthropicClient {
       messageWithContext += lastUserMessage.content;
     }
 
-    // Build tool description for the system prompt (only if tools are provided)
     const hasTools = availableTools.size > 0;
-    const toolDescription = hasTools ? this.buildToolDescription(availableTools) : '';
-    let fullSystemPrompt = systemPrompt || '';
-    if (toolDescription) {
-      fullSystemPrompt += '\n\n' + toolDescription;
-      fullSystemPrompt += '\n\nThese MCP tools are connected and available for you to use. When the user asks about data or functionality these tools can provide, USE the tools to get real information rather than just describing what you would do.';
-    }
-
-    // Only list and connect to MCP servers if tools are actually needed.
-    // This avoids the expensive `claude mcp list` call and MCP server
-    // connection overhead (which can hang if servers are unreachable).
+    const isResuming = !!sessionId;
+    let fullSystemPrompt: string | undefined;
     let allowedTools: string[] = [];
-    if (hasTools) {
-      allowedTools = await claudeCodeWrapper.listMCPServers();
-      console.log('[Anthropic CLI] Tool count from app:', Array.from(availableTools.values()).reduce((sum, { tools }) => sum + tools.length, 0));
-      console.log('[Anthropic CLI] Claude Code MCP servers:', allowedTools);
-      console.log('[Anthropic CLI] Allowed tools being passed:', allowedTools.map(s => `mcp__${s}`));
+
+    if (isResuming) {
+      // When resuming, the session already has the system prompt and tool
+      // descriptions from the first message. Sending them again would
+      // duplicate context and waste tokens. We still pass --allowedTools
+      // (just permission names, not schemas) to ensure tool access.
+      console.log('[Anthropic CLI] Resuming session — skipping tool descriptions');
+      if (hasTools) {
+        allowedTools = await claudeCodeWrapper.listMCPServers();
+      }
     } else {
-      console.log('[Anthropic CLI] No tools requested — skipping MCP server listing');
+      // First message: build tool descriptions for the system prompt
+      const toolDescription = hasTools ? this.buildToolDescription(availableTools) : '';
+      fullSystemPrompt = systemPrompt || '';
+      if (toolDescription) {
+        fullSystemPrompt += '\n\n' + toolDescription;
+        fullSystemPrompt += '\n\nThese MCP tools are connected and available for you to use. When the user asks about data or functionality these tools can provide, USE the tools to get real information rather than just describing what you would do.';
+      }
+
+      if (hasTools) {
+        allowedTools = await claudeCodeWrapper.listMCPServers();
+        console.log('[Anthropic CLI] Tool count from app:', Array.from(availableTools.values()).reduce((sum, { tools }) => sum + tools.length, 0));
+        console.log('[Anthropic CLI] Claude Code MCP servers:', allowedTools);
+        console.log('[Anthropic CLI] Allowed tools being passed:', allowedTools.map(s => `mcp__${s}`));
+      } else {
+        console.log('[Anthropic CLI] No tools requested — skipping MCP server listing');
+      }
     }
 
     let resultText = '';
@@ -575,18 +588,74 @@ class AnthropicClient {
     return modelMap[apiModel] || 'sonnet';
   }
 
+  /**
+   * Minimize a JSON Schema to reduce token count.
+   * Strips non-essential keywords while preserving enough info for correct tool use.
+   */
+  private minimizeSchema(schema: any): any {
+    if (!schema || typeof schema !== 'object') return schema;
+
+    const result: any = {};
+
+    if (schema.type) result.type = schema.type;
+    if (schema.description) {
+      result.description = schema.description.length > 150
+        ? schema.description.slice(0, 147) + '...'
+        : schema.description;
+    }
+    if (schema.enum) result.enum = schema.enum;
+
+    if (schema.properties) {
+      result.properties = {};
+      for (const [key, value] of Object.entries(schema.properties)) {
+        result.properties[key] = this.minimizeSchema(value);
+      }
+    }
+
+    if (schema.required && schema.required.length > 0) {
+      result.required = schema.required;
+    }
+
+    if (schema.items) {
+      result.items = this.minimizeSchema(schema.items);
+    }
+
+    if (schema.oneOf) result.oneOf = schema.oneOf.map((s: any) => this.minimizeSchema(s));
+    if (schema.anyOf) result.anyOf = schema.anyOf.map((s: any) => this.minimizeSchema(s));
+    if (schema.allOf) result.allOf = schema.allOf.map((s: any) => this.minimizeSchema(s));
+
+    return result;
+  }
+
   private async sendMessage(
     messages: AnthropicMessage[],
     tools?: any[],
     model?: string,
     system?: string
   ) {
+    // Use array format for system prompt to enable prompt caching
+    const systemContent = system ? [{
+      type: 'text',
+      text: system,
+      cache_control: { type: 'ephemeral' }
+    }] : undefined;
+
+    // Add cache_control to last tool so the full tool list is cached
+    let cachedTools = tools;
+    if (tools && tools.length > 0) {
+      cachedTools = tools.map((tool, i) =>
+        i === tools.length - 1
+          ? { ...tool, cache_control: { type: 'ephemeral' } }
+          : tool
+      );
+    }
+
     return this.request('/v1/messages', 'POST', {
       model: model || 'claude-sonnet-4-5-20250929',
       max_tokens: 16384,
       messages,
-      tools: tools && tools.length > 0 ? tools : undefined,
-      system,
+      tools: cachedTools && cachedTools.length > 0 ? cachedTools : undefined,
+      system: systemContent,
     });
   }
 }

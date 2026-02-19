@@ -42,12 +42,20 @@ const ENTRY_TYPE_STYLES: Record<LedgerEntryType, EntryTypeStyle> = {
   re_deliberation: { icon: '🔄', label: 'Re-deliberation', colorClass: 'manager' },
   cancellation: { icon: '🛑', label: 'Cancelled', colorClass: 'error' },
   error: { icon: '⚠️', label: 'Error', colorClass: 'error' },
+  // Coding orchestrator entry types
+  decomposition: { icon: '🧩', label: 'Decomposition', colorClass: 'decision' },
+  module_directive: { icon: '📤', label: 'Module Directive', colorClass: 'directive' },
+  module_output: { icon: '📦', label: 'Module Output', colorClass: 'worker' },
+  code_review: { icon: '👁️', label: 'Code Review', colorClass: 'manager' },
+  test_result: { icon: '🧪', label: 'Test Result', colorClass: 'system' },
+  debug_fix: { icon: '🔧', label: 'Debug Fix', colorClass: 'worker' },
 };
 
 const ROLE_LABELS: Record<DeliberationRole, string> = {
   manager: 'Manager',
   consultant: 'Consultant',
   worker: 'Worker',
+  reviewer: 'Reviewer',
 };
 
 /** Get provider color: Anthropic=orange, OpenAI=blue, DeepSeek=indigo */
@@ -132,7 +140,7 @@ function cleanJsonContent(content: string): string {
 /**
  * Generate a 1-sentence summary from the content
  */
-function generateSummary(content: string, entryType: LedgerEntryType): string {
+function generateSummary(content: string, _entryType: LedgerEntryType): string {
   // First, try to clean JSON from content
   const baseContent = cleanJsonContent(content);
 
@@ -173,7 +181,7 @@ export default function LedgerEntryCard({
   defaultCollapsed = false,
 }: LedgerEntryCardProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
-  const typeStyle = ENTRY_TYPE_STYLES[entry.entryType];
+  const typeStyle = ENTRY_TYPE_STYLES[entry.entryType] || { icon: '📄', label: entry.entryType, colorClass: 'system' };
   const summary = generateSummary(entry.content, entry.entryType);
   const providerColor = getProviderColor(persona?.provider);
   const borderColor = providerColor || (persona ? persona.color : undefined);

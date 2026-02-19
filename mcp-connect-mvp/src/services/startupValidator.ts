@@ -158,10 +158,17 @@ class StartupValidator {
     console.log('[StartupValidator] Claude CLI status check:', cliStatus);
 
     if (cliStatus.installed && cliStatus.authenticated) {
-      console.log('[StartupValidator] Claude CLI is available, enabling wrapper mode...');
-      anthropicClient.setUseCliWrapper(true);
-      localStorage.setItem('anthropic-use-cli-wrapper', 'true');
-      localStorage.setItem('anthropic-auth-method', 'oauth');
+      console.log('[StartupValidator] Claude CLI is available');
+      // Only auto-enable CLI wrapper if the user hasn't explicitly chosen API mode
+      const storedProviderId = localStorage.getItem('kondi-provider-id');
+      const userChoseApi = storedProviderId === 'anthropic-api';
+      if (!userChoseApi) {
+        anthropicClient.setUseCliWrapper(true);
+        localStorage.setItem('anthropic-use-cli-wrapper', 'true');
+        localStorage.setItem('anthropic-auth-method', 'oauth');
+      } else {
+        console.log('[StartupValidator] User explicitly chose API mode — not overriding');
+      }
 
       // Test the CLI with an actual chat call
       const cliResult = await this.testAnthropicCli();
@@ -169,7 +176,7 @@ class StartupValidator {
     } else if (cliStatus.installed) {
       results.push({
         provider: 'Anthropic CLI',
-        status: 'error',
+        status: 'warning',
         message: 'Not authenticated',
         details: 'Claude CLI found but not logged in',
         action: 'Run "claude" in terminal to log in',
@@ -292,9 +299,16 @@ class StartupValidator {
     if (cliStatus.installed && cliStatus.authenticated) {
       // checkCliAvailable already ran a real exec call and it succeeded
       console.log('[StartupValidator] Codex CLI is available and authenticated');
-      openaiClient.setUseCliWrapper(true);
-      localStorage.setItem('openai-use-cli-wrapper', 'true');
-      localStorage.setItem('openai-auth-method', 'oauth');
+      // Only auto-enable CLI wrapper if the user hasn't explicitly chosen API mode
+      const storedProviderId = localStorage.getItem('kondi-provider-id');
+      const userChoseApi = storedProviderId === 'openai-api';
+      if (!userChoseApi) {
+        openaiClient.setUseCliWrapper(true);
+        localStorage.setItem('openai-use-cli-wrapper', 'true');
+        localStorage.setItem('openai-auth-method', 'oauth');
+      } else {
+        console.log('[StartupValidator] User explicitly chose API mode — not overriding');
+      }
       results.push({
         provider: 'OpenAI CLI',
         status: 'ok',
@@ -304,7 +318,7 @@ class StartupValidator {
     } else if (cliStatus.installed) {
       results.push({
         provider: 'OpenAI CLI',
-        status: 'error',
+        status: 'warning',
         message: 'Not authenticated',
         details: 'Codex CLI found but not logged in',
         action: 'Run "codex login" in terminal',
@@ -333,7 +347,7 @@ class StartupValidator {
         if (keys.openai) {
           const result = await openaiClient.validateKey(keys.openai);
           if (result.ok) {
-            // API key is valid, now test chat
+            // API key is valid, now test chat using the user's selected model
             try {
               const testMessage = {
                 id: 'validation-test',
@@ -341,7 +355,8 @@ class StartupValidator {
                 content: 'Say "OK" and nothing else.',
                 timestamp: new Date(),
               };
-              await openaiClient.chat([testMessage], new Map(), 'gpt-4o-mini');
+              const selectedModel = keys.openaiModel || localStorage.getItem('kondi-openai-model') || 'gpt-4o-mini';
+              await openaiClient.chat([testMessage], new Map(), selectedModel);
               return {
                 provider: 'OpenAI API',
                 status: 'ok',
@@ -353,7 +368,7 @@ class StartupValidator {
                 provider: 'OpenAI API',
                 status: 'error',
                 message: 'API key valid but chat failed',
-                details: errMsg.slice(0, 100),
+                details: errMsg,
                 action: 'Check console for details',
               };
             }

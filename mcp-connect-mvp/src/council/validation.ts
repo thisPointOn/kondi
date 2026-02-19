@@ -416,22 +416,23 @@ export const patchDecisionSchema = z.object({
 export const managerEvaluationSchema = z.object({
   action: z.enum(['continue', 'decide', 'redirect']),
   reasoning: z.string(),
-  confidence: z.number().min(0).max(1).nullable().optional(),
-  missingInformation: z.array(z.string()).nullable().optional(),
-  question: z.string().nullable().optional(),
-  patchDecisions: z.array(patchDecisionSchema).nullable().optional(),
+  confidence: z.number().min(0).max(1).nullish().transform(v => v ?? undefined),
+  missingInformation: z.array(z.string()).nullish().transform(v => v ?? undefined),
+  question: z.string().nullish().transform(v => v ?? undefined),
+  patchDecisions: z.array(patchDecisionSchema).nullish().transform(v => v ?? undefined),
 });
 
 export const managerReviewSchema = z.object({
   verdict: reviewOutcomeSchema,
   reasoning: z.string(),
-  feedback: z.string().nullable().optional(),
-  newInformation: z.string().nullable().optional(),
+  feedback: z.string().nullish().transform(v => v ?? undefined),
+  newInformation: z.string().nullish().transform(v => v ?? undefined),
 });
 
 export const deliberationConfigSchema = z.object({
   enabled: z.boolean(),
   roleAssignments: z.array(deliberationRoleAssignmentSchema),
+  minRounds: z.number().int().min(1).default(1),
   maxRounds: z.number().int().min(1).max(10).default(4),
   maxRevisions: z.number().int().min(1).max(10).default(3),
   decisionCriteria: z.array(z.string()).optional(),
@@ -441,8 +442,19 @@ export const deliberationConfigSchema = z.object({
   consultantErrorPolicy: consultantErrorPolicySchema.default('retry'),
   maxRetries: z.number().int().min(0).max(5).default(2),
   requirePlan: z.boolean().default(false),
+  consultantExecution: z.enum(['parallel', 'sequential']).default('sequential'),
+  workingDirectory: z.string().optional(),
+  directoryConstrained: z.boolean().optional(),
+  savedProblem: z.string().optional(),
+  expectedOutput: z.string().optional(),
   saveDeliberation: z.boolean().optional(),
   saveDeliberationMode: z.enum(['full', 'abbreviated']).optional(),
+  maxWordsPerResponse: z.number().optional(),
+  stepType: z.enum(['planning', 'coding']).optional(),
+  testCommand: z.string().optional(),
+  maxDebugCycles: z.number().int().optional(),
+  maxReviewCycles: z.number().int().optional(),
+  allowedServerIds: z.array(z.string()).optional(),
 });
 
 export const deliberationStateSchema = z.object({
@@ -458,12 +470,12 @@ export const deliberationStateSchema = z.object({
   activeContextId: z.string(),
   activeContextVersion: z.number().int().min(0),
   pendingPatches: z.array(z.string()),
-  managerLastEvaluation: managerEvaluationSchema.nullable().optional(),
-  finalDecisionId: z.string().nullable().optional(),
-  workDirectiveId: z.string().nullable().optional(),
-  currentOutputId: z.string().nullable().optional(),
+  managerLastEvaluation: managerEvaluationSchema.nullish().transform(v => v ?? undefined),
+  finalDecisionId: z.string().nullish().transform(v => v ?? undefined),
+  workDirectiveId: z.string().nullish().transform(v => v ?? undefined),
+  currentOutputId: z.string().nullish().transform(v => v ?? undefined),
   errorLog: z.array(z.string()),
-  completionSummary: z.string().nullable().optional(),
+  completionSummary: z.string().nullish().transform(v => v ?? undefined),
 });
 
 export const ledgerIndexSchema = z.object({

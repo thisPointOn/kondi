@@ -35,6 +35,13 @@ const ENTRY_TYPE_LABELS: Record<LedgerEntryType, string> = {
   re_deliberation: 'Re-deliberation',
   cancellation: 'Cancellation',
   error: 'Error',
+  // Coding orchestrator entry types
+  decomposition: 'Decomposition',
+  module_directive: 'Module Directive',
+  module_output: 'Module Output',
+  code_review: 'Code Review',
+  test_result: 'Test Result',
+  debug_fix: 'Debug Fix',
 };
 
 const PHASE_LABELS: Record<DeliberationPhase, string> = {
@@ -49,6 +56,13 @@ const PHASE_LABELS: Record<DeliberationPhase, string> = {
   executing: 'Execution',
   reviewing: 'Review',
   revising: 'Revision',
+  // Coding orchestrator phases
+  decomposing: 'Decomposition',
+  implementing: 'Implementation',
+  code_reviewing: 'Code Review',
+  testing: 'Testing',
+  debugging: 'Debugging',
+  // Terminal states
   paused: 'Paused',
   completed: 'Completed',
   cancelled: 'Cancelled',
@@ -156,7 +170,7 @@ export default function LedgerTimeline({
                 <option value="all">All Types</option>
                 {availableTypes.map((type) => (
                   <option key={type} value={type}>
-                    {ENTRY_TYPE_LABELS[type]}
+                    {ENTRY_TYPE_LABELS[type] || type}
                   </option>
                 ))}
               </select>
@@ -171,7 +185,7 @@ export default function LedgerTimeline({
                 <option value="all">All Phases</option>
                 {availablePhases.map((phase) => (
                   <option key={phase} value={phase}>
-                    {PHASE_LABELS[phase]}
+                    {PHASE_LABELS[phase] || phase}
                   </option>
                 ))}
               </select>
@@ -234,7 +248,7 @@ export default function LedgerTimeline({
                 )}
                 {showPhaseDivider && (
                   <div className="timeline-divider phase-divider">
-                    {PHASE_LABELS[entry.phase]}
+                    {PHASE_LABELS[entry.phase] || entry.phase}
                   </div>
                 )}
                 <div

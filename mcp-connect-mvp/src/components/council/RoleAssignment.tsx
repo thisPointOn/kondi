@@ -161,7 +161,7 @@ export default function RoleAssignment({
     const existingMap = new Map(existingAssignments.map(a => [a.personaId, a]));
 
     // Ensure every persona has an assignment
-    return council.personas.map((p, index) => {
+    return council.personas.map((p, _index) => {
       const existing = existingMap.get(p.id);
       if (existing) {
         return existing;

@@ -7,6 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Council } from '../council/types';
 import { getAllEntries } from '../council/ledger-store';
 import { getDecision, getLatestOutput } from '../council/context-store';
+import { buildAbbreviatedSummary } from './deliberationSummary';
 
 // Re-export from the Tauri-free module
 export { buildAbbreviatedSummary } from './deliberationSummary';

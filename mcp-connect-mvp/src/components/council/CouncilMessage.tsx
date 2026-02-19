@@ -20,7 +20,6 @@ export default function CouncilMessageComponent({
 }: CouncilMessageProps) {
   const isUser = message.speakerType === 'user';
   const isSystem = message.speakerType === 'system';
-  const isPersona = message.speakerType === 'persona';
 
   const getSpeakerName = () => {
     if (isUser) return 'You';

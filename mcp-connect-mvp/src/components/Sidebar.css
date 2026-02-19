@@ -563,9 +563,11 @@
   .sidebar .mcp-toggle-btn span,
   .sidebar .mcp-toggle-btn .check-icon,
   .sidebar .new-chat-btn span,
+  .sidebar .nav-btn span,
   .sidebar .settings-btn span,
   .sidebar .chats-section,
-  .sidebar .collapse-btn {
+  .sidebar .collapse-btn,
+  .sidebar .flowforge-section {
     display: none !important;
   }
 
@@ -575,6 +577,7 @@
 
   .sidebar .mcp-toggle-btn,
   .sidebar .new-chat-btn,
+  .sidebar .nav-btn,
   .sidebar .settings-btn {
     justify-content: center;
     padding: 10px;

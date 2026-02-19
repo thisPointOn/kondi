@@ -170,6 +170,12 @@ interface ChatAreaProps {
   selectedProviderId?: string;
   /** Called when user switches provider/model from the chat header */
   onProviderModelChange?: (provider: 'claude' | 'chatgpt', providerId: string, modelId: string) => void;
+  /** Lifted sending state — persists across view changes */
+  sending?: boolean;
+  onSendingChange?: (sending: boolean) => void;
+  /** Lifted active provider — persists across view changes */
+  activeProviderOverride?: 'claude' | 'chatgpt' | null;
+  onActiveProviderChange?: (provider: 'claude' | 'chatgpt' | null) => void;
 }
 
 const ChatArea: FC<ChatAreaProps> = ({
@@ -181,8 +187,6 @@ const ChatArea: FC<ChatAreaProps> = ({
   pendingToolInsert,
   onToolInsertHandled,
   apiKey,
-  anthropicKey,
-  openaiKey,
   provider,
   anthropicModel = 'claude-sonnet-4-20250514',
   openaiModel = 'gpt-5.2-codex',
@@ -195,11 +199,21 @@ const ChatArea: FC<ChatAreaProps> = ({
   },
   selectedProviderId = 'anthropic-cli',
   onProviderModelChange,
+  sending: sendingProp,
+  onSendingChange,
+  activeProviderOverride,
+  onActiveProviderChange,
 }) => {
   const [inputValue, setInputValue] = useState('');
   const [showToolAutocomplete, setShowToolAutocomplete] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [activeProvider, setActiveProvider] = useState<'claude' | 'chatgpt' | null>(null);
+  const [sendingLocal, setSendingLocal] = useState(false);
+  const [activeProviderLocal, setActiveProviderLocal] = useState<'claude' | 'chatgpt' | null>(null);
+
+  // Use lifted state if provided, otherwise fall back to local state
+  const sending = sendingProp ?? sendingLocal;
+  const setSending = (v: boolean) => { setSendingLocal(v); onSendingChange?.(v); };
+  const activeProvider = activeProviderOverride ?? activeProviderLocal;
+  const setActiveProvider = (v: 'claude' | 'chatgpt' | null) => { setActiveProviderLocal(v); onActiveProviderChange?.(v); };
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   // Chat input history (like bash shell — up/down arrow to cycle through previous entries)
   const inputHistoryRef = useRef<string[]>(
@@ -460,10 +474,6 @@ const ChatArea: FC<ChatAreaProps> = ({
     return message;
   };
 
-  const handleStop = () => {
-    stopRef.current = true;
-  };
-
   const handleSendMessage = async () => {
     if (!inputValue.trim() || sending || !chatId) return;
 
@@ -502,7 +512,7 @@ const ChatArea: FC<ChatAreaProps> = ({
       attachments: attachedFiles.length > 0 ? attachedFiles.map(f => ({ name: f.name, type: f.type, size: f.size })) : undefined,
     };
 
-    let currentMessages = [...messages, userMessage];
+    const currentMessages = [...messages, userMessage];
     onMessagesChange(currentMessages);
     setInputValue('');
     setAttachedFiles([]);
@@ -728,12 +738,6 @@ const MessageRow: FC<{ message: Message; servers: MCPServer[] }> = ({ message, s
     return 'AI';
   };
 
-  const getProviderLabel = () => {
-    if (provider === 'claude') return 'Claude';
-    if (provider === 'chatgpt') return 'ChatGPT';
-    return null;
-  };
-
   // For user messages with attachments, show only the text part (before file contents)
   const displayContent = useMemo(() => {
     if (isUser && message.attachments && message.attachments.length > 0) {
@@ -753,9 +757,6 @@ const MessageRow: FC<{ message: Message; servers: MCPServer[] }> = ({ message, s
         {getAvatar()}
       </div>
       <div className="message-content">
-        {!isUser && provider && (
-          <div className={`provider-label ${provider}`}>{getProviderLabel()}</div>
-        )}
         {isUser ? (
           <>
             {displayContent}

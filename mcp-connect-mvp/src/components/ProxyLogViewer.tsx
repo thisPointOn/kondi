@@ -17,7 +17,7 @@ interface ProxyLogViewerProps {
 
 export const ProxyLogViewer: FC<ProxyLogViewerProps> = ({ proxyId, proxyName, onClose }) => {
   const [logs, setLogs] = useState<ProxyLogEntry[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [expanded, setExpanded] = useState(true);
   const [copied, setCopied] = useState(false);

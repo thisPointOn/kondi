@@ -1121,16 +1121,19 @@ pub async fn anthropic_request(
         .header("Content-Type", "application/json")
         .header("anthropic-version", "2023-06-01");
 
+    // Build beta headers: always include prompt caching, add OAuth if needed
+    let mut beta_features: Vec<&str> = vec!["prompt-caching-2024-07-31"];
+
     if is_oauth_token {
         // OAuth token: use Authorization Bearer header
         request = request.header("Authorization", format!("Bearer {}", apiKey));
-
-        // REQUIRED: Add beta header to enable OAuth authentication
-        request = request.header("anthropic-beta", "oauth-2025-04-20");
+        beta_features.push("oauth-2025-04-20");
     } else {
         // API key: use x-api-key header
         request = request.header("x-api-key", &apiKey);
     }
+
+    request = request.header("anthropic-beta", beta_features.join(","));
 
     if let Some(body) = body {
         request = request.body(body);

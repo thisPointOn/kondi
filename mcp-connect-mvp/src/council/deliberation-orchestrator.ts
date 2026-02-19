@@ -90,8 +90,12 @@ export interface AgentInvocation {
   userMessage: string;
   /** When true, the invoker should NOT pass MCP tools (avoids slow MCP connections) */
   skipTools?: boolean;
+  /** Explicit list of CLI tools to allow (e.g. ['Read','Grep','Glob']). Undefined = default set. */
+  allowedTools?: string[];
   /** Resume an existing CLI session (within a single step/council) */
   conversationId?: string;
+  /** MCP servers this invocation can access (undefined = all servers) */
+  allowedServerIds?: string[];
 }
 
 export interface AgentResponse {
@@ -135,7 +139,12 @@ const PHASE_TRANSITIONS: Record<DeliberationPhase, {
   executing: { validNext: ['reviewing'], terminal: false },
   reviewing: { validNext: ['completed', 'revising', 'round_interactive'], terminal: false },
   revising: { validNext: ['reviewing', 'completed'], terminal: false },
-  paused: { validNext: ['created', 'problem_framing', 'round_independent', 'round_interactive', 'round_waiting_for_manager', 'planning', 'deciding', 'directing', 'executing', 'reviewing', 'revising'], terminal: false },
+  decomposing: { validNext: [], terminal: false },
+  implementing: { validNext: [], terminal: false },
+  code_reviewing: { validNext: [], terminal: false },
+  testing: { validNext: [], terminal: false },
+  debugging: { validNext: [], terminal: false },
+  paused: { validNext: ['created', 'problem_framing', 'round_independent', 'round_interactive', 'round_waiting_for_manager', 'planning', 'deciding', 'directing', 'executing', 'reviewing', 'revising', 'decomposing', 'implementing', 'code_reviewing', 'testing', 'debugging'], terminal: false },
   completed: { validNext: [], terminal: true },
   cancelled: { validNext: [], terminal: true },
   failed: { validNext: [], terminal: true },
@@ -304,7 +313,7 @@ export class DeliberationOrchestrator {
           role,
           fallbackPersona.id,
           'error',
-          phase || 'unknown',
+          phase || 'failed',
           `Deliberation error during ${phase}: ${errMsg}`,
           0, 0, undefined,
           council.deliberationState?.currentRound
@@ -418,7 +427,7 @@ export class DeliberationOrchestrator {
           role,
           persona.id,
           'error',
-          errPhase || 'unknown',
+          errPhase || 'failed',
           `Deliberation error during ${errPhase}: ${errMsg}`,
           0, 0, undefined,
           council.deliberationState?.currentRound
@@ -1567,21 +1576,63 @@ export class DeliberationOrchestrator {
 
   /**
    * Build context for Manager evaluation - Section 9.4
-   * Full history for Manager (never summarized)
+   * Uses summaries for older rounds to keep token usage manageable.
+   * Manager sees: shared context + summarised old rounds + full current round.
    */
   buildManagerEvalContext(council: Council): string {
     const context = getCurrentContext(council.id);
-    const entries = getAllEntries(council.id);
+    const currentRound = council.deliberationState?.currentRound || 1;
+    const roundSummaries = council.deliberationState?.roundSummaries || {};
 
     let result = `SHARED CONTEXT (v${context?.version || 1}):\n${context?.content || ''}\n\n---\n`;
-    result += `FULL DELIBERATION HISTORY:\n`;
-    result += formatEntriesForContext(entries);
+
+    // For rounds 1-2 send full history (not much to summarize yet)
+    // For rounds 3+ use summaries for older rounds, full for recent 2 rounds
+    if (currentRound <= 2) {
+      for (let r = 1; r <= currentRound; r++) {
+        const roundEntries = getEntriesForRound(council.id, r);
+        if (roundEntries.length > 0) {
+          result += `\nROUND ${r}:\n`;
+          result += formatEntriesForContext(roundEntries);
+        }
+      }
+    } else {
+      // Old rounds: summaries (rounds 1 to currentRound-2)
+      for (let r = 1; r <= currentRound - 2; r++) {
+        const summary = roundSummaries[r];
+        if (summary) {
+          result += `\nROUND ${r} SUMMARY:\n${summary}\n`;
+        } else {
+          // No summary available yet — use full entries as fallback
+          const roundEntries = getEntriesForRound(council.id, r);
+          result += `\nROUND ${r}:\n`;
+          result += formatEntriesForContext(roundEntries);
+        }
+      }
+
+      // Recent 2 rounds: full entries (manager needs detail for evaluation)
+      for (let r = Math.max(1, currentRound - 1); r <= currentRound; r++) {
+        const roundEntries = getEntriesForRound(council.id, r);
+        if (roundEntries.length > 0) {
+          result += `\nROUND ${r}:\n`;
+          result += formatEntriesForContext(roundEntries);
+        }
+      }
+    }
+
+    // Manager notes for current round only (old notes are captured in summaries)
+    const managerNotes = getManagerNotes(council.id, currentRound);
+    if (managerNotes.length > 0) {
+      result += `\n---\nMANAGER NOTES:\n`;
+      result += formatEntriesForContext(managerNotes);
+    }
 
     return result;
   }
 
   /**
    * Build context for decision - Section 9.5
+   * Same as manager eval context (uses summaries for older rounds).
    */
   buildDecisionContext(council: Council): string {
     return this.buildManagerEvalContext(council);
@@ -1670,10 +1721,17 @@ export class DeliberationOrchestrator {
     if (config.summaryMode === 'none') return false;
 
     const currentRound = council.deliberationState?.currentRound || 1;
-    if (currentRound <= config.summarizeAfterRound) return false;
+    // Always summarize after round 1 completes (round 2+)
+    if (currentRound <= 1) return false;
 
+    // Token-based trigger: summarize when ledger exceeds 30% of budget
     const tokenCount = getLedgerTokenCount(council.id);
-    return tokenCount > config.contextTokenBudget * 0.6;
+    if (tokenCount > config.contextTokenBudget * 0.3) return true;
+
+    // Round-based trigger: always summarize from round 3+
+    if (currentRound >= 3) return true;
+
+    return false;
   }
 
   /**
@@ -1784,20 +1842,61 @@ export class DeliberationOrchestrator {
     persona: Persona,
     context: string
   ): Promise<AgentResponse> {
-    // Only execution and revision phases need MCP tools.
-    // All other phases (framing, analysis, evaluation, decision, planning,
-    // directing, review, summary) are pure LLM calls that don't use tools.
-    // Skipping tools avoids the expensive `claude mcp list` call and MCP
-    // server connection overhead, which can hang if servers are unreachable.
-    const toolPhases = ['execution', 'revision'];
-    if (!toolPhases.includes(context)) {
+    // Scope tool access by phase/role:
+    //   Built-in tools (WebSearch, WebFetch) are always included for any tool-enabled phase.
+    //   Workers (execution, revision, debug): full tools + search
+    //   Planning workers: limited tools (Read, Write, Glob — save plan doc, no code editing)
+    //   Consultants (independent_analysis, deliberation_response): read-only + search
+    //   Reviewers (code_review): read-only + search
+    //   Manager phases: no tools
+    const BUILTIN_TOOLS = ['WebSearch', 'WebFetch'];
+    const FULL_TOOLS = [...BUILTIN_TOOLS, 'Edit', 'Write', 'Read', 'Bash', 'Glob', 'Grep'];
+    const PLAN_TOOLS = [...BUILTIN_TOOLS, 'Read', 'Write', 'Glob'];
+    const READ_ONLY_TOOLS = [...BUILTIN_TOOLS, 'Read', 'Grep', 'Glob'];
+
+    const council = this.activeCouncilId ? councilStore.get(this.activeCouncilId) : null;
+    const stepType = council?.deliberation?.stepType;
+
+    const workerToolPhases = ['execution', 'revision', 'debug'];
+    const readOnlyToolPhases = ['independent_analysis', 'deliberation_response', 'code_review'];
+
+    if (workerToolPhases.includes(context)) {
+      // Planning workers get limited tools (no Edit, Bash, Grep — prevents code writing)
+      // Coding/other workers get full tools
+      if (stepType === 'planning') {
+        invocation = { ...invocation, allowedTools: PLAN_TOOLS };
+      } else {
+        invocation = { ...invocation, allowedTools: FULL_TOOLS };
+      }
+    } else if (readOnlyToolPhases.includes(context)) {
+      invocation = { ...invocation, allowedTools: READ_ONLY_TOOLS };
+    } else if (!invocation.skipTools) {
       invocation = { ...invocation, skipTools: true };
     }
 
-    // Inject per-persona session ID for conversation persistence within this council
-    const existingSessionId = this.personaSessionIds.get(persona.id);
-    if (existingSessionId) {
-      invocation = { ...invocation, conversationId: existingSessionId };
+    // Compute effective allowed servers (intersection of step + persona)
+    const stepServers = council?.deliberation?.allowedServerIds;
+    const personaServers = persona.allowedServerIds;
+    let effectiveServers: string[] | undefined;
+    if (stepServers && personaServers) {
+      effectiveServers = stepServers.filter(id => personaServers.includes(id));
+    } else {
+      effectiveServers = personaServers || stepServers;
+    }
+    if (effectiveServers) {
+      invocation = { ...invocation, allowedServerIds: effectiveServers };
+    }
+
+    // Per-persona session persistence: ONLY for worker/execution phases.
+    // Manager and consultant calls rebuild context from scratch each time
+    // (via buildManagerEvalContext / buildRoundNContext), so resuming a session
+    // would duplicate the history and massively inflate token usage.
+    const workerPhases = ['execution', 'revision', 'debug'];
+    if (workerPhases.includes(context)) {
+      const existingSessionId = this.personaSessionIds.get(persona.id);
+      if (existingSessionId) {
+        invocation = { ...invocation, conversationId: existingSessionId };
+      }
     }
 
     // Inject brevity instruction if maxWordsPerResponse is configured

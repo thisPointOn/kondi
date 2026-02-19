@@ -6,6 +6,8 @@
 import { useState } from 'react';
 import type { PresetPersona, Persona, DeliberationRole, DeliberationRoleAssignment } from '../../council/types';
 import { getModelsForPersonaSelector } from '../../config/models';
+import { BUILTIN_SERVER_IDS } from '../../utils/filterTools';
+import type { ConnectedServerInfo } from '../pipeline/PipelineBuilder';
 import './AddPersonaModal.css';
 
 interface AddPersonaModalProps {
@@ -30,6 +32,8 @@ interface AddPersonaModalProps {
   existingRoleAssignment?: DeliberationRoleAssignment;
   /** Callback for updating an existing persona */
   onUpdate?: (personaId: string, updates: Partial<Persona>, roleUpdates?: Partial<DeliberationRoleAssignment>) => void;
+  /** Connected MCP servers available for tool filtering */
+  connectedServers?: ConnectedServerInfo[];
 }
 
 // Get available models from central config
@@ -51,9 +55,9 @@ const PROVIDER_ORDER = ['Anthropic (CLI)', 'Anthropic (API)', 'OpenAI (CLI)', 'O
 function getProviderDisplayName(provider: string): string {
   switch (provider) {
     case 'anthropic-cli': return 'Anthropic (CLI)';
-    case 'anthropic': return 'Anthropic (API)';
+    case 'anthropic-api': return 'Anthropic (API)';
     case 'openai-cli': return 'OpenAI (CLI)';
-    case 'openai': return 'OpenAI (API)';
+    case 'openai-api': return 'OpenAI (API)';
     case 'deepseek': return 'DeepSeek';
     default: return provider;
   }
@@ -71,6 +75,7 @@ export default function AddPersonaModal({
   editingPersona,
   existingRoleAssignment,
   onUpdate,
+  connectedServers,
 }: AddPersonaModalProps) {
   const isEditMode = !!editingPersona;
 
@@ -78,6 +83,7 @@ export default function AddPersonaModal({
   const [selectedTemplate, setSelectedTemplate] = useState<PresetPersona | null>(null);
   const [customName, setCustomName] = useState(editingPersona?.name || '');
   const [selectedModel, setSelectedModel] = useState(editingPersona?.model || '');
+  const [selectedProvider, setSelectedProvider] = useState(editingPersona?.provider || '');
   const [customPrompt, setCustomPrompt] = useState(editingPersona?.predisposition?.systemPrompt || '');
   const [temperature, setTemperature] = useState(editingPersona?.temperature || 0.7);
   const [verbosity, setVerbosity] = useState<'concise' | 'balanced' | 'thorough'>(editingPersona?.verbosity || 'balanced');
@@ -91,6 +97,7 @@ export default function AddPersonaModal({
   const [focusArea, setFocusArea] = useState(existingRoleAssignment?.focusArea || '');
   const [stance, setStance] = useState(existingRoleAssignment?.stance || '');
   const [suppressPersona, setSuppressPersona] = useState(existingRoleAssignment?.suppressPersona ?? true);
+  const [allowedServerIds, setAllowedServerIds] = useState<string[] | undefined>(editingPersona?.allowedServerIds ?? []);
 
   // Check role availability (allow the role if it's the persona being edited)
   const hasManager = existingRoleAssignments.some((r) => r.role === 'manager' && r.personaId !== editingPersona?.id);
@@ -143,15 +150,14 @@ export default function AddPersonaModal({
         return;
       }
 
-      const modelInfo = AVAILABLE_MODELS.find((m) => m.id === selectedModel);
-
       const updates: Partial<Persona> = {
         name,
         model: selectedModel || editingPersona.model,
-        provider: modelInfo?.provider || editingPersona.provider,
+        provider: selectedProvider || editingPersona.provider,
         temperature,
         verbosity,
         preferredDeliberationRole: selectedRole,
+        allowedServerIds,
         predisposition: {
           ...editingPersona.predisposition,
           systemPrompt: customPrompt || editingPersona.predisposition.systemPrompt,
@@ -180,15 +186,14 @@ export default function AddPersonaModal({
       return;
     }
 
-    const modelInfo = AVAILABLE_MODELS.find((m) => m.id === selectedModel);
-
     const overrides: Partial<Persona> = {
-      provider: modelInfo?.provider || selectedTemplate.defaultProvider,
+      provider: selectedProvider || selectedTemplate.defaultProvider,
       model: selectedModel || selectedTemplate.defaultModel,
       temperature,
       verbosity,
       // Store preferred deliberation role on persona
       preferredDeliberationRole: isDeliberationMode ? selectedRole : undefined,
+      allowedServerIds,
       // Include traits if modified from template defaults
       ...(traits.length > 0 && {
         predisposition: {
@@ -313,12 +318,13 @@ export default function AddPersonaModal({
                       <div className="model-options">
                         {MODELS_BY_PROVIDER[providerName].map((model) => (
                           <div
-                            key={model.id}
-                            className={`model-option ${selectedModel === model.id ? 'selected' : ''}`}
+                            key={`${model.provider}:${model.id}`}
+                            className={`model-option ${selectedModel === model.id && selectedProvider === model.provider ? 'selected' : ''}`}
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
                               setSelectedModel(model.id);
+                              setSelectedProvider(model.provider);
                             }}
                             role="button"
                             tabIndex={0}
@@ -326,6 +332,7 @@ export default function AddPersonaModal({
                               if (e.key === 'Enter' || e.key === ' ') {
                                 e.preventDefault();
                                 setSelectedModel(model.id);
+                              setSelectedProvider(model.provider);
                               }
                             }}
                           >
@@ -576,6 +583,64 @@ export default function AddPersonaModal({
                         without personality influence.
                       </p>
                     </div>
+                  )}
+
+                  {/* External MCP Tool Access (for consultant/worker/reviewer roles) */}
+                  {(selectedRole === 'consultant' || selectedRole === 'worker' || selectedRole === 'reviewer') && (
+                    <>
+                      <div className="config-divider">
+                        <span>External MCP Tool Access</span>
+                      </div>
+                      <div className="config-section">
+                        <label className="checkbox-label">
+                          <input
+                            type="checkbox"
+                            checked={allowedServerIds !== undefined}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setAllowedServerIds([]);
+                              } else {
+                                setAllowedServerIds(undefined);
+                              }
+                            }}
+                          />
+                          <span>Restrict external MCP tools</span>
+                        </label>
+                        {allowedServerIds === undefined && (
+                          <p className="field-hint">All external MCP servers available (built-in tools always included)</p>
+                        )}
+                        {allowedServerIds !== undefined && (() => {
+                          const externalServers = (connectedServers || []).filter(s => !BUILTIN_SERVER_IDS.includes(s.id));
+                          return externalServers.length > 0 ? (
+                            <div className="tool-access-list">
+                              {externalServers.map((server) => (
+                                <label key={server.id} className="checkbox-label tool-access-item">
+                                  <input
+                                    type="checkbox"
+                                    checked={allowedServerIds.includes(server.id)}
+                                    onChange={(e) => {
+                                      const next = new Set(allowedServerIds);
+                                      if (e.target.checked) {
+                                        next.add(server.id);
+                                      } else {
+                                        next.delete(server.id);
+                                      }
+                                      setAllowedServerIds(Array.from(next));
+                                    }}
+                                  />
+                                  <span>{server.name}</span>
+                                  <span className="field-hint" style={{ marginLeft: 'auto' }}>
+                                    {server.toolCount} tool{server.toolCount !== 1 ? 's' : ''}
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="field-hint">No external MCP servers connected. Built-in tools still available.</p>
+                          );
+                        })()}
+                      </div>
+                    </>
                   )}
                 </>
               )}

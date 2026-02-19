@@ -24,6 +24,7 @@ let remoteEventSource: EventSource | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let refreshTimer: NodeJS.Timeout | null = null;
 let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 20;
 let mcpSessionId: string | null = null;
 
 // Pending requests waiting for responses
@@ -430,7 +431,7 @@ export async function connect(config: ProxyConfig): Promise<void> {
         log(`[SSE Error] Data: ${JSON.stringify(err.data)}`);
       }
 
-      logError('SSE connection error', err instanceof Error ? err : new Error(String(err)));
+      logError('SSE connection error', err instanceof Error ? err : new Error(JSON.stringify(err, null, 2)));
 
       // Check if it's an auth error
       if (err.status === 401 || err.status === 403) {
@@ -584,17 +585,26 @@ export async function sendToRemote(config: ProxyConfig, message: McpMessage): Pr
 }
 
 /**
- * Schedule reconnection with exponential backoff
+ * Schedule reconnection with exponential backoff.
+ * Gives up after MAX_RECONNECT_ATTEMPTS — user must reconnect via UI.
  */
 function scheduleReconnect(config: ProxyConfig): void {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
   }
 
-  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 60000);
   reconnectAttempts++;
 
-  log(`Scheduling reconnect in ${delay}ms (attempt ${reconnectAttempts})`);
+  if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+    log(`Giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts. Use the UI to reconnect.`);
+    status = 'remote_unreachable';
+    lastError = `Server unreachable after ${MAX_RECONNECT_ATTEMPTS} attempts — reconnect manually`;
+    return;
+  }
+
+  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 60000);
+
+  log(`Scheduling reconnect in ${delay}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
 
   reconnectTimer = setTimeout(() => {
     connect(config);

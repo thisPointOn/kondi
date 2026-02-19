@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, type FC } from 'react';
-import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal, FileText, Search, Box, CheckCircle, ExternalLink, RefreshCw } from 'lucide-react';
+import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal, FileText, Search } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, OAuthDiscovery } from '../types/mcp';
@@ -7,9 +7,6 @@ import { LOCAL_TOOLS, localToolsService } from '../services/localTools';
 import { fetchGithubManifest, fetchGithubReadme } from '../services/githubManifestFetcher';
 import { mcpClient } from '../services/mcpClient';
 import { ProxyLogViewer } from './ProxyLogViewer';
-import {
-  getSearchServerConfig,
-} from '../services/searchService';
 import './ToolsPanel.css';
 
 interface ToolsPanelProps {
@@ -1422,9 +1419,9 @@ const ServerCard: FC<{
                 checked={editAutoConnect}
                 onChange={(e) => setEditAutoConnect(e.target.checked)}
               />
-              <span>Auto-connect on startup</span>
+              <span>Auto reconnect</span>
             </label>
-            <span className="auto-connect-hint">Automatically connect to this server when the app starts</span>
+            <span className="auto-connect-hint">Automatically reconnect to this server on startup and after connection loss</span>
           </div>
           <div className="details-actions">
             <button className="submit-btn" onClick={handleSaveDetails}>

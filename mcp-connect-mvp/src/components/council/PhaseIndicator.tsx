@@ -41,6 +41,13 @@ const PHASE_INFO: Record<DeliberationPhase, PhaseInfo> = {
   executing: { label: 'Executing', description: 'Worker executing', group: 'execution' },
   reviewing: { label: 'Reviewing', description: 'Manager reviewing', group: 'execution' },
   revising: { label: 'Revising', description: 'Worker revising', group: 'execution' },
+  // Coding orchestrator phases
+  decomposing: { label: 'Decomposing', description: 'Breaking into modules', group: 'decision' },
+  implementing: { label: 'Implementing', description: 'Workers writing code', group: 'execution' },
+  code_reviewing: { label: 'Reviewing', description: 'Code review in progress', group: 'execution' },
+  testing: { label: 'Testing', description: 'Running tests', group: 'execution' },
+  debugging: { label: 'Debugging', description: 'Fixing test failures', group: 'execution' },
+  // Terminal states
   paused: { label: 'Paused', description: 'Deliberation paused', group: 'terminal' },
   completed: { label: 'Completed', description: 'Deliberation complete', group: 'terminal' },
   cancelled: { label: 'Cancelled', description: 'Deliberation cancelled', group: 'terminal' },
@@ -51,8 +58,8 @@ const PHASE_GROUPS = [
   { key: 'setup', label: 'Setup', phases: ['created'] },
   { key: 'task', label: 'Task', phases: ['problem_framing'] },
   { key: 'deliberation', label: 'Deliberation', phases: ['round_independent', 'round_interactive', 'round_waiting_for_manager'] },
-  { key: 'decision', label: 'Decision', phases: ['planning', 'deciding', 'directing'] },
-  { key: 'execution', label: 'Execution', phases: ['executing', 'reviewing', 'revising'] },
+  { key: 'decision', label: 'Decision', phases: ['planning', 'deciding', 'directing', 'decomposing'] },
+  { key: 'execution', label: 'Execution', phases: ['executing', 'reviewing', 'revising', 'implementing', 'code_reviewing', 'testing', 'debugging'] },
 ];
 
 export default function PhaseIndicator({
@@ -63,7 +70,7 @@ export default function PhaseIndicator({
   completedSteps = {},
   activeStep = null,
 }: PhaseIndicatorProps) {
-  const phaseInfo = PHASE_INFO[currentPhase];
+  const phaseInfo = PHASE_INFO[currentPhase] || { label: currentPhase, description: '', group: 'execution' };
   const isTerminal = phaseInfo.group === 'terminal';
 
   const getGroupStatus = (groupKey: string): 'completed' | 'active' | 'pending' => {
