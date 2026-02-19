@@ -367,6 +367,13 @@ CRITICAL RULES:
 
 ${scopeNote}
 
+CRITICAL — BEFORE YOU START CODING:
+1. Use Glob to survey the project structure (find key directories and files)
+2. Use Read to examine files you'll be modifying (understand existing patterns)
+3. Use Grep to find related code (imports, function calls, type definitions)
+Your changes MUST integrate with the existing codebase. Do not rewrite files
+from scratch unless the directive explicitly asks you to create new files.
+
 You have tools available to create, read, and edit files on disk. USE THEM.
 Do NOT just output code blocks in your response — actually write the files using your tools.
 
@@ -410,6 +417,12 @@ Rules:
 export function buildManagerFramingPrompt(rawProblem: string): string {
   return `You are framing a problem for a team of consultants who will analyze it
 from different perspectives, then debate approaches.
+
+You have Read, Glob, Grep, and Bash tools available. USE THEM to examine the
+project structure and existing code before framing the problem. Understanding
+what already exists is critical for framing an accurate problem statement.
+DO NOT modify any files. Use Bash only for read-only commands (ls, find, cat) or
+package installation (npm install, pip install) if prerequisites are needed.
 
 Write a structured problem statement that includes:
 - CONTEXT: What background does the team need?
@@ -575,6 +588,12 @@ The worker should create every file, write every line of code, and produce a wor
 
   return `Based on your decision, write a concrete work directive.
 
+You have Read, Glob, Grep, and Bash tools available. Use them to:
+- Read existing files to understand what the worker needs to modify
+- Install any needed packages (npm install, pip install, etc.)
+- Examine the project structure to give the worker accurate file paths
+DO NOT write or edit code files yourself — that's the worker's job.
+
 YOUR DECISION:
 ${decision}
 ${planSection}${outputNote}
@@ -599,6 +618,7 @@ export function buildManagerReviewPrompt(
   expectedOutput?: string,
   hasWritePermissions?: boolean,
   stepType?: 'planning' | 'coding',
+  consultantReviews?: string,
 ): string {
   const criteriaSection = acceptanceCriteria
     ? `\nACCEPTANCE CRITERIA (from your decision):\n${acceptanceCriteria}\n`
@@ -617,12 +637,16 @@ If the worker only described or outlined what to build without actually writing 
 that is NOT acceptable — use REVISE and instruct them to actually implement the code.\n`
     : '';
 
+  const consultantSection = consultantReviews
+    ? `\nCONSULTANT REVIEWS:\n${consultantReviews}\n`
+    : '';
+
   return `WORK DIRECTIVE:
 ${directive}
 ${criteriaSection}${expectedOutputSection}${implementationNote}
 WORKER OUTPUT:
 ${workOutput}
-
+${consultantSection}
 ---
 
 Review the worker's output against the directive, acceptance criteria, and expected output.
@@ -641,8 +665,9 @@ use REVISE with specific instructions to correct it, or RE-DELIBERATE if the app
 needs to be reconsidered by the consultants.
 
 IMPORTANT: Your reasoning and verdict MUST be included in your JSON response below.
-Do NOT try to independently verify the work by reading files or running commands —
-evaluate based on the worker's reported output and completion summary.
+You have file-reading tools available — USE THEM to verify the worker's claims.
+Read key files to confirm they exist and contain correct implementations.
+Do NOT modify any files.
 
 Decide:
 - ACCEPT: Output meets the directive, acceptance criteria, AND expected output.
@@ -753,6 +778,54 @@ Why: {rationale}
 You have access to MCP tools including web search and URL fetching. Use them to research and verify claims when it would strengthen your argument.`;
 }
 
+/**
+ * Consultant final position before manager decision
+ */
+export function buildConsultantFinalPositionPrompt(
+  persona: Persona, focusArea: string, fullContext: string
+): string {
+  return `The deliberation is ending. Based on everything discussed, provide your FINAL POSITION.
+
+DELIBERATION CONTEXT:
+${fullContext}
+
+---
+
+As ${persona.name} (focus: ${focusArea}), state:
+1. Your recommended approach (1-2 sentences)
+2. The single biggest risk if your recommendation is ignored
+3. Any non-negotiable constraint from your domain
+
+Be brief and decisive — this is your last input before the manager decides.`;
+}
+
+/**
+ * Consultant review of worker output
+ */
+export function buildConsultantReviewPrompt(
+  persona: Persona, focusArea: string,
+  workOutput: string, directive: string, expectedOutput?: string
+): string {
+  return `Review the worker's output from your domain perspective (${focusArea}).
+
+DIRECTIVE (what was requested):
+${directive}
+${expectedOutput ? `\nEXPECTED OUTCOME: ${expectedOutput}` : ''}
+
+WORKER OUTPUT:
+${workOutput}
+
+---
+
+As ${persona.name}, evaluate from your ${focusArea} perspective:
+1. Does the output meet the directive requirements?
+2. Any issues in your domain? (e.g., security flaws, performance problems, missing edge cases)
+3. Specific improvements needed (if any)
+
+If you have file-reading tools available, READ the actual files to verify claims.
+Be concise — 3-5 sentences max. Focus on actionable feedback, not style preferences.`;
+}
+
 // ============================================================================
 // Worker Prompts
 // ============================================================================
@@ -798,11 +871,17 @@ This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT s
 ${directive}
 
 ---
-IMPORTANT: You are an implementation agent with write access to the file system.
+STEP 1 — UNDERSTAND THE CODEBASE:
+Before writing any code, use your tools to read existing files in the working directory.
+Understand the project structure, existing patterns, and conventions.
+Your implementation must integrate with what already exists.
+
+STEP 2 — IMPLEMENT:
+You are an implementation agent with write access to the file system.
 DO NOT just describe what needs to be done or output code blocks in your response.
 USE YOUR TOOLS to actually create and write the files to disk.
 
-Start implementing immediately. Write each file using your file-writing tools.
+Write each file using your file-writing tools.
 
 MANDATORY — When you are DONE implementing, you MUST end your response with a completion summary
 in EXACTLY this format:
@@ -951,10 +1030,22 @@ This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT s
  * Manager decomposes a spec into parallel modules for workers
  */
 export function buildDecompositionPrompt(spec: string, workerCount: number): string {
+  const toolPreamble = `BEFORE DECOMPOSING — USE YOUR TOOLS:
+You have Read, Glob, and Grep tools available. Use them to:
+1. Examine the existing project structure (Glob for key files)
+2. Understand what code already exists
+3. Identify files that need to be modified vs. created from scratch
+4. Note existing patterns, frameworks, and conventions
+
+Your decomposition MUST account for existing code. Do not plan to recreate
+things that already exist — plan to modify or extend them.
+
+`;
+
   if (workerCount <= 1) {
     return `You are decomposing a specification into an implementation plan for a single worker.
 
-SPECIFICATION:
+${toolPreamble}SPECIFICATION:
 ${spec}
 
 ---
@@ -979,7 +1070,7 @@ Respond as JSON:
 
   return `You are decomposing a specification into ${workerCount} parallel modules for worker agents.
 
-SPECIFICATION:
+${toolPreamble}SPECIFICATION:
 ${spec}
 
 ---
@@ -1039,6 +1130,9 @@ ${permissions.directoryConstrained
   return `## MODULE: ${module.name}
 Files: ${module.files.join(', ')}
 
+NOTE: Use your Read and Glob tools to examine existing files before coding.
+Your implementation must integrate with the existing codebase.
+
 ## DIRECTIVE
 ${module.directive}
 ${interfacesSection}${depsSection}
@@ -1078,30 +1172,47 @@ ${expectedSection}
 ## WORKER IMPLEMENTATIONS
 ${outputsSection}
 
+You have Read, Grep, and Glob tools available. If the workers wrote files to disk,
+USE YOUR TOOLS to read the actual files and verify the implementation. Do not rely
+solely on the worker output text above — check the actual files on disk.
+
 ---
 
+STEP 1 — INVESTIGATE:
+Use your tools to read the actual files. Check that they exist, contain the expected
+code, and match the specification. Note any discrepancies.
+
+STEP 2 — ASSESS:
 Review for:
 1. **Correctness**: Does the implementation match the spec? Are all requirements met?
 2. **Integration**: Will the modules work together? Are interfaces compatible?
 3. **Quality**: Are there bugs, edge cases, or obvious issues?
 4. **Completeness**: Is anything missing from the spec?
 
-Respond as JSON:
+STEP 3 — RESPOND:
+After your investigation, respond with ONLY a JSON block (no other text after it):
+
+\`\`\`json
 {
   "verdict": "pass" | "needs_revision",
   "issues": [
     {
       "module": "module-name",
       "severity": "critical" | "major" | "minor",
-      "description": "what's wrong",
-      "suggestion": "how to fix it"
+      "description": "Specific description of what is wrong — reference the exact file, function, or line",
+      "suggestion": "Exact fix: what code to change, what to add, or what to remove"
     }
   ],
   "summary": "overall assessment of the implementation"
 }
+\`\`\`
 
-If there are no critical or major issues, verdict should be "pass".
-Only use "needs_revision" for issues that would prevent the code from working correctly.`;
+CRITICAL RULES:
+- If verdict is "needs_revision", the issues array MUST NOT be empty.
+- Each issue MUST have a specific description (file path + what's wrong) and a concrete suggestion (what to change).
+- Do NOT say "needs_revision" without explaining exactly what to fix — vague feedback wastes a revision cycle.
+- If there are no critical or major issues, verdict MUST be "pass".
+- Only use "needs_revision" for issues that would prevent the code from working correctly.`;
 }
 
 /**
@@ -1109,6 +1220,8 @@ Only use "needs_revision" for issues that would prevent the code from working co
  */
 export function buildReviewerSystemPrompt(): string {
   return `You are a Code Reviewer agent. Your job is to evaluate code quality and correctness.
+You have read-only tools available (Read, Grep, Glob). USE THEM to examine the actual
+files on disk when verifying worker implementations. Do not rely solely on worker output text.
 
 You do NOT write code or modify files. You only review and provide feedback.
 Your output must be structured JSON with a verdict and list of issues.

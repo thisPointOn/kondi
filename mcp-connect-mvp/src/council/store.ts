@@ -641,6 +641,7 @@ export function initializeDeliberationState(councilId: string): Council | null {
     activeContextId: '',
     activeContextVersion: 0,
     pendingPatches: [],
+    reDeliberationCount: 0,
     errorLog: [],
   };
 

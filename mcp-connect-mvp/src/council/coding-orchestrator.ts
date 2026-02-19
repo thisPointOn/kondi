@@ -52,6 +52,8 @@ export interface AgentInvocation {
   systemPrompt: string;
   userMessage: string;
   skipTools?: boolean;
+  /** Explicit list of CLI tools to allow (e.g. ['Read','Grep','Glob']). Undefined = default set. */
+  allowedTools?: string[];
   /** Resume an existing CLI session (within a single step) */
   conversationId?: string;
   /** MCP servers this invocation can access (undefined = all servers) */
@@ -165,8 +167,11 @@ export class CodingOrchestrator {
           break;
         }
 
+        // Store formatted review issues so revision workers get clear, actionable feedback
+        // instead of raw LLM output mixed with tool-use noise
+        this.storeFormattedReviewFeedback(council, verdict);
+
         console.log(`[CodingOrchestrator] Review cycle ${reviewCycleCount}/${maxReviewCycles} — revising`);
-        // Store review feedback for revision, then loop back to implementing
         council = councilStore.get(council.id)!;
       }
 
@@ -258,7 +263,7 @@ export class CodingOrchestrator {
     const userMessage = buildDecompositionPrompt(spec, workerCount);
 
     const response = await this.invokeAgentSafe(
-      { personaId: manager.id, systemPrompt, userMessage, skipTools: true },
+      { personaId: manager.id, systemPrompt, userMessage },
       manager,
       'decomposition'
     );
@@ -317,12 +322,16 @@ export class CodingOrchestrator {
       assignments.push({ module: modules[i], worker });
     }
 
-    console.log(`[CodingOrchestrator] Implementing ${modules.length} module(s) with ${workers.length} worker(s)`,
+    console.log(`[CodingOrchestrator] Implementing ${modules.length} module(s) with ${workers.length} worker(s) sequentially`,
       isRevision ? '(revision)' : '');
 
-    // Run all workers in parallel
-    const results = await Promise.allSettled(
-      assignments.map(async ({ module, worker }) => {
+    // Run workers sequentially to avoid filesystem conflicts when multiple
+    // workers have write permissions to the same working directory.
+    const moduleOutputs: Record<string, string> = { ...(state?.moduleOutputs || {}) };
+    let failureCount = 0;
+
+    for (const { module, worker } of assignments) {
+      try {
         const assignment = getRoleAssignment(council, worker.id);
         const suppressPersona = assignment?.suppressPersona !== false;
 
@@ -366,29 +375,20 @@ export class CodingOrchestrator {
         // Create ledger entry
         this.createEntry(
           council.id, 'worker', worker.id,
-          isRevision ? 'module_output' : 'module_output',
+          'module_output',
           'implementing',
           `[Module: ${module.name}]\n\n${response.content}`,
           response.tokensUsed, response.latencyMs
         );
 
-        return { moduleName: module.name, output: response.content };
-      })
-    );
-
-    // Collect outputs
-    const moduleOutputs: Record<string, string> = { ...(state?.moduleOutputs || {}) };
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        moduleOutputs[result.value.moduleName] = result.value.output;
-      } else {
-        console.error('[CodingOrchestrator] Worker failed:', result.reason);
+        moduleOutputs[module.name] = response.content;
+      } catch (error) {
+        failureCount++;
+        console.error(`[CodingOrchestrator] Worker failed on module ${module.name}:`, error);
       }
     }
 
-    // Check if any workers failed
-    const failures = results.filter(r => r.status === 'rejected');
-    if (failures.length === results.length) {
+    if (failureCount === assignments.length) {
       throw new Error('All workers failed during implementation');
     }
 
@@ -627,11 +627,21 @@ export class CodingOrchestrator {
     persona: Persona,
     context: string
   ): Promise<AgentResponse> {
-    // Only pass MCP tools to worker phases where they're useful:
-    // - module_implementation, debug_fix (workers writing/fixing code)
-    // Skip tools for decomposition and code_review (already set skipTools: true inline).
+    // Scope tool access by phase:
+    //   Workers (module_implementation, debug_fix): full tools
+    //   Reviewers (code_review) & decomposition: read-only tools
+    //   Other phases: no tools
+    const BUILTIN_TOOLS = ['WebSearch', 'WebFetch'];
+    const READ_ONLY_TOOLS = [...BUILTIN_TOOLS, 'Read', 'Grep', 'Glob'];
+
     const toolPhases = ['module_implementation', 'debug_fix'];
-    if (!toolPhases.includes(context) && !invocation.skipTools) {
+    const readOnlyToolPhases = ['code_review', 'decomposition'];
+
+    if (toolPhases.includes(context)) {
+      // Workers keep default full tool access (no change needed)
+    } else if (readOnlyToolPhases.includes(context)) {
+      invocation = { ...invocation, allowedTools: READ_ONLY_TOOLS, skipTools: undefined };
+    } else if (!invocation.skipTools) {
       invocation = { ...invocation, skipTools: true };
     }
     console.log(`[CodingOrchestrator] invokeAgentSafe context=${context} skipTools=${invocation.skipTools} persona=${persona.name} provider=${persona.provider}`);
@@ -775,27 +785,86 @@ export class CodingOrchestrator {
     };
   }
 
-  private parseReviewVerdict(content: string): ReviewVerdict {
-    try {
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return {
-          verdict: parsed.verdict === 'needs_revision' ? 'needs_revision' : 'pass',
-          issues: Array.isArray(parsed.issues) ? parsed.issues.map((i: any) => ({
-            module: i.module || 'unknown',
-            severity: ['critical', 'major', 'minor'].includes(i.severity) ? i.severity : 'minor',
-            description: i.description || '',
-            suggestion: i.suggestion || '',
-          })) : [],
-          summary: parsed.summary || content,
-        };
+  /**
+   * Write a clean, formatted ledger entry from the parsed review verdict
+   * so revision workers see actionable feedback instead of raw LLM output.
+   */
+  private storeFormattedReviewFeedback(council: Council, verdict: ReviewVerdict): void {
+    if (verdict.issues.length === 0 && !verdict.summary) return;
+
+    const lines: string[] = [];
+    lines.push(`## Code Review: ${verdict.verdict.toUpperCase()}`);
+    lines.push('');
+    if (verdict.summary) {
+      lines.push(verdict.summary);
+      lines.push('');
+    }
+    if (verdict.issues.length > 0) {
+      lines.push('## Issues to Fix');
+      for (const issue of verdict.issues) {
+        lines.push(`- **[${issue.severity.toUpperCase()}] ${issue.module}**: ${issue.description}`);
+        if (issue.suggestion) {
+          lines.push(`  → Fix: ${issue.suggestion}`);
+        }
       }
-    } catch {
-      // Fall back to text parsing
     }
 
-    // Default: if content mentions "needs_revision" or "fail", treat as needing revision
+    const reviewer = getPersonaByRole(council, 'reviewer')[0];
+    const authorId = reviewer?.id || 'system';
+
+    // This entry replaces the raw code_review entry as the revision worker's
+    // feedback source (implementModules looks for the last code_review entry)
+    this.createEntry(
+      council.id, 'reviewer', authorId, 'code_review', 'code_reviewing',
+      lines.join('\n'), 0, 0
+    );
+  }
+
+  private parseReviewVerdict(content: string): ReviewVerdict {
+    // Try multiple JSON extraction strategies (tool-use output may wrap the JSON
+    // in markdown fences or place it after tool-call text)
+    const candidates: string[] = [];
+
+    // Strategy 1: markdown code block ```json ... ```
+    const fencedMatch = content.match(/```(?:json)?\s*\n?(\{[\s\S]*?\})\s*\n?```/);
+    if (fencedMatch) candidates.push(fencedMatch[1]);
+
+    // Strategy 2: last JSON object in the content (skip tool-use JSON earlier in the text)
+    const allJsonMatches = [...content.matchAll(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g)];
+    if (allJsonMatches.length > 0) {
+      // Work backwards — the review JSON is typically at the end
+      for (let i = allJsonMatches.length - 1; i >= 0; i--) {
+        candidates.push(allJsonMatches[i][0]);
+      }
+    }
+
+    // Strategy 3: greedy match (original fallback)
+    const greedyMatch = content.match(/\{[\s\S]*\}/);
+    if (greedyMatch) candidates.push(greedyMatch[0]);
+
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        // Must look like a review verdict (has verdict field)
+        if (parsed.verdict) {
+          return {
+            verdict: parsed.verdict === 'needs_revision' ? 'needs_revision' : 'pass',
+            issues: Array.isArray(parsed.issues) ? parsed.issues.map((i: any) => ({
+              module: i.module || 'unknown',
+              severity: ['critical', 'major', 'minor'].includes(i.severity) ? i.severity : 'minor',
+              description: i.description || '',
+              suggestion: i.suggestion || '',
+            })) : [],
+            summary: parsed.summary || content,
+          };
+        }
+      } catch {
+        // Not valid JSON or wrong shape, try next candidate
+      }
+    }
+
+    // Text fallback: if content mentions "needs_revision", use the full content as summary
+    // so the worker at least sees the reviewer's prose
     const lower = content.toLowerCase();
     if (lower.includes('needs_revision') || lower.includes('needs revision')) {
       return { verdict: 'needs_revision', issues: [], summary: content };

@@ -748,6 +748,8 @@ export interface DeliberationState {
   workDirectiveId?: string;           // Directive artifact ID
   currentOutputId?: string;           // Current output artifact ID
 
+  reDeliberationCount?: number;
+
   errorLog: string[];
 
   /** Summary generated on completion for the Decision panel */

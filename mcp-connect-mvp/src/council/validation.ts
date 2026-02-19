@@ -474,6 +474,7 @@ export const deliberationStateSchema = z.object({
   finalDecisionId: z.string().nullish().transform(v => v ?? undefined),
   workDirectiveId: z.string().nullish().transform(v => v ?? undefined),
   currentOutputId: z.string().nullish().transform(v => v ?? undefined),
+  reDeliberationCount: z.number().int().min(0).default(0).optional(),
   errorLog: z.array(z.string()),
   completionSummary: z.string().nullish().transform(v => v ?? undefined),
 });

@@ -74,6 +74,8 @@ import {
   buildManagerRoundSummaryPrompt,
   buildIndependentAnalysisPrompt,
   buildDeliberationResponsePrompt,
+  buildConsultantFinalPositionPrompt,
+  buildConsultantReviewPrompt,
   buildWorkerExecutionPrompt,
   buildWorkerRevisionPrompt,
   getMinimalWorkerSystemPrompt,
@@ -392,7 +394,17 @@ export class DeliberationOrchestrator {
             revisionCount++;
             console.log(`[Orchestrator] Revision requested (${revisionCount}/${maxRevisions})`);
           } else if (review.verdict === 're_deliberate') {
+            const reDelibCount = council.deliberationState?.reDeliberationCount || 0;
+            if (reDelibCount >= 1) {
+              console.log('[Orchestrator] Max re-deliberations reached — accepting with best effort');
+              this.transitionPhase(councilId, 'completed');
+              councilStore.setStatus(councilId, 'resolved');
+              break;
+            }
             console.log('[Orchestrator] Re-deliberation requested — looping back');
+            councilStore.updateDeliberationState(councilId, {
+              reDeliberationCount: reDelibCount + 1,
+            });
             // Phase transitions back to round_interactive, re-enter deliberation loop
             await this.continueDeliberation(councilId);
             return;
@@ -951,6 +963,41 @@ export class DeliberationOrchestrator {
   }
 
   // ==========================================================================
+  // Consultant Final Positions (before decision)
+  // ==========================================================================
+
+  private async collectConsultantFinalPositions(council: Council): Promise<string> {
+    const consultants = this.getConsultants(council);
+    if (consultants.length === 0) return '';
+
+    const contextContent = this.buildRoundNContext(council, false);
+    const positions: string[] = [];
+
+    for (const consultant of consultants) {
+      const assignment = getRoleAssignment(council, consultant.id);
+      const focusArea = assignment?.focusArea || consultant.predisposition.domain || 'general';
+      const systemPrompt = consultant.predisposition.systemPrompt;
+      const userMessage = buildConsultantFinalPositionPrompt(consultant, focusArea, contextContent);
+
+      this.config.onAgentThinkingStart?.(consultant);
+      const response = await this.invokeAgentSafe(
+        { personaId: consultant.id, systemPrompt, userMessage },
+        consultant,
+        'deliberation_response'  // reuse existing tool phase (READ_ONLY_TOOLS)
+      );
+      this.config.onAgentThinkingEnd?.(consultant);
+
+      positions.push(`[${consultant.name} - ${focusArea}]: ${response.content}`);
+
+      this.createEntry(council.id, 'consultant', consultant.id, 'response', 'deciding',
+        response.content, response.tokensUsed, response.latencyMs, undefined,
+        council.deliberationState?.currentRound);
+    }
+
+    return positions.join('\n\n');
+  }
+
+  // ==========================================================================
   // Phase 3: Decision
   // ==========================================================================
 
@@ -961,14 +1008,20 @@ export class DeliberationOrchestrator {
     this.validatePhase(council, 'deciding');
     const manager = this.getManager(council);
 
+    // Collect consultant final positions before manager decides
+    const consultantPositions = await this.collectConsultantFinalPositions(council);
+
     // Build context per Section 9.5
     const decisionContext = this.buildDecisionContext(council);
+    const fullContext = consultantPositions
+      ? `CONSULTANT FINAL POSITIONS:\n${consultantPositions}\n\n---\n\n${decisionContext}`
+      : decisionContext;
     const decisionCriteria = council.deliberation?.decisionCriteria;
     const expectedOutput = council.deliberation?.expectedOutput;
 
     // Build prompts
     const systemPrompt = manager.predisposition.systemPrompt;
-    const userMessage = buildManagerDecisionPrompt(decisionContext, decisionCriteria, expectedOutput);
+    const userMessage = buildManagerDecisionPrompt(fullContext, decisionCriteria, expectedOutput);
 
     const response = await this.invokeAgentSafe(
       { personaId: manager.id, systemPrompt, userMessage },
@@ -1178,6 +1231,47 @@ export class DeliberationOrchestrator {
   }
 
   // ==========================================================================
+  // Consultant Reviews (before manager verdict)
+  // ==========================================================================
+
+  private async collectConsultantReviews(council: Council): Promise<string> {
+    const consultants = this.getConsultants(council);
+    if (consultants.length === 0) return '';
+
+    const output = getLatestOutput(council.id);
+    const directive = getDirective(council.id);
+    if (!output || !directive) return '';
+
+    const expectedOutput = council.deliberation?.expectedOutput;
+    const reviews: string[] = [];
+
+    for (const consultant of consultants) {
+      const assignment = getRoleAssignment(council, consultant.id);
+      const focusArea = assignment?.focusArea || consultant.predisposition.domain || 'general';
+      const systemPrompt = consultant.predisposition.systemPrompt;
+      const userMessage = buildConsultantReviewPrompt(
+        consultant, focusArea, output.content, directive.content, expectedOutput
+      );
+
+      this.config.onAgentThinkingStart?.(consultant);
+      const response = await this.invokeAgentSafe(
+        { personaId: consultant.id, systemPrompt, userMessage },
+        consultant,
+        'deliberation_response'  // READ_ONLY_TOOLS — can read files, search web
+      );
+      this.config.onAgentThinkingEnd?.(consultant);
+
+      reviews.push(`[${consultant.name} - ${focusArea}]: ${response.content}`);
+
+      this.createEntry(council.id, 'consultant', consultant.id, 'review', 'reviewing',
+        response.content, response.tokensUsed, response.latencyMs, undefined,
+        council.deliberationState?.currentRound);
+    }
+
+    return reviews.join('\n\n');
+  }
+
+  // ==========================================================================
   // Phase 6: Review
   // ==========================================================================
 
@@ -1195,6 +1289,9 @@ export class DeliberationOrchestrator {
       throw new Error('Missing directive or output for review');
     }
 
+    // Collect consultant reviews first
+    const consultantReviews = await this.collectConsultantReviews(council);
+
     // Check if worker had write permissions (affects review criteria)
     const worker = this.getWorker(council);
     const workerAssignment = getRoleAssignment(council, worker.id);
@@ -1211,6 +1308,7 @@ export class DeliberationOrchestrator {
       expectedOutput,
       hasWritePermissions,
       stepType,
+      consultantReviews,
     );
 
     const response = await this.invokeAgentSafe(
@@ -1853,12 +1951,14 @@ export class DeliberationOrchestrator {
     const FULL_TOOLS = [...BUILTIN_TOOLS, 'Edit', 'Write', 'Read', 'Bash', 'Glob', 'Grep'];
     const PLAN_TOOLS = [...BUILTIN_TOOLS, 'Read', 'Write', 'Glob'];
     const READ_ONLY_TOOLS = [...BUILTIN_TOOLS, 'Read', 'Grep', 'Glob'];
+    const MANAGER_TOOLS = [...BUILTIN_TOOLS, 'Read', 'Glob', 'Grep', 'Bash'];
 
     const council = this.activeCouncilId ? councilStore.get(this.activeCouncilId) : null;
     const stepType = council?.deliberation?.stepType;
 
     const workerToolPhases = ['execution', 'revision', 'debug'];
     const readOnlyToolPhases = ['independent_analysis', 'deliberation_response', 'code_review'];
+    const managerToolPhases = ['problem_framing', 'directive', 'review'];
 
     if (workerToolPhases.includes(context)) {
       // Planning workers get limited tools (no Edit, Bash, Grep — prevents code writing)
@@ -1870,6 +1970,8 @@ export class DeliberationOrchestrator {
       }
     } else if (readOnlyToolPhases.includes(context)) {
       invocation = { ...invocation, allowedTools: READ_ONLY_TOOLS };
+    } else if (managerToolPhases.includes(context)) {
+      invocation = { ...invocation, allowedTools: MANAGER_TOOLS };
     } else if (!invocation.skipTools) {
       invocation = { ...invocation, skipTools: true };
     }
