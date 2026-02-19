@@ -45,6 +45,7 @@ import {
 } from './prompts';
 
 import { detectTestCommand } from '../pipeline/test-detect';
+import { detectBuildCommand } from '../pipeline/build-detect';
 
 // Re-use the same agent invocation types from deliberation-orchestrator
 export interface AgentInvocation {
@@ -130,7 +131,12 @@ export class CodingOrchestrator {
     const maxReviewCycles = council.deliberation?.maxReviewCycles ?? 2;
     const maxDebugCycles = council.deliberation?.maxDebugCycles ?? 3;
 
+    let snapshotSha: string | null = null;
+
     try {
+      // Git snapshot before any changes
+      snapshotSha = await this.createGitSnapshot(council);
+
       // Phase 1: Decompose
       this.transitionPhase(council.id, 'decomposing');
       await this.decomposeSpec(council, spec);
@@ -175,15 +181,22 @@ export class CodingOrchestrator {
         council = councilStore.get(council.id)!;
       }
 
-      // Phase 4: Test loop
+      // Phase 4: Test loop (build + test verification)
       council = councilStore.get(council.id)!;
+      const decomposition = council.deliberationState?.moduleDecomposition;
+      const buildCommand = decomposition?.buildCommand || await this.autoDetectBuildCommand(council);
       const testCommand = council.deliberation?.testCommand || await this.autoDetectTestCommand(council);
 
-      if (testCommand) {
+      // Combine build + test into one verification command
+      const verifyCommand = buildCommand && testCommand
+        ? `${buildCommand} && ${testCommand}`
+        : buildCommand || testCommand;
+
+      if (verifyCommand) {
         let debugCycleCount = 0;
         while (true) {
           this.transitionPhase(council.id, 'testing');
-          const testResult = await this.runTests(council, testCommand);
+          const testResult = await this.runTests(council, verifyCommand);
 
           if (testResult.passed) {
             console.log('[CodingOrchestrator] Tests passed!');
@@ -204,7 +217,7 @@ export class CodingOrchestrator {
           council = councilStore.get(council.id)!;
         }
       } else {
-        console.log('[CodingOrchestrator] No test command found — skipping test phase');
+        console.log('[CodingOrchestrator] No build or test command found — skipping verification phase');
       }
 
       // Phase 5: Merge outputs and complete
@@ -242,6 +255,10 @@ export class CodingOrchestrator {
           0, 0
         );
       } catch { /* best effort */ }
+
+      if (snapshotSha) {
+        console.log(`[CodingOrchestrator] Pre-pipeline snapshot: ${snapshotSha}. Rollback: git reset --hard ${snapshotSha}`);
+      }
 
       this.transitionPhase(council.id, 'failed');
       throw error;
@@ -606,6 +623,64 @@ export class CodingOrchestrator {
     return null;
   }
 
+  private async autoDetectBuildCommand(council: Council): Promise<string | null> {
+    const workingDir = council.deliberation?.workingDirectory;
+    if (!workingDir) return null;
+
+    try {
+      const detected = await detectBuildCommand(workingDir, this.config.readFile);
+      if (detected) {
+        console.log(`[CodingOrchestrator] Auto-detected build command: ${detected.command} (${detected.framework})`);
+        return detected.command;
+      }
+    } catch (error) {
+      console.warn('[CodingOrchestrator] Build detection failed:', error);
+    }
+    return null;
+  }
+
+  /**
+   * Create a git snapshot before implementation begins so the user can
+   * roll back if workers destroy the codebase.
+   * Returns the commit SHA, or null if not in a git repo / no runCommand.
+   */
+  private async createGitSnapshot(council: Council): Promise<string | null> {
+    const workingDir = council.deliberation?.workingDirectory;
+    if (!workingDir || !this.config.runCommand) return null;
+
+    try {
+      // Check if inside a git repo
+      const check = await this.config.runCommand('git rev-parse --is-inside-work-tree', workingDir);
+      if (check.exit_code !== 0) return null;
+
+      // Stage everything and commit (allow-empty in case there are no changes)
+      await this.config.runCommand('git add -A', workingDir);
+      await this.config.runCommand(
+        'git commit -m "kondi: pre-pipeline snapshot" --allow-empty',
+        workingDir
+      );
+
+      // Capture SHA
+      const shaResult = await this.config.runCommand('git rev-parse HEAD', workingDir);
+      const sha = shaResult.stdout.trim();
+
+      console.log(`[CodingOrchestrator] Git snapshot created: ${sha}`);
+
+      // Create ledger entry
+      const manager = this.getManager(council);
+      this.createEntry(
+        council.id, 'manager', manager.id, 'decomposition', 'decomposing',
+        `Pre-pipeline git snapshot: ${sha}\nRollback: git reset --hard ${sha}`,
+        0, 0
+      );
+
+      return sha;
+    } catch (error) {
+      console.warn('[CodingOrchestrator] Git snapshot failed:', error);
+      return null;
+    }
+  }
+
   private transitionPhase(councilId: string, to: DeliberationPhase): void {
     const council = councilStore.get(councilId);
     const from = council?.deliberationState?.currentPhase || 'created';
@@ -748,6 +823,7 @@ export class CodingOrchestrator {
     }>;
     integrationNotes: string;
     testStrategy: string;
+    buildCommand?: string;
   } {
     try {
       const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -764,6 +840,7 @@ export class CodingOrchestrator {
             })),
             integrationNotes: parsed.integrationNotes || '',
             testStrategy: parsed.testStrategy || '',
+            buildCommand: parsed.buildCommand || '',
           };
         }
       }
@@ -782,6 +859,7 @@ export class CodingOrchestrator {
       }],
       integrationNotes: '',
       testStrategy: '',
+      buildCommand: '',
     };
   }
 

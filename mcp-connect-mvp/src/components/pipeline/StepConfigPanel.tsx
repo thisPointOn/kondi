@@ -225,7 +225,6 @@ function councilPersonaToPipelinePersona(
     focusArea: role.focusArea,
     startingStance: role.stance,
     suppressPersona: role.suppressPersona,
-    allowedServerIds: persona.allowedServerIds,
   };
 }
 
@@ -346,8 +345,8 @@ const DEFAULT_AVAIL: Record<string, boolean> = { 'anthropic-cli': true, 'anthrop
 
 function defaultPlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const consultant = resolveDefaultModel('gpt-5.1-codex-mini', 'openai-cli', avail);
-  const worker = resolveDefaultModel('claude-sonnet-4-20250514', 'anthropic-cli', avail);
+  const consultant = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
+  const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'planning',
     councilSetup: {
@@ -400,10 +399,10 @@ After executing, report: what you did, what succeeded, what failed, and any rema
 }
 
 function defaultCodingConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
-  const manager = resolveDefaultModel('claude-sonnet-4-20250514', 'anthropic-cli', avail);
+  const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   const dev1 = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const dev2 = resolveDefaultModel('gpt-5.1-codex-mini', 'openai-cli', avail);
-  const reviewer = resolveDefaultModel('gpt-5.1-codex-mini', 'openai-cli', avail);
+  const dev2 = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
+  const reviewer = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
   return {
     type: 'coding',
     councilSetup: {

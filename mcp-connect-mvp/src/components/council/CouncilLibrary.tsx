@@ -51,7 +51,7 @@ export default function CouncilLibrary({
     // Resolve models based on available providers (CLI preferred, API fallback)
     const avail = configuredProviders || { 'anthropic-cli': true, 'anthropic-api': false, 'openai-cli': true, 'openai-api': false, deepseek: false };
     const managerModel = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-    const workerModel = resolveDefaultModel('gpt-5.1-codex-mini', 'openai-cli', avail);
+    const workerModel = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
 
     // Create default personas: Manager (Claude, suppressed), Worker (OpenAI, suppressed), Consultants (mixed)
     const managerPersona: Persona = {
@@ -100,7 +100,7 @@ export default function CouncilLibrary({
           id: crypto.randomUUID(),
           name: 'Optimist',
           provider: 'openai-cli',
-          model: 'gpt-5.1-codex-mini',
+          model: 'gpt-5.1-codex-max',
           color: '#16A34A',
           avatar: '🌟',
           predisposition: {

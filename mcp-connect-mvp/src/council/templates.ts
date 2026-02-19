@@ -31,7 +31,7 @@ questions. Point out what others are missing. Be direct but not dismissive.`,
   {
     name: 'Optimist',
     defaultProvider: 'openai-cli',
-    defaultModel: 'gpt-5.1-codex-mini',
+    defaultModel: 'gpt-5.1-codex-max',
     color: '#16A34A',
     avatar: '🌟',
     predisposition: {
@@ -48,8 +48,8 @@ make it happen. Inspire confidence and momentum.`,
   },
   {
     name: 'Pragmatist',
-    defaultProvider: 'anthropic-cli',
-    defaultModel: 'claude-sonnet-4-20250514',
+    defaultProvider: 'openai-cli',
+    defaultModel: 'gpt-5.1-codex-max',
     color: '#CA8A04',
     avatar: '⚖️',
     predisposition: {
@@ -85,7 +85,7 @@ are warranted. Paint pictures of possible futures.`,
   {
     name: 'Customer Voice',
     defaultProvider: 'anthropic-cli',
-    defaultModel: 'claude-sonnet-4-20250514',
+    defaultModel: 'claude-sonnet-4-5-20250929',
     color: '#0891B2',
     avatar: '👥',
     predisposition: {
@@ -110,7 +110,8 @@ export const technicalTemplates: PresetPersona[] = [
   {
     name: 'Security Hawk',
     defaultProvider: 'openai-cli',
-    defaultModel: 'gpt-5.1-codex-mini',
+    defaultModel: 'gpt-5.1-codex-max',
+
     color: '#B91C1C',
     avatar: '🦅',
     predisposition: {
@@ -146,7 +147,7 @@ throughput, and resource efficiency. You push for benchmarks and data.`,
   {
     name: 'Simplicity Advocate',
     defaultProvider: 'anthropic-cli',
-    defaultModel: 'claude-sonnet-4-20250514',
+    defaultModel: 'claude-sonnet-4-5-20250929',
     color: '#059669',
     avatar: '🎯',
     predisposition: {
@@ -163,8 +164,8 @@ this? Can this be simpler?" You value readability over cleverness.`,
   },
   {
     name: 'Scale Thinker',
-    defaultProvider: 'openai-cli',
-    defaultModel: 'gpt-5.1-codex-mini',
+    defaultProvider: 'anthropic-cli',
+    defaultModel: 'claude-sonnet-4-5-20250929',
     color: '#2563EB',
     avatar: '📈',
     predisposition: {
@@ -190,7 +191,7 @@ export const creativeTemplates: PresetPersona[] = [
   {
     name: 'Wild Card',
     defaultProvider: 'openai-cli',
-    defaultModel: 'gpt-5.1-codex-mini',
+    defaultModel: 'gpt-5.1-codex-max',
     color: '#EC4899',
     avatar: '🃏',
     temperature: 0.9,
@@ -209,7 +210,7 @@ creativity through provocation.`,
   {
     name: 'Editor',
     defaultProvider: 'anthropic-cli',
-    defaultModel: 'claude-sonnet-4-20250514',
+    defaultModel: 'claude-sonnet-4-5-20250929',
     color: '#6B7280',
     avatar: '✂️',
     predisposition: {
@@ -225,8 +226,8 @@ and strengthen. You identify redundancy, vagueness, and weakness. You ask:
   },
   {
     name: 'Audience Advocate',
-    defaultProvider: 'anthropic-cli',
-    defaultModel: 'claude-sonnet-4-20250514',
+    defaultProvider: 'openai-cli',
+    defaultModel: 'gpt-5.1-codex-max',
     color: '#8B5CF6',
     avatar: '👁️',
     predisposition: {
@@ -250,7 +251,8 @@ export const domainTemplates: PresetPersona[] = [
   {
     name: 'Finance Mind',
     defaultProvider: 'openai-cli',
-    defaultModel: 'gpt-5.1-codex-mini',
+    defaultModel: 'gpt-5.1-codex-max',
+
     color: '#14532D',
     avatar: '💰',
     predisposition: {

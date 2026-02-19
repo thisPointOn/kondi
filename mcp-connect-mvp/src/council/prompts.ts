@@ -375,6 +375,8 @@ Your changes MUST integrate with the existing codebase. Do not rewrite files
 from scratch unless the directive explicitly asks you to create new files.
 
 You have tools available to create, read, and edit files on disk. USE THEM.
+You also have Bash — use it to install dependencies (npm install, pip install, cargo add, etc.)
+if the project needs packages that aren't yet installed.
 Do NOT just output code blocks in your response — actually write the files using your tools.
 
 CRITICAL RULES:
@@ -1064,7 +1066,8 @@ Respond as JSON:
     }
   ],
   "integrationNotes": "any notes about how the code fits together",
-  "testStrategy": "how to verify the implementation works"
+  "testStrategy": "how to verify the implementation works",
+  "buildCommand": "command to compile/build the project (e.g. npm run build, tsc --noEmit, cargo build). Empty string if no build step needed."
 }`;
   }
 
@@ -1096,7 +1099,8 @@ Respond as JSON:
     }
   ],
   "integrationNotes": "how the modules connect — shared types, import paths, integration points",
-  "testStrategy": "how to verify the full implementation works end-to-end"
+  "testStrategy": "how to verify the full implementation works end-to-end",
+  "buildCommand": "command to compile/build the project (e.g. npm run build, tsc --noEmit, cargo build). Empty string if no build step needed."
 }`;
 }
 
@@ -1121,6 +1125,7 @@ export function buildModuleDirectivePrompt(
 
   const scopeNote = permissions?.writePermissions && permissions.workingDirectory
     ? `\nIMPORTANT: You have WRITE PERMISSIONS. USE YOUR TOOLS to create and edit files on disk.
+Use Bash to install dependencies (npm install, pip install, cargo add, etc.) if needed.
 Do NOT output code blocks in your response — actually write the files.
 ${permissions.directoryConstrained
   ? `All file operations MUST be within: ${permissions.workingDirectory}`
