@@ -28,7 +28,6 @@ export default function CouncilLibrary({
   const [councils, setCouncils] = useState<Council[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newCouncilName, setNewCouncilName] = useState('');
-  const [newCouncilTopic, setNewCouncilTopic] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Load councils
@@ -43,13 +42,14 @@ export default function CouncilLibrary({
 
   const filteredCouncils = councils
     .filter((c) => !c.pipelineId)  // Hide pipeline-generated councils
-    .filter((c) =>
-      c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.topic.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    .filter((c) => {
+      const q = searchQuery.toLowerCase();
+      return c.name.toLowerCase().includes(q) ||
+        (c.deliberation?.savedProblem || '').toLowerCase().includes(q);
+    });
 
   const handleCreate = () => {
-    if (!newCouncilName.trim() || !newCouncilTopic.trim()) return;
+    if (!newCouncilName.trim()) return;
 
     // Resolve models based on available providers (CLI preferred, API fallback)
     const avail = configuredProviders || { 'anthropic-cli': true, 'anthropic-api': false, 'openai-cli': true, 'openai-api': false, deepseek: false };
@@ -62,7 +62,7 @@ export default function CouncilLibrary({
 
     const council = createCouncilFromSetup({
       name: newCouncilName.trim(),
-      topic: newCouncilTopic.trim(),
+      topic: newCouncilName.trim(),  // Topic auto-set from name; updated when task is defined
       personas: [
         {
           name: 'Manager',
@@ -112,7 +112,6 @@ export default function CouncilLibrary({
 
     setShowCreateModal(false);
     setNewCouncilName('');
-    setNewCouncilTopic('');
     onCouncilCreate(council);
   };
 
@@ -238,7 +237,9 @@ export default function CouncilLibrary({
                 </div>
               </div>
 
-              <p className="council-topic">{council.topic}</p>
+              {(council.deliberation?.savedProblem || council.topic) !== council.name && (
+                <p className="council-topic">{council.deliberation?.savedProblem || council.topic}</p>
+              )}
 
               <div className="council-personas-preview">
                 {council.personas
@@ -359,18 +360,8 @@ export default function CouncilLibrary({
               />
             </div>
 
-            <div className="form-group">
-              <label>Topic</label>
-              <textarea
-                value={newCouncilTopic}
-                onChange={(e) => setNewCouncilTopic(e.target.value)}
-                placeholder="What should the council deliberate on?"
-                rows={3}
-              />
-            </div>
-
             <p className="create-hint">
-              Starts with Manager, Worker, and Optimist. Add more personas in Setup.
+              Starts with Manager, Worker, and Optimist. Configure task and personas in Setup.
             </p>
 
             <div className="modal-actions">
@@ -380,7 +371,7 @@ export default function CouncilLibrary({
               <button
                 className="create-btn"
                 onClick={handleCreate}
-                disabled={!newCouncilName.trim() || !newCouncilTopic.trim()}
+                disabled={!newCouncilName.trim()}
               >
                 Create Council
               </button>

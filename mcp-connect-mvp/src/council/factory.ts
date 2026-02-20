@@ -20,6 +20,8 @@ import { councilStore } from './store';
 export interface CouncilSetup {
   name: string;
   topic?: string;
+  /** Standing instructions — what this council should do (the task/directive) */
+  task?: string;
   personas: PipelinePersona[];
   maxRounds?: number;                 // Default: 4
   maxRevisions?: number;              // Default: 3
@@ -132,6 +134,7 @@ export function createCouncilFromSetup(setup: CouncilSetup): Council {
       minRounds: 1,
       maxRounds: setup.maxRounds ?? 4,
       maxRevisions: setup.maxRevisions ?? 3,
+      savedProblem: setup.task,
       expectedOutput: setup.expectedOutput,
       decisionCriteria: setup.decisionCriteria,
       workingDirectory: setup.workingDirectory,

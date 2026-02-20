@@ -176,7 +176,7 @@ export const councilSchema = z.object({
   name: z.string().min(1).max(100),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
-  topic: z.string().min(5, 'Topic must be at least 5 characters'),
+  topic: z.string().min(1),
   sharedContext: sharedContextSchema,
   personas: z.array(personaSchema).min(1, 'At least 1 persona required'),
   orchestration: orchestrationConfigSchema,

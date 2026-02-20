@@ -31,10 +31,10 @@ function getStepIcon(type: StepConfig['type']): string {
 function getStepSummary(step: PipelineStep): string {
   if (isCouncilType(step.config.type)) {
     // All non-gate types now use CouncilStepConfig with councilSetup
-    const c = step.config as { councilSetup?: { personas: unknown[] }; outputSelection?: string };
+    const c = step.config as { councilSetup?: { personas: unknown[] } };
     if (c.councilSetup) {
       const count = c.councilSetup.personas.length;
-      return `${count} persona${count !== 1 ? 's' : ''} \u00B7 ${c.outputSelection || 'output'}`;
+      return `${count} persona${count !== 1 ? 's' : ''}`;
     }
     // Legacy LlmStepConfig fallback
     return (step.config as { model?: string }).model || step.config.type;
