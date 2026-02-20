@@ -130,7 +130,7 @@ export class CodingOrchestrator {
     council = councilStore.get(council.id) || council;
 
     const maxReviewCycles = council.deliberation?.maxReviewCycles ?? 2;
-    const maxDebugCycles = council.deliberation?.maxDebugCycles ?? 3;
+    const maxDebugCycles = council.deliberation?.maxDebugCycles ?? 5;
 
     let snapshotSha: string | null = null;
 
@@ -588,43 +588,86 @@ export class CodingOrchestrator {
       throw new Error('No workers available for debugging');
     }
 
-    const debugger_ = workers[0]; // Use first worker as debugger
     const state = council.deliberationState;
-    const moduleOutputs = state?.moduleOutputs || {};
+    const decomposition = state?.moduleDecomposition;
+    const moduleOutputs = { ...(state?.moduleOutputs || {}) };
 
-    // Collect all current code
-    const allCode = Object.entries(moduleOutputs)
-      .map(([name, output]) => `=== Module: ${name} ===\n${output}`)
-      .join('\n\n');
+    if (decomposition && decomposition.modules.length > 0) {
+      // Route errors to each module's assigned worker sequentially
+      for (const module of decomposition.modules) {
+        const worker = workers.find(w => w.id === module.assignedWorkerId) || workers[0];
+        const assignment = getRoleAssignment(council, worker.id);
+        const suppressPersona = assignment?.suppressPersona !== false;
 
-    const assignment = getRoleAssignment(council, debugger_.id);
-    const suppressPersona = assignment?.suppressPersona !== false;
+        const workerPermissions: WorkerPermissions = {
+          writePermissions: assignment?.writePermissions,
+          workingDirectory: council.deliberation?.workingDirectory,
+          directoryConstrained: council.deliberation?.directoryConstrained,
+        };
 
-    const workerPermissions: WorkerPermissions = {
-      writePermissions: assignment?.writePermissions,
-      workingDirectory: council.deliberation?.workingDirectory,
-      directoryConstrained: council.deliberation?.directoryConstrained,
-    };
+        const systemPrompt = suppressPersona
+          ? getMinimalWorkerSystemPrompt(workerPermissions)
+          : worker.predisposition.systemPrompt;
 
-    const systemPrompt = suppressPersona
-      ? getMinimalWorkerSystemPrompt(workerPermissions)
-      : debugger_.predisposition.systemPrompt;
+        const userMessage = buildDebugFixPrompt(
+          testOutput, moduleOutputs[module.name] || '', spec,
+          workerPermissions, module.name, module.files
+        );
 
-    const userMessage = buildDebugFixPrompt(testOutput, allCode, spec, workerPermissions);
+        console.log(`[CodingOrchestrator] Worker ${worker.name} fixing module ${module.name}`);
+        this.config.onAgentThinkingStart?.(worker);
 
-    console.log(`[CodingOrchestrator] Debugger ${debugger_.name} fixing test failures`);
+        const response = await this.invokeAgentSafe(
+          { personaId: worker.id, systemPrompt, userMessage },
+          worker,
+          'debug_fix'
+        );
 
-    const response = await this.invokeAgentSafe(
-      { personaId: debugger_.id, systemPrompt, userMessage },
-      debugger_,
-      'debug_fix'
-    );
+        moduleOutputs[module.name] = response.content;
 
-    // Create ledger entry
-    this.createEntry(
-      council.id, 'worker', debugger_.id, 'debug_fix', 'debugging',
-      response.content, response.tokensUsed, response.latencyMs
-    );
+        this.createEntry(
+          council.id, 'worker', worker.id, 'debug_fix', 'debugging',
+          `[Module: ${module.name}]\n\n${response.content}`,
+          response.tokensUsed, response.latencyMs
+        );
+      }
+
+      councilStore.updateDeliberationState(council.id, { moduleOutputs });
+    } else {
+      // Fallback: single debugger (no decomposition available)
+      const debugger_ = workers[0];
+      const allCode = Object.entries(moduleOutputs)
+        .map(([name, output]) => `=== Module: ${name} ===\n${output}`)
+        .join('\n\n');
+
+      const assignment = getRoleAssignment(council, debugger_.id);
+      const suppressPersona = assignment?.suppressPersona !== false;
+
+      const workerPermissions: WorkerPermissions = {
+        writePermissions: assignment?.writePermissions,
+        workingDirectory: council.deliberation?.workingDirectory,
+        directoryConstrained: council.deliberation?.directoryConstrained,
+      };
+
+      const systemPrompt = suppressPersona
+        ? getMinimalWorkerSystemPrompt(workerPermissions)
+        : debugger_.predisposition.systemPrompt;
+
+      const userMessage = buildDebugFixPrompt(testOutput, allCode, spec, workerPermissions);
+
+      console.log(`[CodingOrchestrator] Debugger ${debugger_.name} fixing test failures`);
+
+      const response = await this.invokeAgentSafe(
+        { personaId: debugger_.id, systemPrompt, userMessage },
+        debugger_,
+        'debug_fix'
+      );
+
+      this.createEntry(
+        council.id, 'worker', debugger_.id, 'debug_fix', 'debugging',
+        response.content, response.tokensUsed, response.latencyMs
+      );
+    }
   }
 
   // ==========================================================================

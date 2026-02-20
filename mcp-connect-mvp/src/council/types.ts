@@ -715,7 +715,7 @@ export interface DeliberationConfig {
 
   // Coding orchestrator configuration
   testCommand?: string;
-  maxDebugCycles?: number;     // default 3
+  maxDebugCycles?: number;     // default 5
   maxReviewCycles?: number;    // default 2
 
   /** MCP servers this step/council can access (undefined = all servers) */

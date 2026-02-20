@@ -78,6 +78,7 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
         const filteredTools = invocation.skipTools
           ? undefined
           : filterToolsByServerIds(availableTools, invocation.allowedServerIds);
+        const isWorker = persona.preferredDeliberationRole === 'worker';
         const result = await callLLM({
           model: persona.model,
           provider: persona.provider,
@@ -89,6 +90,7 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
           temperature: persona.temperature,
           workingDir: tauriPlatform.getWorkingDir() || undefined,
           availableTools: filteredTools,
+          timeoutMs: isWorker ? 1_800_000 : undefined, // 30 min for workers
         });
         return { ...result, sessionId: result.sessionId };
       },

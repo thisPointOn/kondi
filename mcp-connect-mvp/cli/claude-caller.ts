@@ -25,14 +25,17 @@ export async function callClaude(opts: {
   allowedTools?: string[];
   skipTools?: boolean;
   conversationId?: string;
+  timeoutMs?: number;
 }): Promise<CallerResult> {
   const start = Date.now();
 
   const args: string[] = [];
 
   // Resume existing conversation or start new one
+  // --print is always required: it enables non-interactive mode (auto-accepts tool use)
+  // and is required for --output-format to work.
   if (opts.conversationId) {
-    args.push('--resume', opts.conversationId, '--verbose', '--output-format', 'stream-json');
+    args.push('--resume', opts.conversationId, '--print', '--verbose', '--output-format', 'stream-json');
   } else {
     args.push('--print', '--verbose', '--output-format', 'stream-json');
   }
@@ -67,6 +70,14 @@ export async function callClaude(opts: {
       env: { ...process.env, CLAUDECODE: undefined },
     });
 
+    // Timeout: kill child process if it exceeds the limit
+    const timeoutMs = opts.timeoutMs || 600_000;
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); }, 5_000);
+      reject(new Error(`Claude CLI timed out after ${Math.round(timeoutMs / 1000)}s`));
+    }, timeoutMs);
+
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
@@ -74,6 +85,7 @@ export async function callClaude(opts: {
     child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
 
     child.on('close', (code) => {
+      clearTimeout(timer);
       const rawStdout = Buffer.concat(stdoutChunks).toString('utf-8');
       const rawStderr = Buffer.concat(stderrChunks).toString('utf-8');
       const latencyMs = Date.now() - start;

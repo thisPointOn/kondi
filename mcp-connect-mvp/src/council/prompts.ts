@@ -1257,6 +1257,8 @@ export function buildDebugFixPrompt(
   allCode: string,
   spec: string,
   permissions?: WorkerPermissions,
+  moduleName?: string,
+  moduleFiles?: string[],
 ): string {
   const scopeNote = permissions?.writePermissions && permissions.workingDirectory
     ? `\nIMPORTANT: You have WRITE PERMISSIONS. USE YOUR TOOLS to edit the files on disk.
@@ -1266,11 +1268,17 @@ ${permissions.directoryConstrained
   : `Working directory: ${permissions.workingDirectory}`}\n`
     : `\nYou do NOT have write permissions. Output all fixes in labeled code blocks.\n`;
 
-  return `You are a debugger. Tests are failing. Fix the code to make them pass.
+  const moduleContext = moduleName
+    ? `\n## YOUR MODULE: ${moduleName}
+${moduleFiles?.length ? `Files: ${moduleFiles.join(', ')}` : ''}
+Focus your fixes on this module's code. Other modules are handled by other workers.\n`
+    : '';
+
+  return `You are a debugger. Tests/build are failing. Fix the code to make them pass.
 
 ## TEST OUTPUT (failures)
 ${testOutput}
-
+${moduleContext}
 ## CURRENT CODE
 ${allCode}
 

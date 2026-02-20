@@ -18,6 +18,7 @@ export async function callCodex(opts: {
   workingDir?: string;
   skipTools?: boolean;
   conversationId?: string;
+  timeoutMs?: number;
 }): Promise<CallerResult> {
   const start = Date.now();
 
@@ -74,6 +75,14 @@ export async function callCodex(opts: {
       },
     });
 
+    // Timeout: kill process group if it exceeds the limit
+    const timeoutMs = opts.timeoutMs || 600_000;
+    const timer = setTimeout(() => {
+      try { process.kill(-child.pid!, 'SIGTERM'); } catch { /* already exited */ }
+      setTimeout(() => { try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* */ } }, 5_000);
+      reject(new Error(`Codex CLI timed out after ${Math.round(timeoutMs / 1000)}s`));
+    }, timeoutMs);
+
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
 
@@ -81,6 +90,7 @@ export async function callCodex(opts: {
     child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
 
     child.on('close', (code) => {
+      clearTimeout(timer);
       const rawStdout = Buffer.concat(stdoutChunks).toString('utf-8');
       const rawStderr = Buffer.concat(stderrChunks).toString('utf-8');
       const latencyMs = Date.now() - start;

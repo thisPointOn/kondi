@@ -416,7 +416,7 @@ function defaultCodingConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): Co
       maxRounds: 4,
       maxRevisions: 3,
       maxReviewCycles: 2,
-      maxDebugCycles: 3,
+      maxDebugCycles: 5,
       expectedOutput: 'Working code implementation that meets the requirements and passes review.',
       allowedServerIds: [],
     },
@@ -900,8 +900,8 @@ function CouncilConfig({
                 type="number"
                 min={0}
                 max={10}
-                value={config.councilSetup.maxDebugCycles ?? 3}
-                onChange={(e) => updateSetup({ maxDebugCycles: parseInt(e.target.value) || 3 })}
+                value={config.councilSetup.maxDebugCycles ?? 5}
+                onChange={(e) => updateSetup({ maxDebugCycles: parseInt(e.target.value) || 5 })}
               />
             </div>
             <div className="config-field">

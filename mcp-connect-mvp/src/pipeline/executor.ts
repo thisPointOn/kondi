@@ -481,7 +481,7 @@ export class PipelineExecutor {
         stepType: config.type,
         // Coding orchestrator config
         testCommand: config.councilSetup.testCommand,
-        maxDebugCycles: config.councilSetup.maxDebugCycles ?? 3,
+        maxDebugCycles: config.councilSetup.maxDebugCycles ?? 5,
         maxReviewCycles: config.councilSetup.maxReviewCycles ?? 2,
         // MCP tool filtering
         allowedServerIds: config.councilSetup.allowedServerIds,

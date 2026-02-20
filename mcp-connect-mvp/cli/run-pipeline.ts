@@ -36,6 +36,7 @@ function callLLM(opts: {
   allowedTools?: string[];
   skipTools?: boolean;
   conversationId?: string;
+  timeoutMs?: number;
 }) {
   if (opts.model && isOpenAIModel(opts.model)) {
     return callCodex(opts);
@@ -488,6 +489,7 @@ async function main() {
       const allowedTools = invocation.allowedServerIds
         ? ['Edit', 'Write', 'Read', 'Bash', 'Glob', 'Grep', ...invocation.allowedServerIds.map(id => `mcp__${id}`)]
         : undefined;
+      const isWorker = persona.preferredDeliberationRole === 'worker';
       const result = await callLLM({
         systemPrompt: invocation.systemPrompt,
         userMessage: invocation.userMessage,
@@ -496,6 +498,7 @@ async function main() {
         skipTools: invocation.skipTools,
         conversationId: invocation.conversationId,
         allowedTools,
+        timeoutMs: isWorker ? 1_800_000 : undefined, // 30 min for workers
       });
       log(C.cyan, persona.name, `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);
       return { ...result, sessionId: result.sessionId };

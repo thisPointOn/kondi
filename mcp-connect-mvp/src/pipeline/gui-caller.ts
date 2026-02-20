@@ -38,6 +38,8 @@ export interface CallLLMOptions {
   temperature?: number;
   /** MCP tools from GUI-connected servers (passed through to API providers) */
   availableTools?: Map<string, { serverId: string; tools: MCPTool[] }>;
+  /** Timeout in ms for CLI callers (default: 600_000 / 10 min) */
+  timeoutMs?: number;
 }
 
 interface ClaudeCommandResult {
@@ -70,8 +72,10 @@ export async function callClaudeGui(opts: CallLLMOptions): Promise<CallerResult>
   const args: string[] = [];
 
   // Resume existing conversation or start new one
+  // --print is always required: it enables non-interactive mode (auto-accepts tool use)
+  // and is required for --output-format to work.
   if (opts.conversationId) {
-    args.push('--resume', opts.conversationId, '--verbose', '--output-format', 'stream-json');
+    args.push('--resume', opts.conversationId, '--print', '--verbose', '--output-format', 'stream-json');
   } else {
     args.push('--print', '--verbose', '--output-format', 'stream-json');
   }
@@ -99,7 +103,7 @@ export async function callClaudeGui(opts: CallLLMOptions): Promise<CallerResult>
     args,
     cwd: opts.workingDir || null,
     stdinInput: opts.userMessage,
-    timeoutMs: 600_000, // 10 min for long agent runs
+    timeoutMs: opts.timeoutMs || 600_000,
   });
 
   const latencyMs = Date.now() - start;
@@ -166,7 +170,7 @@ export async function callCodexGui(opts: CallLLMOptions): Promise<CallerResult> 
   const result = await invoke<CodexCommandResult>('run_codex_command', {
     args,
     cwd: opts.workingDir || null,
-    timeoutMs: 600_000, // 10 min
+    timeoutMs: opts.timeoutMs || 600_000,
     input: fullPrompt,
   });
 
