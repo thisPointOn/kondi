@@ -91,7 +91,12 @@ export default function DeliberationView({
   const [showContextPanel, setShowContextPanel] = useState(false);
   const [showPatchReview, setShowPatchReview] = useState(false);
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
-  const [activePanel, setActivePanel] = useState<'setup' | 'task' | 'deliberation' | 'decision' | 'execution' | null>(null);
+  const [activePanel, setActivePanel] = useState<'setup' | 'deliberation' | 'output' | null>(() => {
+    // Auto-open setup panel for new councils
+    const c = councilStore.get(councilId);
+    const phase = c?.deliberationState?.currentPhase || 'created';
+    return phase === 'created' ? 'setup' : null;
+  });
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [pausedUserInput, setPausedUserInput] = useState('');
   const [workingDirectory, setWorkingDirectory] = useState(council?.deliberation?.workingDirectory || '');
@@ -111,7 +116,6 @@ export default function DeliberationView({
     return !!c?.deliberation?.savedProblem;
   });
   const [councilName, setCouncilName] = useState('');
-  const [councilTopic, setCouncilTopic] = useState('');
   const [saveMode, setSaveMode] = useState<'none' | 'full' | 'abbreviated'>(() => {
     const c = councilStore.get(councilId);
     if (!c?.deliberation?.saveDeliberation) return 'none';
@@ -181,9 +185,6 @@ export default function DeliberationView({
       // Load council name and topic
       if (c?.name && !councilName) {
         setCouncilName(c.name);
-      }
-      if (c?.topic && !councilTopic) {
-        setCouncilTopic(c.topic);
       }
       // Note: problemInput, expectedOutput, and taskSaved are initialized from councilStore
       // in useState initializers, so we don't need to load them here
@@ -494,22 +495,18 @@ export default function DeliberationView({
         maxRounds={maxRounds}
         onPhaseClick={(group) => setActivePanel(activePanel === group ? null : group)}
         completedSteps={{
-          setup: canStart, // Roles are assigned
-          task: !!council.deliberation?.savedProblem, // Task/problem saved
-          deliberation: currentPhase !== 'created' && currentPhase !== 'problem_framing', // Deliberation in progress
-          decision: ['directing', 'executing', 'reviewing', 'revising', 'decomposing', 'implementing', 'code_reviewing', 'testing', 'debugging', 'completed'].includes(currentPhase),
-          execution: currentPhase === 'completed',
+          setup: canStart && !!council.deliberation?.savedProblem,
+          deliberation: !['created', 'problem_framing', 'round_independent', 'round_interactive', 'round_waiting_for_manager'].includes(currentPhase),
+          output: currentPhase === 'completed',
         }}
         activeStep={activePanel}
       />
 
       {/* Inline Phase Panel - shown below timeline for Deliberation/Decision/Execution */}
-      {activePanel && activePanel !== 'setup' && activePanel !== 'task' && (() => {
+      {activePanel && activePanel !== 'setup' && (() => {
         const decision = getDecision(councilId);
-        const plan = getPlan(councilId);
         const directive = getDirective(councilId);
         const latestOutput = getLatestOutput(councilId);
-        const allOutputs = getAllOutputs(councilId);
         const roundSummaries = council.deliberationState?.roundSummaries || {};
         const managerEval = council.deliberationState?.managerLastEvaluation;
         const completionSummary = council.deliberationState?.completionSummary;
@@ -519,8 +516,7 @@ export default function DeliberationView({
             <div className="inline-phase-header">
               <h4>
                 {activePanel === 'deliberation' && 'Deliberation'}
-                {activePanel === 'decision' && 'Decision'}
-                {activePanel === 'execution' && 'Execution'}
+                {activePanel === 'output' && 'Output'}
               </h4>
               <button
                 className="collapse-inline-btn"
@@ -602,7 +598,7 @@ export default function DeliberationView({
                             className="deliberation-restart-btn"
                             onClick={handleClearResults}
                           >
-                            Clear Deliberation Results
+                            Clear Results
                           </button>
                         ) : (
                           <button
@@ -610,7 +606,7 @@ export default function DeliberationView({
                             onClick={handleRestartDeliberation}
                             disabled={!problemInput.trim() || isGenerating || !canStart}
                           >
-                            {isGenerating ? 'Running...' : 'Restart Deliberation'}
+                            {isGenerating ? 'Running...' : 'Restart'}
                           </button>
                         )}
                       </div>
@@ -619,8 +615,8 @@ export default function DeliberationView({
                     <>
                       <p className="deliberation-prompt">
                         {canStart && problemInput.trim()
-                          ? 'Ready to start the deliberation. The council will discuss and analyze your task.'
-                          : 'Complete Setup and Task steps before starting the deliberation.'}
+                          ? 'Ready to start. The council will deliberate on your task.'
+                          : 'Complete Setup first — define instructions and assign roles.'}
                       </p>
                       <div className="deliberation-actions">
                         <button
@@ -628,7 +624,7 @@ export default function DeliberationView({
                           onClick={handleFrameProblem}
                           disabled={!problemInput.trim() || isGenerating || !canStart}
                         >
-                          {isGenerating ? 'Starting...' : 'Start Deliberation'}
+                          {isGenerating ? 'Starting...' : 'Start'}
                         </button>
                       </div>
                     </>
@@ -636,159 +632,59 @@ export default function DeliberationView({
                 </div>
               )}
 
-              {/* === DECISION PANEL === */}
-              {activePanel === 'decision' && (
-                <>
-                  {/* Manager */}
-                  <div className="settings-section">
-                    <h4>Manager</h4>
-                    {council.personas
-                      .filter((p) => council.deliberation?.roleAssignments?.find(
-                        (r) => r.personaId === p.id && r.role === 'manager'
-                      ))
-                      .map((persona) => (
-                        <div key={persona.id} className="persona-item">
-                          <span
-                            className="persona-avatar"
-                            style={{ backgroundColor: persona.color + '30', color: persona.color }}
-                          >
-                            {persona.avatar || '🤖'}
-                          </span>
-                          <div className="persona-info">
-                            <span className="persona-name">{persona.name}</span>
-                            <span className="persona-model">{persona.model}</span>
-                          </div>
-                          <span className="role-badge role-manager">Manager</span>
-                        </div>
-                      ))}
-                  </div>
-
-                  {/* Decision Status */}
-                  <div className="settings-section">
-                    <h4>Decision Status</h4>
-                    <p className="settings-value">
-                      {currentPhase === 'deciding' && 'Manager is making the final decision...'}
-                      {currentPhase === 'planning' && 'Creating execution plan...'}
-                      {currentPhase === 'directing' && 'Issuing directive to worker...'}
-                      {!['deciding', 'planning', 'directing', 'executing', 'reviewing', 'revising', 'completed'].includes(currentPhase) &&
-                        'Decision phase will begin after deliberation rounds.'}
-                      {['executing', 'reviewing', 'revising', 'completed'].includes(currentPhase) &&
-                        'Decision has been made.'}
-                    </p>
-                  </div>
-
-                  {/* Decision Content */}
-                  {decision && (
+              {/* === OUTPUT PANEL === */}
+              {activePanel === 'output' && (
+                <div className="inline-deliberation-status">
+                  {/* Deliberation Summary (display-only, not passed on) */}
+                  {(completionSummary || Object.keys(roundSummaries).length > 0) && (
                     <div className="settings-section">
-                      <h4>Decision</h4>
-                      <div className="panel-content-block">{decision.content}</div>
-                      {decision.acceptanceCriteria && (
+                      <h4>Deliberation Summary</h4>
+                      {completionSummary && (
+                        <div className="panel-content-block">{completionSummary}</div>
+                      )}
+                      {!completionSummary && Object.keys(roundSummaries).length > 0 && (
                         <>
-                          <h4 style={{ marginTop: '1rem' }}>Acceptance Criteria</h4>
-                          <div className="panel-content-block">{decision.acceptanceCriteria}</div>
+                          {Object.entries(roundSummaries).map(([round, summary]) => (
+                            <div key={round} className="round-summary-item">
+                              <span className="round-summary-label">Round {round}</span>
+                              <div className="panel-content-block">{summary}</div>
+                            </div>
+                          ))}
                         </>
                       )}
                     </div>
                   )}
 
-                  {/* Plan */}
-                  {plan && (
+                  {/* Decision */}
+                  {decision && (
                     <div className="settings-section">
-                      <h4>Execution Plan</h4>
-                      <div className="panel-content-block">{plan.content}</div>
+                      <h4>Decision</h4>
+                      <div className="panel-content-block">{decision.content}</div>
                     </div>
                   )}
 
-                  {/* Directive */}
+                  {/* Work Directive */}
                   {directive && (
                     <div className="settings-section">
-                      <h4>Work Directive</h4>
+                      <h4>Directive</h4>
                       <div className="panel-content-block">{directive.content}</div>
                     </div>
                   )}
 
-                  {/* Completion Summary */}
-                  {completionSummary && (
-                    <div className="settings-section">
-                      <h4>Summary</h4>
-                      <div className="panel-content-block">{completionSummary}</div>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* === EXECUTION PANEL === */}
-              {activePanel === 'execution' && (
-                <>
-                  {/* Worker */}
-                  <div className="settings-section">
-                    <h4>Worker</h4>
-                    {council.personas
-                      .filter((p) => council.deliberation?.roleAssignments?.find(
-                        (r) => r.personaId === p.id && r.role === 'worker'
-                      ))
-                      .map((persona) => (
-                        <div key={persona.id} className="persona-item">
-                          <span
-                            className="persona-avatar"
-                            style={{ backgroundColor: persona.color + '30', color: persona.color }}
-                          >
-                            {persona.avatar || '🤖'}
-                          </span>
-                          <div className="persona-info">
-                            <span className="persona-name">{persona.name}</span>
-                            <span className="persona-model">{persona.model}</span>
-                          </div>
-                          <span className="role-badge role-worker">Worker</span>
-                        </div>
-                      ))}
-                  </div>
-
-                  {/* Execution Status */}
-                  <div className="settings-section">
-                    <h4>Execution Status</h4>
-                    <div className="settings-grid">
-                      <div className="setting-item">
-                        <span className="setting-label">Phase</span>
-                        <span className="setting-value">{currentPhase}</span>
-                      </div>
-                      <div className="setting-item">
-                        <span className="setting-label">Revisions</span>
-                        <span className="setting-value">{council.deliberationState?.revisionCount || 0} / {council.deliberation?.maxRevisions || 3}</span>
-                      </div>
-                      {allOutputs.length > 0 && (
-                        <div className="setting-item">
-                          <span className="setting-label">Outputs</span>
-                          <span className="setting-value">{allOutputs.length}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Directive */}
-                  {directive && (
-                    <div className="settings-section">
-                      <h4>Work Directive</h4>
-                      <div className="panel-content-block">{directive.content}</div>
-                    </div>
-                  )}
-
-                  {/* Latest Output */}
+                  {/* Final Output — what gets passed to the next step */}
                   {latestOutput && (
                     <div className="settings-section">
-                      <h4>Latest Output {latestOutput.isRevision && `(Revision ${latestOutput.version})`}</h4>
+                      <h4>Final Output {latestOutput.isRevision && `(Revision ${latestOutput.version})`}</h4>
                       <div className="panel-content-block">{latestOutput.content}</div>
                     </div>
                   )}
 
-                  {/* Completion Summary */}
-                  {completionSummary && (
-                    <div className="settings-section">
-                      <h4>Summary</h4>
-                      <div className="panel-content-block">{completionSummary}</div>
-                    </div>
+                  {!decision && !directive && !latestOutput && !completionSummary && Object.keys(roundSummaries).length === 0 && (
+                    <p className="deliberation-prompt">
+                      Output will appear here once the council completes deliberation.
+                    </p>
                   )}
-                </>
+                </div>
               )}
             </div>}
           </div>
@@ -821,20 +717,19 @@ export default function DeliberationView({
                 />
               </div>
 
-              {/* Topic */}
+              {/* Task */}
               <div className="setup-section">
-                <h4>Topic</h4>
+                <h4>Task</h4>
+                <p className="section-hint">What should the council work on? Optionally set a working directory below for additional file context.</p>
                 <textarea
-                  className="council-topic-input"
-                  placeholder="What should the council deliberate on?"
-                  value={councilTopic}
-                  onChange={(e) => setCouncilTopic(e.target.value)}
-                  onBlur={() => {
-                    if (councilTopic.trim() && councilTopic !== council.topic) {
-                      councilStore.update(councilId, { topic: councilTopic.trim() });
-                    }
+                  className="task-input"
+                  placeholder="Describe what should be done..."
+                  value={problemInput}
+                  onChange={(e) => {
+                    setProblemInput(e.target.value);
+                    setTaskSaved(false);
                   }}
-                  rows={3}
+                  rows={5}
                 />
               </div>
 
@@ -1154,14 +1049,20 @@ export default function DeliberationView({
                         });
                       }
                     }
-                    // Step 3: Save directory & other settings
+                    // Step 3: Save directory, task, & other settings
                     // IMPORTANT: Read fresh council from store so we don't overwrite
                     // the role assignments and persona updates we just saved above
                     const freshCouncil = councilStore.get(councilId);
+                    const trimmedProblem = problemInput.trim();
+                    const trimmedOutput = expectedOutput.trim();
                     if (freshCouncil?.deliberation) {
                       councilStore.update(councilId, {
+                        // Sync topic from task description for prompt context
+                        topic: trimmedProblem || freshCouncil.name,
                         deliberation: {
                           ...freshCouncil.deliberation,
+                          savedProblem: trimmedProblem || undefined,
+                          expectedOutput: trimmedOutput || undefined,
                           workingDirectory: workingDirectory || undefined,
                           directoryConstrained,
                           bootstrapContext,
@@ -1171,12 +1072,13 @@ export default function DeliberationView({
                         },
                       });
                     }
+                    if (trimmedProblem) setTaskSaved(true);
                     // Sync working directory with local tools service
                     if (workingDirectory) {
                       localToolsService.setWorkingDirectory(workingDirectory);
                     }
-                    // Move to Task panel after saving
-                    setActivePanel('task');
+                    // Close setup panel after saving
+                    setActivePanel(null);
                   }}
                   inline
                   onAddPersona={() => setIsAddingPersona(true)}
@@ -1185,79 +1087,13 @@ export default function DeliberationView({
                 />
               </div>
             </div>
-          ) : activePanel === 'task' ? (
-            <div className="main-task-panel">
-              <h3>Task Definition</h3>
-
-              {/* Task/Problem Input */}
-              <div className="task-section">
-                <label className="task-label">Task Description</label>
-                <p className="task-hint">Describe the task, problem, or question for the council to deliberate on.</p>
-                <textarea
-                  className="task-input"
-                  placeholder="What should the team work on?"
-                  value={problemInput}
-                  onChange={(e) => {
-                    setProblemInput(e.target.value);
-                    setTaskSaved(false); // Mark as unsaved when user makes changes
-                  }}
-                  rows={6}
-                />
-              </div>
-
-              {/* Expected Output */}
-              <div className="task-section">
-                <label className="task-label">Expected Output</label>
-                <p className="task-hint">Describe the deliverable the worker should produce. The manager will ensure this is met.</p>
-                <textarea
-                  className="task-input"
-                  placeholder="What should be delivered at the end? (e.g., a working function, documentation, a design spec...)"
-                  value={expectedOutput}
-                  onChange={(e) => {
-                    setExpectedOutput(e.target.value);
-                    setTaskSaved(false); // Mark as unsaved when user makes changes
-                  }}
-                  rows={4}
-                />
-              </div>
-
-              {/* Save and Start buttons */}
-              <div className="task-actions">
-                <button
-                  className={`task-save-btn ${taskSaved ? 'saved' : ''}`}
-                  onClick={() => {
-                    if (!council || !problemInput.trim() || taskSaved) return;
-                    const trimmedProblem = problemInput.trim();
-                    const trimmedOutput = expectedOutput.trim();
-                    const freshC = councilStore.get(councilId);
-                    if (freshC?.deliberation) {
-                      councilStore.update(councilId, {
-                        deliberation: {
-                          ...freshC.deliberation,
-                          savedProblem: trimmedProblem,
-                          expectedOutput: trimmedOutput || undefined,
-                        },
-                      });
-                    }
-                    setTaskSaved(true);
-                  }}
-                  disabled={!problemInput.trim() || taskSaved}
-                >
-                  {taskSaved ? 'Saved ✓' : 'Save Task'}
-                </button>
-              </div>
-
-              {!canStart && (
-                <p className="task-warning">Complete Setup first (assign Manager, Consultant, and Worker roles)</p>
-              )}
-            </div>
           ) : currentPhase === 'created' && !activePanel ? (
             <div className="deliberation-setup-prompt">
               <h3>Get Started</h3>
               <p>Click on the phase indicators above to configure your deliberation:</p>
               <ol className="setup-steps">
-                <li className={canStart ? 'complete' : 'incomplete'}>
-                  <strong>Setup</strong> - Assign roles to personas (Manager, Consultant, Worker)
+                <li className={canStart && !!council.deliberation?.savedProblem ? 'complete' : 'incomplete'}>
+                  <strong>Setup</strong> - Define task, assign roles (Manager, Consultant, Worker)
                   {!canStart && (
                     <div className="role-status">
                       <span className={hasManager ? 'complete' : 'incomplete'}>
@@ -1272,16 +1108,13 @@ export default function DeliberationView({
                     </div>
                   )}
                 </li>
-                <li className={council.deliberation?.savedProblem ? 'complete' : 'incomplete'}>
-                  <strong>Task</strong> - Define the task and expected output
-                </li>
                 <li>
                   <strong>Deliberation</strong> - Start the deliberation process
                 </li>
               </ol>
               {canStart && council.deliberation?.savedProblem && (
                 <div className="ready-to-start">
-                  <p>Ready to start! Click on <strong>Task</strong> above to begin the deliberation.</p>
+                  <p>Ready to start! Click <strong>Deliberation</strong> above to begin.</p>
                 </div>
               )}
             </div>

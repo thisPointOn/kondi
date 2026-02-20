@@ -102,8 +102,10 @@ export interface CouncilStepConfig {
     /** MCP servers this step can access (undefined = all servers) */
     allowedServerIds?: string[];
   };
+  /** Standing instructions — what this step should DO (supplemental to input context) */
+  task?: string;
+  /** Template that renders previous step outputs as input context */
   inputTemplate: string;
-  outputSelection: 'decision' | 'output' | 'summary';
   /** What kind of data this step produces (default: 'string') */
   outputType?: OutputType;
 }
@@ -114,8 +116,6 @@ export interface LlmStepConfig {
   provider: string;
   systemPrompt: string;
   inputTemplate: string;
-  /** What this step outputs to downstream steps (default: 'decision' for decisioning, 'output' for execution) */
-  outputSelection?: 'decision' | 'output' | 'summary';
   workingDirectory?: string;
   directoryConstrained?: boolean;
   /** MCP servers this step can access (undefined = all servers) */
@@ -173,7 +173,6 @@ export function migrateLlmConfig(config: LlmStepConfig): CouncilStepConfig {
       allowedServerIds: config.allowedServerIds,
     },
     inputTemplate: config.inputTemplate,
-    outputSelection: config.outputSelection || (isDecisioning ? 'decision' : 'output'),
     outputType: 'string',
   };
 }

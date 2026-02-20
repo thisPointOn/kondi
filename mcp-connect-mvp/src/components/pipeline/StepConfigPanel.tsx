@@ -362,7 +362,6 @@ function defaultPlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): 
       allowedServerIds: [],
     },
     inputTemplate: '{{input}}',
-    outputSelection: 'output',
     outputType: 'string',
   };
 }
@@ -389,7 +388,6 @@ function defaultDecisioningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL
       allowedServerIds: [],
     },
     inputTemplate: '{{input}}',
-    outputSelection: 'decision',
     outputType: 'string',
   };
 }
@@ -425,7 +423,6 @@ After executing, report: what you did, what succeeded, what failed, and any rema
       allowedServerIds: [],
     },
     inputTemplate: '{{input}}',
-    outputSelection: 'output',
     outputType: 'string',
   };
 }
@@ -453,7 +450,6 @@ function defaultCodingConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): Co
       allowedServerIds: [],
     },
     inputTemplate: '{{input}}',
-    outputSelection: 'output',
     outputType: 'directory',
   };
 }
@@ -941,30 +937,22 @@ function CouncilConfig({
 
       <div className="config-section">
         <div className="config-section-title">Input / Output</div>
+        <div className="config-field">
+          <label>Task</label>
+          <textarea
+            value={config.task || ''}
+            onChange={(e) => update({ task: e.target.value || undefined })}
+            placeholder="Instructions for what this step should do with the input context..."
+            rows={3}
+          />
+          <span className="hint">Standing instructions — combined with the input below when the step runs</span>
+        </div>
         <InputSourcePicker
           value={config.inputTemplate}
           onChange={(v) => update({ inputTemplate: v })}
           isFirstStage={isFirstStage}
           availableInputSteps={availableInputSteps}
         />
-        <div className="config-field">
-          <label>Output Selection</label>
-          <select
-            value={config.outputSelection}
-            onChange={(e) => update({ outputSelection: e.target.value as CouncilStepConfig['outputSelection'] })}
-          >
-            <option value="decision">Decision (manager&apos;s final decision)</option>
-            <option value="output">Work Output (worker&apos;s deliverable)</option>
-            <option value="summary">Summary (abbreviated deliberation summary)</option>
-          </select>
-          <span className="hint">
-            What this step passes to downstream steps — {config.outputSelection === 'decision'
-              ? 'the manager\'s decision and rationale'
-              : config.outputSelection === 'summary'
-              ? 'an abbreviated summary of the entire deliberation'
-              : 'the worker\'s final output, saved to the working directory'}
-          </span>
-        </div>
         <div className="config-field">
           <label>Output Type</label>
           <select

@@ -414,8 +414,11 @@ export class PipelineExecutor {
   ): Promise<StepArtifact> {
     const config = step.config as CouncilStepConfig;
 
-    // Build the problem from input template
-    const rawProblem = renderInputTemplate(config.inputTemplate, previousArtifacts);
+    // Build the problem: task (instructions) + input (context from previous steps)
+    const inputContext = renderInputTemplate(config.inputTemplate, previousArtifacts);
+    const rawProblem = config.task
+      ? `${config.task}\n\n---\n\nInput:\n${inputContext}`
+      : inputContext;
 
     // Resolve effective working directory with inheritance (default: constrained)
     const isConstrained = pipelineSettings.directoryConstrained !== false;
@@ -426,6 +429,7 @@ export class PipelineExecutor {
     // Create council via factory
     const council = createCouncilFromSetup({
       ...config.councilSetup,
+      task: config.task,
       topic: rawProblem.slice(0, 200),
       workingDirectory: effectiveDir,
       directoryConstrained: isConstrained,
@@ -511,7 +515,7 @@ export class PipelineExecutor {
       }
     }
 
-    // Extract artifact based on outputSelection
+    // Extract artifact — decisioning steps use the decision, all others use worker output
     const updatedCouncil = councilStore.get(council.id);
     let content = '';
     let artifactType: StepArtifact['artifactType'] = 'output';
@@ -523,26 +527,16 @@ export class PipelineExecutor {
       stepType: config.type,
     };
 
-    switch (config.outputSelection) {
-      case 'decision': {
-        const decision = getDecision(council.id);
-        content = decision?.content || 'No decision was made.';
-        artifactType = 'decision';
-        metadata.decisionId = decision?.id;
-        break;
-      }
-      case 'output': {
-        const output = getLatestOutput(council.id);
-        content = output?.content || 'No output was produced.';
-        artifactType = 'output';
-        metadata.outputId = output?.id;
-        break;
-      }
-      case 'summary': {
-        content = updatedCouncil?.deliberationState?.completionSummary || 'No summary available.';
-        artifactType = 'output';
-        break;
-      }
+    if (config.type === 'decisioning') {
+      const decision = getDecision(council.id);
+      content = decision?.content || 'No decision was made.';
+      artifactType = 'decision';
+      metadata.decisionId = decision?.id;
+    } else {
+      const output = getLatestOutput(council.id);
+      content = output?.content || 'No output was produced.';
+      artifactType = 'output';
+      metadata.outputId = output?.id;
     }
 
     return {
