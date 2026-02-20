@@ -1,5 +1,7 @@
 # Kondi
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 **Multi-agent deliberation and coding platform with MCP tool access.**
 
 Kondi assembles councils of AI agents with distinct roles — Manager, Consultants, Workers, Reviewers — and orchestrates structured workflows between them. Agents can use any [MCP](https://modelcontextprotocol.io/) server you connect, mix models from different providers in the same council, and produce auditable deliverables through a deterministic state machine.

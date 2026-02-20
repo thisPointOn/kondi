@@ -41,6 +41,8 @@ export interface PipelineExecutorCallbacks {
     userMessage: string;
     conversationId?: string;
     allowedServerIds?: string[];
+    skipTools?: boolean;
+    allowedTools?: string[];
   }) => Promise<{ content: string; tokensUsed: number; sessionId?: string }>;
 
   onStageStart?: (stageIndex: number) => void;
@@ -627,6 +629,8 @@ export class PipelineExecutor {
       this.platform.setWorkingDir(effectiveDir);
     }
 
+    const isExecution = config.type === 'execution';
+
     let result: { content: string; tokensUsed: number };
     try {
       result = await this.callbacks.llmComplete({
@@ -635,6 +639,7 @@ export class PipelineExecutor {
         systemPrompt: config.systemPrompt,
         userMessage,
         allowedServerIds: config.allowedServerIds,
+        skipTools: !isExecution,
       });
     } finally {
       // Restore previous working directory

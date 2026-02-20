@@ -102,6 +102,8 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
           conversationId: params.conversationId,
           workingDir: tauriPlatform.getWorkingDir() || undefined,
           availableTools: filteredTools,
+          skipTools: params.skipTools,
+          allowedTools: params.allowedTools,
         });
         return { content: result.content, tokensUsed: result.tokensUsed, sessionId: result.sessionId };
       },

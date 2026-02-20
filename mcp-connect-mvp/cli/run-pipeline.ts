@@ -503,10 +503,12 @@ async function main() {
 
     llmComplete: async (params) => {
       log(C.green, 'LLM', `Calling ${params.model}...`);
-      // Build allowedTools from allowedServerIds if set
-      const allowedTools = params.allowedServerIds
-        ? ['Edit', 'Write', 'Read', 'Bash', 'Glob', 'Grep', ...params.allowedServerIds.map(id => `mcp__${id}`)]
-        : undefined;
+      // Build allowedTools from allowedServerIds if set (only when tools aren't skipped)
+      const allowedTools = params.skipTools
+        ? undefined
+        : params.allowedServerIds
+          ? ['Edit', 'Write', 'Read', 'Bash', 'Glob', 'Grep', ...params.allowedServerIds.map(id => `mcp__${id}`)]
+          : undefined;
       const result = await callLLM({
         systemPrompt: params.systemPrompt,
         userMessage: params.userMessage,
@@ -514,6 +516,7 @@ async function main() {
         workingDir: platform.getWorkingDir(),
         conversationId: params.conversationId,
         allowedTools,
+        skipTools: params.skipTools,
       });
       log(C.green, 'LLM', `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);
       return { content: result.content, tokensUsed: result.tokensUsed, sessionId: result.sessionId };
