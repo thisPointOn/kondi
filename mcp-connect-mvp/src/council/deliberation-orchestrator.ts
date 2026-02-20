@@ -1021,7 +1021,8 @@ export class DeliberationOrchestrator {
 
     // Build prompts
     const systemPrompt = manager.predisposition.systemPrompt;
-    const userMessage = buildManagerDecisionPrompt(fullContext, decisionCriteria, expectedOutput);
+    const stepType = council.deliberation?.stepType;
+    const userMessage = buildManagerDecisionPrompt(fullContext, decisionCriteria, expectedOutput, stepType);
 
     const response = await this.invokeAgentSafe(
       { personaId: manager.id, systemPrompt, userMessage },
@@ -1536,7 +1537,8 @@ export class DeliberationOrchestrator {
     const contextContent = this.buildForcedDecisionContext(council);
 
     const systemPrompt = manager.predisposition.systemPrompt;
-    const userMessage = buildManagerForcedDecisionPrompt(contextContent);
+    const stepType = council.deliberation?.stepType;
+    const userMessage = buildManagerForcedDecisionPrompt(contextContent, stepType);
 
     const response = await this.invokeAgentSafe(
       { personaId: manager.id, systemPrompt, userMessage },

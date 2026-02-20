@@ -495,7 +495,8 @@ Respond as JSON:
 export function buildManagerDecisionPrompt(
   ledgerContext: string,
   decisionCriteria?: string[],
-  expectedOutput?: string
+  expectedOutput?: string,
+  stepType?: 'planning' | 'coding'
 ): string {
   const criteriaBlock = decisionCriteria?.length
     ? `\n---\n\nDECISION CRITERIA (evaluate against these):\n${decisionCriteria.map((c) => `- ${c}`).join('\n')}`
@@ -503,6 +504,10 @@ export function buildManagerDecisionPrompt(
 
   const expectedOutputBlock = expectedOutput
     ? `\n---\n\nEXPECTED OUTPUT (the final deliverable MUST satisfy this):\n${expectedOutput}`
+    : '';
+
+  const stepTypeNote = stepType === 'planning'
+    ? `\n\nCRITICAL: This is a PLANNING step. Your decision must direct the worker to produce a DETAILED PLAN DOCUMENT — NOT code or implementation. The worker output should be a comprehensive specification covering architecture, dependencies, step-by-step implementation instructions, data flows, edge cases, and acceptance criteria. Think of it as a product/engineering spec that another developer could follow to implement the feature without ambiguity. Do NOT ask the worker to write code, create files, or implement anything.`
     : '';
 
   return `${ledgerContext}
@@ -513,7 +518,7 @@ ${expectedOutputBlock}
 
 The deliberation is complete. Make your decision.
 
-IMPORTANT: Your decision must lead to a deliverable that matches the expected output exactly.
+IMPORTANT: Your decision must lead to a deliverable that matches the expected output exactly.${stepTypeNote}
 
 Write:
 - SUMMARY: Key positions and arguments from the consultants
@@ -530,14 +535,21 @@ the strongest reasoning.`;
 /**
  * Manager forced decision (early termination) - Section 9.9
  */
-export function buildManagerForcedDecisionPrompt(ledgerContext: string): string {
+export function buildManagerForcedDecisionPrompt(
+  ledgerContext: string,
+  stepType?: 'planning' | 'coding'
+): string {
+  const stepTypeNote = stepType === 'planning'
+    ? `\n\nCRITICAL: This is a PLANNING step. Your decision must direct the worker to produce a DETAILED PLAN DOCUMENT — NOT code. The output should be a comprehensive specification, not implementation.`
+    : '';
+
   return `${ledgerContext}
 
 ---
 
 NOTE: This deliberation was ended early by the user.
 You must make a decision now with the information available.
-Acknowledge what is incomplete or uncertain.
+Acknowledge what is incomplete or uncertain.${stepTypeNote}
 
 Write:
 - SUMMARY: What was discussed so far
@@ -1067,6 +1079,7 @@ Respond as JSON:
   ],
   "integrationNotes": "any notes about how the code fits together",
   "testStrategy": "how to verify the implementation works",
+  "installCommand": "command to install dependencies (e.g. npm install, pip install -r requirements.txt). Empty string if not needed or if build handles it (cargo build).",
   "buildCommand": "command to compile/build the project (e.g. npm run build, tsc --noEmit, cargo build). Empty string if no build step needed."
 }`;
   }
@@ -1100,6 +1113,7 @@ Respond as JSON:
   ],
   "integrationNotes": "how the modules connect — shared types, import paths, integration points",
   "testStrategy": "how to verify the full implementation works end-to-end",
+  "installCommand": "command to install dependencies (e.g. npm install, pip install -r requirements.txt). Empty string if not needed or if build handles it (cargo build).",
   "buildCommand": "command to compile/build the project (e.g. npm run build, tsc --noEmit, cargo build). Empty string if no build step needed."
 }`;
 }
@@ -1265,6 +1279,8 @@ ${spec}
 ${scopeNote}
 Instructions:
 - Analyze the test failures and identify root causes
+- If failures indicate missing packages or modules (e.g. "Cannot find module", "ModuleNotFoundError",
+  "command not found"), ensure dependencies are declared in the project manifest and installed
 - Make MINIMAL, targeted fixes — do not rewrite or refactor unrelated code
 - Fix only what's broken, preserve everything else
 - If a test failure reveals a spec misunderstanding, fix the code to match the spec

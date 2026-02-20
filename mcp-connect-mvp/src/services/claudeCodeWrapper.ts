@@ -163,19 +163,16 @@ class ClaudeCodeWrapper {
   }
 
   /**
-   * Check if Claude Code is authenticated
+   * Check if Claude Code is authenticated by reading credential files.
+   * Does NOT make an LLM call — just checks ~/.claude/.credentials.json for tokens.
    */
   async checkAuthenticated(): Promise<boolean> {
     try {
-      // Quick test: ask Claude a trivial question
-      const result = await invoke<{ success: boolean; output: string; error?: string }>(
-        'run_claude_command',
-        {
-          args: ['-p', '--max-turns', '1', '--output-format', 'json', 'Say OK'],
-          timeoutMs: 30000
-        }
-      );
-      return result.success;
+      const creds = await invoke<{
+        claude?: { available: boolean; expires_at?: number };
+        [key: string]: any;
+      }>('check_cli_credentials');
+      return creds.claude?.available === true;
     } catch (err) {
       console.error('[ClaudeCode] Auth check failed:', err);
       return false;

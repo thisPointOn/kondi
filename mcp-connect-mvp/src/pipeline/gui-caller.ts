@@ -145,11 +145,13 @@ export async function callCodexGui(opts: CallLLMOptions): Promise<CallerResult> 
     args.push('--cd', opts.workingDir);
   }
 
-  // Sandbox mode applies to both new and resumed sessions
-  if (opts.skipTools) {
-    args.push('--sandbox', 'read-only');
-  } else {
-    args.push('--full-auto');
+  // Sandbox/full-auto flags only on new sessions — Codex resume rejects them
+  if (!opts.conversationId) {
+    if (opts.skipTools) {
+      args.push('--sandbox', 'read-only');
+    } else {
+      args.push('--full-auto');
+    }
   }
 
   // Prompt from stdin

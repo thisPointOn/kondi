@@ -440,6 +440,59 @@ export function resetExecution(pipelineId: string): Pipeline | null {
   });
 }
 
+/**
+ * Reset a specific step and all subsequent steps to pending.
+ * Sets currentStageIndex to the target step's stage so the executor
+ * resumes from the right point. Earlier completed steps are preserved.
+ */
+export function resetStepAndAfter(pipelineId: string, stepId: string): Pipeline | null {
+  const pipeline = getPipeline(pipelineId);
+  if (!pipeline) return null;
+
+  // Find the step's stage index and step index
+  let targetStageIndex = -1;
+  let targetStepIndex = -1;
+  for (let si = 0; si < pipeline.stages.length; si++) {
+    for (let sti = 0; sti < pipeline.stages[si].steps.length; sti++) {
+      if (pipeline.stages[si].steps[sti].id === stepId) {
+        targetStageIndex = si;
+        targetStepIndex = sti;
+        break;
+      }
+    }
+    if (targetStageIndex >= 0) break;
+  }
+  if (targetStageIndex < 0) return null;
+
+  const stages = pipeline.stages.map((stage, si) => {
+    if (si < targetStageIndex) return stage; // earlier stages untouched
+    return {
+      ...stage,
+      steps: stage.steps.map((step, sti) => {
+        // In the target stage: reset this step and all after it
+        // In later stages: reset everything
+        if (si > targetStageIndex || sti >= targetStepIndex) {
+          return {
+            ...step,
+            status: 'pending' as const,
+            artifact: undefined,
+            error: undefined,
+            startedAt: undefined,
+            completedAt: undefined,
+          };
+        }
+        return step;
+      }),
+    };
+  });
+
+  return updatePipeline(pipelineId, {
+    stages,
+    status: 'ready',
+    currentStageIndex: targetStageIndex,
+  });
+}
+
 // ============================================================================
 // Store Class (for React integration)
 // ============================================================================
@@ -557,6 +610,12 @@ export class PipelineStore {
 
   resetExecution(pipelineId: string): Pipeline | null {
     const pipeline = resetExecution(pipelineId);
+    if (pipeline) this.notify();
+    return pipeline;
+  }
+
+  resetStepAndAfter(pipelineId: string, stepId: string): Pipeline | null {
+    const pipeline = resetStepAndAfter(pipelineId, stepId);
     if (pipeline) this.notify();
     return pipeline;
   }

@@ -46,6 +46,7 @@ import {
 
 import { detectTestCommand } from '../pipeline/test-detect';
 import { detectBuildCommand } from '../pipeline/build-detect';
+import { detectInstallCommand } from '../pipeline/install-detect';
 
 // Re-use the same agent invocation types from deliberation-orchestrator
 export interface AgentInvocation {
@@ -133,13 +134,40 @@ export class CodingOrchestrator {
 
     let snapshotSha: string | null = null;
 
+    const warnings: string[] = [];
+
     try {
       // Git snapshot before any changes
       snapshotSha = await this.createGitSnapshot(council);
 
       // Phase 1: Decompose
       this.transitionPhase(council.id, 'decomposing');
-      await this.decomposeSpec(council, spec);
+      try {
+        await this.decomposeSpec(council, spec);
+      } catch (decomposeError) {
+        const errMsg = (decomposeError as Error).message || String(decomposeError);
+        console.error('[CodingOrchestrator] Decompose failed, using fallback single-module:', errMsg);
+        warnings.push(`Decomposition failed (${errMsg}) — used raw spec as single module`);
+
+        const manager = this.getManager(council);
+        this.createEntry(
+          council.id, 'manager', manager.id, 'error', 'decomposing',
+          `Decomposition failed: ${errMsg}. Falling back to single-module plan.`,
+          0, 0
+        );
+
+        // Fallback: single "main" module using the raw spec as the directive
+        councilStore.updateDeliberationState(council.id, {
+          moduleDecomposition: {
+            modules: [{ name: 'main', files: [], interfaces: '', dependencies: [], directive: spec }],
+            integrationNotes: '',
+            testStrategy: '',
+            buildCommand: '',
+            installCommand: '',
+          },
+          moduleOutputs: {},
+        });
+      }
 
       // Phase 2+3: Implement → Review loop
       let reviewCycleCount = 0;
@@ -158,7 +186,24 @@ export class CodingOrchestrator {
         }
 
         this.transitionPhase(council.id, 'code_reviewing');
-        const verdict = await this.reviewCode(council, spec);
+        let verdict: ReviewVerdict;
+        try {
+          verdict = await this.reviewCode(council, spec);
+        } catch (reviewError) {
+          const errMsg = (reviewError as Error).message || String(reviewError);
+          console.error('[CodingOrchestrator] Review failed, skipping:', errMsg);
+          warnings.push(`Code review skipped (${errMsg})`);
+
+          const reviewers = getPersonaByRole(council, 'reviewer');
+          const authorId = reviewers[0]?.id || this.getManager(council).id;
+          this.createEntry(
+            council.id, 'reviewer', authorId, 'error', 'code_reviewing',
+            `Code review failed: ${errMsg}. Skipping review phase.`,
+            0, 0
+          );
+
+          verdict = { verdict: 'pass', issues: [], summary: `Review skipped due to error: ${errMsg}` };
+        }
 
         if (verdict.verdict === 'pass') {
           console.log('[CodingOrchestrator] Code review passed');
@@ -184,13 +229,13 @@ export class CodingOrchestrator {
       // Phase 4: Test loop (build + test verification)
       council = councilStore.get(council.id)!;
       const decomposition = council.deliberationState?.moduleDecomposition;
+      const installCommand = decomposition?.installCommand || await this.autoDetectInstallCommand(council);
       const buildCommand = decomposition?.buildCommand || await this.autoDetectBuildCommand(council);
       const testCommand = council.deliberation?.testCommand || await this.autoDetectTestCommand(council);
 
-      // Combine build + test into one verification command
-      const verifyCommand = buildCommand && testCommand
-        ? `${buildCommand} && ${testCommand}`
-        : buildCommand || testCommand;
+      // Combine install + build + test into one verification command
+      const commandParts = [installCommand, buildCommand, testCommand].filter(Boolean);
+      const verifyCommand = commandParts.length > 0 ? commandParts.join(' && ') : null;
 
       if (verifyCommand) {
         let debugCycleCount = 0;
@@ -213,7 +258,23 @@ export class CodingOrchestrator {
 
           console.log(`[CodingOrchestrator] Debug cycle ${debugCycleCount}/${maxDebugCycles}`);
           this.transitionPhase(council.id, 'debugging');
-          await this.debugFix(council, testResult.output, spec);
+          try {
+            await this.debugFix(council, testResult.output, spec);
+          } catch (debugError) {
+            const errMsg = (debugError as Error).message || String(debugError);
+            console.error('[CodingOrchestrator] Debug fix failed, proceeding with current code:', errMsg);
+            warnings.push(`Debug fix failed (${errMsg}) — proceeding with existing code`);
+
+            const workers = getPersonaByRole(council, 'worker');
+            const authorId = workers[0]?.id || this.getManager(council).id;
+            this.createEntry(
+              council.id, 'worker', authorId, 'error', 'debugging',
+              `Debug fix failed: ${errMsg}. Proceeding with current code.`,
+              0, 0
+            );
+
+            break;
+          }
           council = councilStore.get(council.id)!;
         }
       } else {
@@ -222,7 +283,7 @@ export class CodingOrchestrator {
 
       // Phase 5: Merge outputs and complete
       council = councilStore.get(council.id)!;
-      await this.mergeAndComplete(council, spec);
+      await this.mergeAndComplete(council, spec, warnings);
 
     } catch (error) {
       const errMsg = (error as Error).message || String(error);
@@ -570,7 +631,7 @@ export class CodingOrchestrator {
   // Completion
   // ==========================================================================
 
-  private async mergeAndComplete(council: Council, spec: string): Promise<void> {
+  private async mergeAndComplete(council: Council, spec: string, warnings: string[] = []): Promise<void> {
     const state = council.deliberationState;
     const moduleOutputs = state?.moduleOutputs || {};
 
@@ -585,8 +646,11 @@ export class CodingOrchestrator {
 
     councilStore.setCurrentOutput(council.id, output.id);
 
-    // Generate completion summary
-    const summary = `Coding workflow completed. ${Object.keys(moduleOutputs).length} module(s) implemented: ${Object.keys(moduleOutputs).join(', ')}`;
+    // Generate completion summary, appending any warnings from recovered phases
+    let summary = `Coding workflow completed. ${Object.keys(moduleOutputs).length} module(s) implemented: ${Object.keys(moduleOutputs).join(', ')}`;
+    if (warnings.length > 0) {
+      summary += `\n\nWarnings:\n${warnings.map(w => `- ${w}`).join('\n')}`;
+    }
     councilStore.updateDeliberationState(council.id, { completionSummary: summary });
 
     this.transitionPhase(council.id, 'completed');
@@ -635,6 +699,22 @@ export class CodingOrchestrator {
       }
     } catch (error) {
       console.warn('[CodingOrchestrator] Build detection failed:', error);
+    }
+    return null;
+  }
+
+  private async autoDetectInstallCommand(council: Council): Promise<string | null> {
+    const workingDir = council.deliberation?.workingDirectory;
+    if (!workingDir) return null;
+
+    try {
+      const detected = await detectInstallCommand(workingDir, this.config.readFile);
+      if (detected) {
+        console.log(`[CodingOrchestrator] Auto-detected install command: ${detected.command} (${detected.framework})`);
+        return detected.command;
+      }
+    } catch (error) {
+      console.warn('[CodingOrchestrator] Install detection failed:', error);
     }
     return null;
   }
@@ -824,6 +904,7 @@ export class CodingOrchestrator {
     integrationNotes: string;
     testStrategy: string;
     buildCommand?: string;
+    installCommand?: string;
   } {
     try {
       const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -841,6 +922,7 @@ export class CodingOrchestrator {
             integrationNotes: parsed.integrationNotes || '',
             testStrategy: parsed.testStrategy || '',
             buildCommand: parsed.buildCommand || '',
+            installCommand: parsed.installCommand || '',
           };
         }
       }
@@ -860,6 +942,7 @@ export class CodingOrchestrator {
       integrationNotes: '',
       testStrategy: '',
       buildCommand: '',
+      installCommand: '',
     };
   }
 

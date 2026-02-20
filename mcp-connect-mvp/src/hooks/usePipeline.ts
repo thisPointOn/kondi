@@ -5,6 +5,7 @@ import { filterToolsByServerIds } from '../utils/filterTools';
 import { saveDeliberationOutput } from '../services/deliberationSaveService';
 import { anthropicClient } from '../services/anthropicClient';
 import { localToolsService } from '../services/localTools';
+import { pipelineStore } from '../pipeline/store';
 import type { MCPTool } from '../types/mcp';
 import type { Persona } from '../council/types';
 import { invoke } from '@tauri-apps/api/core';
@@ -56,7 +57,10 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
     setPipelineSelectedStepId(null);
   };
 
-  const handlePipelineRun = (id: string) => {
+  /**
+   * Create a PipelineExecutor with all the standard callbacks wired up.
+   */
+  const createExecutor = (): { executor: PipelineExecutor; platform: PlatformAdapter } => {
     const resolverMap = new Map<string, (approved: boolean) => void>();
     setGateResolvers(resolverMap);
 
@@ -127,10 +131,13 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
       },
     }, tauriPlatform);
 
+    return { executor, platform: tauriPlatform };
+  };
+
+  const runExecutor = (executor: PipelineExecutor, id: string) => {
     setPipelineExecutor(executor);
     setPipelineMode('execution');
 
-    // Run asynchronously
     executor.run(id).then(() => {
       console.log('[Pipeline] Execution completed');
       setThinkingPersonas([]);
@@ -140,6 +147,31 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
       setThinkingPersonas([]);
       setActivePipelineCouncilId(null);
     });
+  };
+
+  const handlePipelineRun = (id: string) => {
+    const { executor } = createExecutor();
+    runExecutor(executor, id);
+  };
+
+  /**
+   * Retry from a specific step: reset that step and everything after it,
+   * then re-run the pipeline (which skips completed steps automatically).
+   */
+  const handleRetryStep = (stepId: string) => {
+    if (!currentPipelineId) return;
+
+    // Reset the target step and all subsequent steps
+    pipelineStore.resetStepAndAfter(currentPipelineId, stepId);
+
+    // Clear previous selection state
+    setPipelineSelectedCouncilId(null);
+    setPipelineSelectedStepId(null);
+    setActivePipelineCouncilId(null);
+
+    // Create a fresh executor and run — it will skip completed steps
+    const { executor } = createExecutor();
+    runExecutor(executor, currentPipelineId);
   };
 
   return {
@@ -159,5 +191,6 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
     handleExecutionBack,
     handleExecutionAbort,
     handlePipelineRun,
+    handleRetryStep,
   } as const;
 }

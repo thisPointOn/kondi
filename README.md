@@ -1,150 +1,183 @@
 # Kondi
 
-**Multi-agent deliberation platform for AI-powered decision making.**
+**Multi-agent deliberation and coding platform with MCP tool access.**
 
-Kondi connects multiple AI agents to your tools via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) and orchestrates structured deliberation between them. Instead of relying on a single AI to solve a problem, Kondi assembles a council of agents with distinct roles — Manager, Consultants, and Worker — that collaborate through a deterministic workflow to produce higher-quality decisions and deliverables.
+Kondi assembles councils of AI agents with distinct roles — Manager, Consultants, Workers, Reviewers — and orchestrates structured workflows between them. Agents can use any [MCP](https://modelcontextprotocol.io/) server you connect, mix models from different providers in the same council, and produce auditable deliverables through a deterministic state machine.
 
----
-
-## Why Kondi?
-
-Most AI tools give you one model, one perspective, one shot. Kondi takes a different approach:
-
-- **Structured multi-agent deliberation** — A Manager frames the problem, multiple Consultants analyze it from different angles (security, UX, architecture, etc.), debate each other's positions, and a Worker executes the final decision. Every step is audited in an append-only ledger.
-
-- **Provider-agnostic** — Mix and match models in the same council. Put Claude Opus as Manager, GPT-4o as one Consultant, DeepSeek as another. Each agent uses whichever model fits its role best. Supports Anthropic, OpenAI, and DeepSeek via both API keys and CLI subscriptions (Claude Code, Codex).
-
-- **MCP-native tool access** — Agents can use any MCP server you connect: code search, databases, APIs, file systems. The built-in proxy handles OAuth, token refresh, and authentication so your agents can reach authenticated services without exposing credentials.
-
-- **Deterministic workflow, not random chat** — Deliberation follows a well-defined state machine with phases, rounds, convergence criteria, and artifact versioning. The Manager can't skip to a decision before minimum rounds are met. Context proposals from Consultants are formally reviewed and accepted or rejected. Everything is traceable.
-
-- **Desktop-native** — Built on Tauri (Rust + React). No cloud infrastructure needed. Your API keys and tokens stay on your machine.
+Built on Tauri (Rust + React). Runs locally. Keys stay on your machine.
 
 ---
 
-## How the Council Works
+## Features
 
-A deliberation session follows this workflow:
+### Multi-Provider LLM Support
+
+Each persona in a council can use a different provider and model. Kondi supports six providers with two access paths each:
+
+| Provider | CLI (Subscription) | API (Key) |
+|----------|-------------------|-----------|
+| **Anthropic** | Claude Opus 4.6, Sonnet 4.5, Haiku 4.5, Opus 4.5, Sonnet 4 | Sonnet 4.5, Haiku 4.5, Sonnet 4 |
+| **OpenAI** | GPT-5.2, GPT-5.2 Codex, GPT-5.1 Codex Max/Mini | GPT-4o, GPT-4o Mini, GPT-4 Turbo, o1 Preview/Mini |
+| **DeepSeek** | — | DeepSeek R1 (reasoning), DeepSeek Chat |
+| **Google** | Gemini CLI | Gemini 2.0 Flash, Gemini 1.5 Pro/Flash |
+
+CLI providers route through locally installed tools (`claude`, `codex`, `gemini`) and use your existing subscription. API providers use direct API keys. The app auto-detects installed CLIs at startup and validates connectivity.
+
+### Chat
+
+- Streaming responses with markdown rendering and syntax-highlighted code blocks
+- MCP tool calling — connected server tools appear in the sidebar and execute inline
+- File attachments (drag-and-drop, 30+ file types detected)
+- Conversation persistence (up to 20 chats) with rolling summaries for context efficiency
+- Per-session model switching without changing defaults
+- Tool autocomplete (type `/` to browse available tools)
+
+### MCP Server Integration
+
+Connect agents to any MCP server:
+
+- **Remote servers** via SSE/HTTP — enter a URL, Kondi probes for auth requirements automatically
+- **Local servers** via stdio — launch npm packages, Python scripts, etc.
+- **Built-in server library** — browse and one-click install popular servers (GitHub, Slack, PostgreSQL, Notion, Linear, Brave Search, and more)
+- **GitHub install** — paste a GitHub repo URL to auto-fetch, install, and connect an MCP server
+
+**Authentication proxy** (`kondi-mcp-proxy`): For servers requiring auth, Kondi spawns a local Node.js proxy per server that handles OAuth (PKCE with browser-based flow and dynamic client registration), API keys, Bearer tokens, or custom headers. Tokens refresh automatically. Proxy config stored at `~/.local/share/kondi/proxies/`.
+
+Connected MCP servers are automatically synced to Claude Code and Codex CLI tool configurations so CLI-based agents can call them directly.
+
+### Council System
+
+Councils are groups of AI personas that collaborate on a task. Seven council modes:
+
+| Mode | Description |
+|------|-------------|
+| **deliberation** | Structured Manager → Consultants → Worker workflow (see below) |
+| **debate** | Personas argue opposing positions |
+| **build** | Collaborative — personas add to each other's ideas |
+| **review** | One presents, others critique |
+| **synthesis** | Each gives perspective, then combine |
+| **socratic** | One questions, others defend |
+| **freeform** | Natural conversation |
+
+Turn strategies: round-robin, react, popcorn, volunteer, moderator, parallel, relevance.
+
+### Personas
+
+Each persona has:
+
+- Name, avatar (emoji or URL), color
+- LLM provider + model assignment
+- System prompt, stance (advocate/critic/neutral/wildcard), domain expertise
+- Interaction style (debate/build/question/synthesize/review)
+- Temperature, verbosity, mute toggle
+- Per-persona MCP server access list
+
+**15 built-in templates** across four categories: Strategic (Devil's Advocate, Optimist, Pragmatist, Visionary, Customer Voice), Technical (Security Hawk, Performance Nerd, Simplicity Advocate, Scale Thinker), Creative (Wild Card, Editor, Audience Advocate), Domain Expert (Finance Mind, Legal Eagle, Data Scientist).
+
+### Structured Deliberation
+
+The deliberation orchestrator is a deterministic state machine with these phases:
 
 ```
-Problem Framing ──→ Independent Analysis ──→ Interactive Rounds ──→ Decision
-       │                    │                        │                  │
-    Manager            Consultants              Consultants          Manager
-  frames problem     analyze solo,            debate, refine,      synthesizes
-  into structured    each from their          build on each        all input into
-  context doc        focus area               other's ideas        final decision
-                                                                       │
-                                                                       ▼
-                                              Execution ◄── Directive ◄─┘
-                                                  │
-                                               Worker
-                                            produces the
-                                             deliverable
-                                                  │
-                                                  ▼
-                                     Review ──→ Revise? ──→ Complete
-                                       │
-                                    Manager
-                                  evaluates against
-                                  acceptance criteria
+Problem Framing → Independent Analysis → Interactive Rounds → Decision → Directive → Execution → Review
+      │                   │                      │                │           │           │          │
+   Manager           Consultants            Consultants        Manager     Manager     Worker    Manager
 ```
 
-### Roles
+**Phases:**
 
-| Role | Responsibility | Count |
-|------|---------------|-------|
-| **Manager** | Frames problem, evaluates rounds, decides when consultants have converged, reviews final output | 1 |
-| **Consultant** | Analyzes from a specialized focus area, proposes context changes, debates other consultants | 1+ |
-| **Worker** | Executes the Manager's directive, produces the deliverable, revises on feedback | 1 |
+1. **problem_framing** — Manager creates the shared context document (v1)
+2. **round_independent** — Round 1: each consultant analyzes independently
+3. **round_interactive** — Round 2+: consultants see and engage with each other
+4. **deciding** — Manager synthesizes all input into a final decision
+5. **directing** — Manager writes a concrete work directive
+6. **executing** — Worker carries out the directive (optionally with file write permissions)
+7. **reviewing** — Manager evaluates output, accepts or sends back for revision
 
-### Key Mechanics
+**Context versioning**: Consultants propose patches to the shared context; the Manager accepts or rejects each one, incrementing the version. All proposals are recorded.
 
-- **Rounds** — Configurable min and max rounds. Round 1 is independent (consultants don't see each other). Round 2+ is interactive — in sequential mode, each consultant sees what prior consultants said in the same round.
-- **Context Versioning** — The shared context document is versioned. Consultants can propose patches (additions, corrections). The Manager accepts or rejects each patch, incrementing the version.
-- **Ledger** — Every agent invocation, phase transition, and artifact change is recorded in an append-only audit trail with timestamps, token counts, and latency.
-- **Convergence** — The Manager evaluates after each round: continue deliberating, redirect the conversation, or proceed to a decision. The system enforces minimum rounds before allowing early decisions.
+**Ledger**: Every agent invocation, phase transition, and artifact change is recorded in an append-only audit trail with timestamps, token counts, and latency.
 
----
+**Configuration**: min/max rounds, max revisions, consultant execution order (parallel/sequential), context token budget, consultant error policy (retry/skip/fail), decision criteria, expected output description, soft word limits per response.
 
-## Components
+**User controls during deliberation**: pause/resume, force decision (skip remaining rounds), abort, send a message while paused.
 
-### `mcp-connect-mvp/` — Main Application
+### Coding Orchestrator
 
-The core desktop app. Tauri (Rust backend) + React/TypeScript frontend.
+A specialized orchestrator for software implementation tasks:
 
-**Features:**
-- Multi-turn chat with any supported LLM provider
-- Council creation and management with persona configuration
-- Deliberation orchestration (the full workflow above)
-- Pipeline builder for chaining councils and execution steps
-- MCP server connection management with OAuth support
-- File attachments, tool calling, response streaming
-- Cost estimation and token tracking
+```
+Decompose Spec → Implement Modules → Code Review → Test → Debug Loop
+      │                  │                 │          │         │
+   Manager           Worker(s)          Reviewer   Build+Test  Worker
+```
 
-### `mcp-connect-mvp/kondi-mcp-proxy/` — MCP Proxy
+1. **decomposing** — Manager breaks the spec into modules with files, interfaces, dependencies, and per-worker directives
+2. **implementing** — Workers implement their assigned modules (parallel where possible, with file write permissions)
+3. **code_reviewing** — Reviewer evaluates all output with severity ratings (critical/major/minor)
+4. **testing** — Runs install + build + test commands; captures stdout/stderr/exit code
+5. **debugging** — Worker fixes test failures in a debug cycle loop (configurable max cycles)
 
-Node.js proxy that bridges authenticated MCP servers to unauthenticated local clients.
+**Auto-detection**: If no commands are configured, the orchestrator scans the working directory:
+- **Install**: lockfile-first (pnpm → yarn → npm), pip, go mod, Makefile
+- **Build**: package.json scripts, tsconfig, Cargo.toml, go.mod, Makefile
+- **Test**: vitest/jest/mocha, cargo test, go test, pytest, Makefile
 
-**How it works:**
-1. You connect to a remote MCP server that requires OAuth or API keys
-2. Kondi spawns a local proxy process that handles the authentication
-3. The proxy injects auth headers into every request and streams responses back
-4. The frontend connects to the local proxy endpoint — no tokens exposed to the browser
+**Safeguards**: Git snapshot before any changes, dependency install before build/test verification, build verification before test runs.
 
-**Supports:** OAuth 2.0 (with browser-based flow), API keys, Bearer tokens, custom headers. Automatic token refresh with configurable retry logic.
+### Pipelines
 
-### `kondi-search-mcp/` — Search MCP Server
-
-An MCP server that provides web search and content extraction tools to agents.
-
-- Backed by a local [SearXNG](https://docs.searxng.org/) instance
-- **web_search** tool — search the web, return structured results
-- **web_fetch** tool — fetch a URL, extract readable content (Mozilla Readability), convert to Markdown
-
-### `flowforge/` — Workflow Orchestration Library
-
-Self-healing LLM workflow engine with broad provider support.
-
-- Define multi-step workflows with LLM-powered planning
-- Steps are evaluated and automatically retried on failure with corrections
-- Provider adapters for Anthropic, OpenAI, Gemini, Ollama, Bedrock, Copilot, Groq, and more
-- Checkpoint/resume support for long-running workflows
-- Express API for workflow CRUD and execution control
-
----
-
-## Pipelines
-
-Pipelines let you chain multiple councils and execution steps into automated workflows.
+Chain multiple councils and execution steps into automated workflows:
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌──────────┐     ┌─────────────┐
-│  Council:    │────→│  Execution: │────→│  Gate:   │────→│  Council:   │
-│  Research &  │     │  Generate   │     │  User    │     │  Review &   │
-│  Decide     │     │  Code       │     │  Approve │     │  Finalize   │
+│  Council:    │────→│   Coding:   │────→│  Gate:   │────→│  Council:   │
+│  Research &  │     │  Implement  │     │  User    │     │  Review &   │
+│  Plan        │     │  Solution   │     │  Approve │     │  Finalize   │
 └─────────────┘     └─────────────┘     └──────────┘     └─────────────┘
 ```
 
 **Step types:**
-- **Council** — Runs a full deliberation with configurable personas, rounds, and execution
-- **Execution** — Direct LLM call with a system prompt and input template
-- **Gate** — Pauses for user approval before continuing
+- **planning** — Full deliberation council for research and decision-making
+- **coding** — Coding orchestrator for software implementation
+- **decisioning** — Direct LLM call for single-model reasoning
+- **execution** — Direct LLM call for action/writing steps
+- **gate** — Pause for explicit human approval
 
-Artifacts flow between steps automatically. Each step's output becomes available as `{{input}}` for the next.
+Stages run sequentially; steps within a stage can run in parallel. Artifacts flow between steps via template variables (`{{input}}`). Each step's output includes provenance headers so downstream steps know where context came from.
 
----
+**Pipeline builder UI**: Visual stage/step layout, drag-to-reorder, per-step persona/model/tool configuration, working directory scoping.
 
-## Supported Models
+### CLI Pipeline Runner
 
-| Provider | Models | Access |
-|----------|--------|--------|
-| **Anthropic API** | Claude 3.5 Sonnet, Claude 3 Opus, Claude 3.5 Haiku | API key |
-| **Anthropic CLI** | Claude Opus 4.5, Claude Opus 4, Claude Sonnet 4 | Claude Code subscription |
-| **OpenAI API** | GPT-4o, GPT-4 Turbo, o1-preview, o1-mini | API key |
-| **OpenAI CLI** | GPT-5.2 Codex, GPT-5.1 Codex, o3 Mini | Codex subscription |
-| **DeepSeek** | DeepSeek Chat, DeepSeek Coder | API key (OpenAI-compatible) |
+Run pipelines headlessly from the terminal:
 
-Each persona in a council can use a different provider and model. Mix frontier reasoning models for complex analysis with faster models for routine tasks.
+```bash
+npx tsx cli/run-pipeline.ts <pipeline.json> [--working-dir <path>] [--model <model>] [--dry-run]
+```
+
+- Uses the same orchestrators as the GUI
+- Routes to Claude CLI or Codex CLI based on model name
+- Colored terminal output with timestamps
+- Writes a JSON execution report on completion
+- Export sessions (`.kondi-session.json`) for import back into the GUI
+
+### Built-in Tools
+
+Always available without any MCP server:
+- `read_file` / `write_file` — local file access
+- `list_directory` — directory listing
+- `run_command` — shell command execution in the working directory
+
+All operations scoped to a configurable working directory with optional directory constraint (prevents access outside the path).
+
+### Search Service
+
+Bundled SearXNG-backed search MCP server:
+- Docker-managed `kondi-searxng` container
+- `web_search` — search the web, return structured results
+- `web_fetch` — fetch a URL, extract readable content via Mozilla Readability
+- Start/stop/restart from the Services panel in the app
 
 ---
 
@@ -157,23 +190,8 @@ Each persona in a council can use a different provider and model. Mix frontier r
 | Backend | Rust (tokio, reqwest, serde) |
 | MCP Proxy | Node.js, Express |
 | Search Server | Node.js, SearXNG, Readability |
-| Workflow Engine | FlowForge (TypeScript, Express) |
 | Styling | Tailwind CSS, PostCSS |
 | Testing | Vitest |
-
----
-
-## What Makes Kondi Different
-
-| Feature | Single-Agent Tools | Kondi |
-|---------|-------------------|-------|
-| **Perspectives** | One model, one viewpoint | Multiple agents with different models, roles, and focus areas |
-| **Decision Quality** | Whatever the model outputs | Structured deliberation with rounds, debate, convergence criteria |
-| **Traceability** | Chat history | Append-only ledger with artifacts, versions, token counts |
-| **Tool Access** | Per-model tool calling | MCP-native — any MCP server, with OAuth proxy for authenticated APIs |
-| **Workflow** | Prompt chains | Deterministic state machine with min/max rounds, context versioning, review cycles |
-| **Provider Lock-in** | Tied to one provider | Mix Anthropic, OpenAI, and DeepSeek in the same council |
-| **Infrastructure** | Cloud-hosted | Desktop-native, keys stay local |
 
 ---
 
@@ -183,10 +201,10 @@ Each persona in a council can use a different provider and model. Mix frontier r
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| [Node.js](https://nodejs.org/) | 18+ | For frontend, proxy, and search server |
-| [Rust](https://www.rust-lang.org/tools/install) | 1.77.2+ | For Tauri backend |
-| [Tauri CLI](https://v2.tauri.app/start/prerequisites/) | 2.x | Install via `cargo install tauri-cli` |
-| System dependencies | — | See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS (webkit2gtk on Linux, Xcode on macOS) |
+| [Node.js](https://nodejs.org/) | 18+ | Frontend, proxy, CLI runner |
+| [Rust](https://www.rust-lang.org/tools/install) | 1.77.2+ | Tauri backend |
+| [Tauri CLI](https://v2.tauri.app/start/prerequisites/) | 2.x | `cargo install tauri-cli` |
+| System deps | — | See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) |
 
 **Linux (Debian/Ubuntu):**
 ```bash
@@ -203,107 +221,39 @@ xcode-select --install
 **Windows:**
 Install [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 
-### Clone the Repository
+### Pre-built Binary (Linux)
+
+Download the `.AppImage` from the latest release and run it directly — no build required.
+
+### Build from Source
 
 ```bash
 git clone git@github.com:thisPointOn/kondi.git
-cd kondi
-```
+cd kondi/mcp-connect-mvp
 
-### Install the Main Application
-
-```bash
-cd mcp-connect-mvp
+# Install frontend dependencies
 npm install
-```
 
-This installs the React frontend, Tauri bindings, and all TypeScript dependencies. The Rust backend compiles automatically on first run.
+# Build the MCP proxy (spawned automatically when connecting to authenticated servers)
+cd kondi-mcp-proxy && npm install && npm run build && cd ..
 
-### Build the MCP Proxy
-
-The proxy is a dependency of the main app — it's spawned automatically when you connect to authenticated MCP servers.
-
-```bash
-cd mcp-connect-mvp/kondi-mcp-proxy
-npm install
-npm run build
-```
-
-### (Optional) Install the Search Server
-
-If you want agents to have web search capabilities:
-
-```bash
-# 1. Start SearXNG via Docker
-cd kondi-search-mcp
-docker-compose up -d
-
-# 2. Install and build the MCP search server
-npm install
-npm run build
-```
-
-This starts a local SearXNG instance on port 8888 and builds the MCP server that wraps it.
-
-### (Optional) Install FlowForge
-
-For self-healing workflow orchestration:
-
-```bash
-cd flowforge
-npm install
-npm run build
-```
-
----
-
-## Running
-
-### Development Mode
-
-```bash
-cd mcp-connect-mvp
+# Development mode (hot-reload)
 npm run tauri:dev
-```
 
-This starts both the Vite dev server (port 5175) and the Tauri desktop window with hot-reload. Changes to React/TypeScript code will hot-reload instantly. Changes to Rust code trigger an automatic recompile.
-
-### Production Build
-
-```bash
-cd mcp-connect-mvp
+# Production build
 npm run tauri build
+# Output: src-tauri/target/release/bundle/ (.deb, .rpm, .AppImage on Linux)
 ```
 
-This produces a native installer for your platform:
-- **Linux:** `.deb` and `.AppImage` in `src-tauri/target/release/bundle/`
-- **macOS:** `.dmg` in `src-tauri/target/release/bundle/`
-- **Windows:** `.msi` and `.exe` in `src-tauri/target/release/bundle/`
-
-### Running the Search Server
+### (Optional) Search Server
 
 ```bash
-# Make sure SearXNG is running
 cd kondi-search-mcp
-docker-compose up -d
-
-# Start the MCP server (stdio mode for local use)
-npm run start
-
-# Or development mode with auto-reload
-npm run dev
+docker-compose up -d   # Start SearXNG on port 8888
+npm install && npm run build
 ```
 
-Then connect to it from within Kondi as a local MCP server.
-
-### Running the Express Server
-
-For pipeline execution and API access:
-
-```bash
-cd mcp-connect-mvp
-npm run dev:server
-```
+Connect to it from the app as a local MCP server.
 
 ---
 
@@ -311,42 +261,43 @@ npm run dev:server
 
 ### LLM Providers
 
-On first launch, Kondi will prompt you to configure at least one provider. You can set up:
+On first launch, configure at least one provider:
 
 | Provider | What You Need |
 |----------|--------------|
+| **Anthropic CLI** | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed and logged in |
 | **Anthropic API** | API key from [console.anthropic.com](https://console.anthropic.com/) |
-| **Anthropic CLI** | Active [Claude Code](https://claude.ai/) subscription with `claude` CLI installed |
+| **OpenAI CLI** | [Codex CLI](https://github.com/openai/codex) installed and logged in |
 | **OpenAI API** | API key from [platform.openai.com](https://platform.openai.com/) |
-| **OpenAI CLI** | Active Codex subscription with `codex` CLI installed |
 | **DeepSeek** | API key from [platform.deepseek.com](https://platform.deepseek.com/) |
+| **Google** | [Gemini CLI](https://ai.google.dev/gemini-api/docs/cli-tool) installed, or API key |
 
-API keys are stored locally on your machine and never sent anywhere except the provider's own API endpoint.
+API keys are stored locally and only sent to the provider's own endpoint. CLI providers use the tool's existing authenticated session.
 
 ### MCP Servers
 
-Connect to MCP servers from the sidebar in the app. Kondi supports:
+Connect from the MCP Servers panel:
+- **Custom URL** — enter any SSE/HTTP endpoint
+- **Server Library** — browse and install from a curated list
+- **GitHub URL** — paste a repo URL to auto-install
+- **Local stdio** — configure a local command to spawn
 
-- **Local servers** via stdio (e.g., the search server above)
-- **Remote servers** via SSE/HTTP with automatic proxy authentication
-- **OAuth-authenticated servers** — Kondi opens your browser for the auth flow and stores tokens locally at `~/.local/share/kondi/proxies/`
+OAuth-authenticated servers use a browser-based flow. Tokens stored at `~/.local/share/kondi/proxies/`.
 
 ### Working Directory
 
-When creating a council, you can set a working directory. The Worker agent will operate within this directory for file-related tasks. Enable "Directory Constrained" to prevent the Worker from accessing files outside this path.
+Set globally in Settings or per-council/per-pipeline. Enable **Directory Constrained** to prevent agents from accessing files outside the specified path.
 
 ---
 
-## Quick Start: Your First Council
+## Quick Start
 
-1. **Launch Kondi** — `npm run tauri:dev` from `mcp-connect-mvp/`
-2. **Configure a provider** — Add at least one API key or CLI subscription in Settings
-3. **Create a council** — Click "New Council" in the sidebar
-4. **Add personas** — Create at least 3 personas (they'll be assigned as Manager, Consultant, Worker)
-5. **Assign roles** — In the Setup tab, assign each persona a role and optionally set focus areas for consultants
-6. **Define the task** — In the Task tab, describe the problem and expected output
-7. **Save & Start** — Save the task, then start the deliberation from the Deliberation tab
-8. **Watch it run** — The ledger shows every agent's contribution in real-time as the deliberation progresses through rounds, decision, execution, and review
+1. **Launch** — `npm run tauri:dev` from `mcp-connect-mvp/`
+2. **Configure a provider** — Settings → LLM Providers
+3. **Create a council** — Sidebar → New Council
+4. **Add personas** — Pick from templates or create custom (minimum: 1 Manager + 1 Worker)
+5. **Define the task** — Describe the problem, expected output, and decision criteria
+6. **Start** — Launch the deliberation and watch the ledger fill in real-time
 
 ---
 
@@ -354,45 +305,36 @@ When creating a council, you can set a working directory. The Worker agent will 
 
 ```
 kondi/
-├── mcp-connect-mvp/               # Main desktop application
+├── mcp-connect-mvp/                # Main desktop application
 │   ├── src/                        # React/TypeScript frontend
-│   │   ├── App.tsx                 # Root component & state management
-│   │   ├── council/                # Deliberation engine (13 files)
-│   │   │   ├── deliberation-orchestrator.ts  # State machine
-│   │   │   ├── types.ts            # All deliberation types
-│   │   │   ├── prompts.ts          # Role-specific LLM prompts
+│   │   ├── council/                # Deliberation + coding orchestrators
+│   │   │   ├── deliberation-orchestrator.ts
+│   │   │   ├── coding-orchestrator.ts
+│   │   │   ├── types.ts
+│   │   │   ├── prompts.ts
 │   │   │   ├── ledger-store.ts     # Append-only audit trail
 │   │   │   ├── context-store.ts    # Versioned artifacts
 │   │   │   ├── store.ts            # Council CRUD
 │   │   │   └── llm-adapter.ts      # Provider routing
-│   │   ├── pipeline/               # Workflow orchestration
-│   │   ├── services/               # LLM clients, MCP, OAuth
-│   │   ├── components/             # React UI components
-│   │   │   ├── council/            # Deliberation UI
-│   │   │   ├── pipeline/           # Pipeline builder UI
-│   │   │   └── ChatArea.tsx        # Chat interface
-│   │   └── config/                 # Model definitions
+│   │   ├── pipeline/               # Pipeline execution, build/test/install detection
+│   │   ├── services/               # LLM clients, MCP, OAuth, conversation management
+│   │   ├── components/             # React UI (chat, council, pipeline, settings)
+│   │   └── config/models.ts        # All model definitions
+│   ├── cli/                        # Headless CLI pipeline runner
+│   │   ├── run-pipeline.ts         # Entry point
+│   │   ├── claude-caller.ts        # Claude Code CLI adapter
+│   │   └── codex-caller.ts         # Codex CLI adapter
 │   ├── src-tauri/                  # Rust backend
-│   │   └── src/commands.rs         # MCP process management, OAuth, proxy
-│   ├── kondi-mcp-proxy/            # Authentication proxy (Node.js)
-│   │   └── src/
-│   │       ├── proxy.ts            # SSE streaming, message forwarding
-│   │       └── auth/               # OAuth, API key, bearer, custom header
+│   │   └── src/commands.rs         # Process management, OAuth, proxy, file ops
+│   ├── kondi-mcp-proxy/            # Auth proxy (Node.js)
 │   └── server/                     # Express.js API server
-├── kondi-search-mcp/               # Web search MCP server
-│   ├── src/tools/                  # web_search, web_fetch tools
-│   ├── docker-compose.yml          # SearXNG container
-│   └── searxng-config/             # SearXNG settings
-├── flowforge/                      # Self-healing workflow library
-│   └── src/
-│       ├── providers/              # LLM adapters (10+ providers)
-│       ├── executor/               # Step execution & self-healing
-│       └── planner/                # Interactive workflow planning
-└── README.md
+├── kondi-search-mcp/               # SearXNG-backed search MCP server
+├── flowforge/                      # Self-healing LLM workflow library
+└── LICENSE
 ```
 
 ---
 
 ## License
 
-This project is proprietary. All rights reserved.
+MIT License. See [LICENSE](LICENSE).

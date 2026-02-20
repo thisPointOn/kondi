@@ -5,7 +5,7 @@
   "identifier": "com.kondi.app",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "frontendDist": "ui",
+    "frontendDist": "../dist",
     "devUrl": "http://localhost:5175"
   },
   "app": {

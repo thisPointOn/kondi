@@ -88,6 +88,7 @@ function App() {
               onForceDecision={council.onForceDecision}
               onAbortDeliberation={council.onAbortDeliberation}
               onUserMessage={council.onUserMessage}
+              onRetryStep={pipeline.handleRetryStep}
             />
           ) : pipeline.pipelineMode === 'builder' && pipeline.currentPipelineId ? (
             <PipelineBuilder

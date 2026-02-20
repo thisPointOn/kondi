@@ -768,6 +768,7 @@ export interface DeliberationState {
     integrationNotes: string;
     testStrategy: string;
     buildCommand?: string;
+    installCommand?: string;
   };
   moduleOutputs?: Record<string, string>;  // moduleName -> output content
   debugCycleCount?: number;

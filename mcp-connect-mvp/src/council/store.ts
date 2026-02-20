@@ -218,6 +218,7 @@ export function createCouncil(params: {
       directoryConstrained: params.deliberation?.directoryConstrained ?? true,
       saveDeliberation: params.deliberation?.saveDeliberation ?? false,
       saveDeliberationMode: params.deliberation?.saveDeliberationMode ?? 'full',
+      stepType: params.deliberation?.stepType,
     } : undefined,
     // Deliberation state (initialized when deliberation starts)
     deliberationState: undefined,

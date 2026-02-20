@@ -34,6 +34,8 @@ interface PipelineExecutionViewProps {
   onForceDecision?: (council: Council) => Promise<void>;
   onAbortDeliberation?: (council: Council) => Promise<void>;
   onUserMessage?: (council: Council, message: string, lastResponderId: string) => Promise<void>;
+  /** Retry from a specific step (resets it and all subsequent steps, then re-runs) */
+  onRetryStep?: (stepId: string) => void;
 }
 
 function getStepIcon(type: string): string {
@@ -74,6 +76,7 @@ export default function PipelineExecutionView({
   onForceDecision,
   onAbortDeliberation,
   onUserMessage,
+  onRetryStep,
 }: PipelineExecutionViewProps) {
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const [expandedArtifacts, setExpandedArtifacts] = useState<Set<string>>(new Set());
@@ -263,6 +266,8 @@ export default function PipelineExecutionView({
                             setSelectedStepId(stepId);
                             setSelectedCouncilId(null);
                           }}
+                          canRetry={!isRunning && (step.status === 'failed' || step.status === 'completed')}
+                          onRetry={() => onRetryStep?.(step.id)}
                         />
                       ))}
                     </div>
@@ -316,6 +321,8 @@ function ExecutionStepCard({
   isSelectedStep,
   onSelectCouncil,
   onSelectStep,
+  canRetry,
+  onRetry,
 }: {
   step: PipelineStep;
   expanded: boolean;
@@ -326,6 +333,8 @@ function ExecutionStepCard({
   isSelectedStep?: boolean;
   onSelectCouncil?: (councilId: string) => void;
   onSelectStep?: (stepId: string) => void;
+  canRetry?: boolean;
+  onRetry?: () => void;
 }) {
   const statusColor = getStatusColor(step.status);
   // For running council steps, use activeCouncilId as fallback when artifact doesn't have councilId yet
@@ -385,6 +394,19 @@ function ExecutionStepCard({
       {/* Error — only show when actually failed, not while running/pending */}
       {step.error && step.status === 'failed' && (
         <div className="step-error">{step.error}</div>
+      )}
+
+      {/* Retry button for failed or completed steps when pipeline is not running */}
+      {canRetry && onRetry && (
+        <button
+          className="step-retry-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRetry();
+          }}
+        >
+          {step.status === 'failed' ? 'Retry from here' : 'Re-run from here'}
+        </button>
       )}
 
       {/* Artifact preview (compact, in card) */}

@@ -3388,7 +3388,17 @@ pub async fn run_codex_command(
     cmd.args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env_remove("CLAUDECODE"); // Prevent Claude Code env from interfering
+        .env_remove("CLAUDECODE")  // Prevent Claude Code env from interfering
+        // Non-interactive: prevent child tools (npm, git, pip, etc.) from prompting
+        .env("CI", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("NPM_CONFIG_YES", "true")
+        .env("PIP_NO_INPUT", "1")
+        .env("DEBIAN_FRONTEND", "noninteractive");
+
+    // Spawn Codex in its own process group so we can kill the entire tree on timeout
+    #[cfg(unix)]
+    cmd.process_group(0);
 
     if input.is_some() {
         cmd.stdin(Stdio::piped());
@@ -3402,6 +3412,10 @@ pub async fn run_codex_command(
         format!("Failed to spawn codex command: {}. Is Codex CLI installed?", e)
     })?;
 
+    // Capture PID before wait_with_output() consumes the child.
+    // With process_group(0), PID == PGID so we can kill the whole group.
+    let child_pid = child.id();
+
     // Pipe stdin if input was provided
     if let Some(ref input_text) = input {
         if let Some(mut stdin) = child.stdin.take() {
@@ -3413,10 +3427,20 @@ pub async fn run_codex_command(
         }
     }
 
-    let output = tokio::time::timeout(timeout, child.wait_with_output())
-        .await
-        .map_err(|_| "Codex command timed out".to_string())?
-        .map_err(|e| format!("Codex command failed: {}", e))?;
+    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(result) => result.map_err(|e| format!("Codex command failed: {}", e))?,
+        Err(_) => {
+            // Timeout — kill the entire process group (negative PID) to reap
+            // Codex AND any child processes (test runners, build tools, etc.)
+            if let Some(pid) = child_pid {
+                println!("[Codex CLI] Killing timed-out process group (pgid {})", pid);
+                let _ = StdCommand::new("kill")
+                    .args(["-9", &format!("-{}", pid)])
+                    .output();
+            }
+            return Err(format!("Codex command timed out after {}s", timeout.as_secs()));
+        }
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -3465,7 +3489,18 @@ pub async fn run_codex_streaming(
     let mut cmd = Command::new("codex");
     cmd.args(&args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .env_remove("CLAUDECODE")
+        // Non-interactive: prevent child tools from prompting
+        .env("CI", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("NPM_CONFIG_YES", "true")
+        .env("PIP_NO_INPUT", "1")
+        .env("DEBIAN_FRONTEND", "noninteractive");
+
+    // Own process group so orphaned children can be reaped
+    #[cfg(unix)]
+    cmd.process_group(0);
 
     if let Some(dir) = cwd {
         cmd.current_dir(dir);

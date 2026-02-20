@@ -61,7 +61,17 @@ export async function callCodex(opts: {
     const child = spawn('codex', args, {
       cwd: opts.workingDir || process.cwd(),
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, CLAUDECODE: undefined },
+      detached: true, // Own process group so we can kill the tree on timeout
+      env: {
+        ...process.env,
+        CLAUDECODE: undefined,
+        // Non-interactive: prevent child tools from prompting
+        CI: '1',
+        GIT_TERMINAL_PROMPT: '0',
+        NPM_CONFIG_YES: 'true',
+        PIP_NO_INPUT: '1',
+        DEBIAN_FRONTEND: 'noninteractive',
+      },
     });
 
     const stdoutChunks: Buffer[] = [];

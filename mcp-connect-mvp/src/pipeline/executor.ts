@@ -15,6 +15,7 @@ import type {
   LlmStepConfig,
   GateStepConfig,
 } from './types';
+import { isCouncilType } from './types';
 
 import { pipelineStore } from './store';
 import { councilStore } from '../council/store';
@@ -334,6 +335,16 @@ export class PipelineExecutor {
     pipelineStore.setStepStatus(pipelineId, step.id, 'running');
     this.callbacks.onStepStart?.(step.id);
 
+    // Track council ID so we can link to the deliberation even if the step fails
+    let stepCouncilId: string | null = null;
+    const origOnCouncilCreated = this.callbacks.onCouncilCreated;
+    if (isCouncilType(step.config.type)) {
+      this.callbacks.onCouncilCreated = (stepId, councilId) => {
+        stepCouncilId = councilId;
+        origOnCouncilCreated?.(stepId, councilId);
+      };
+    }
+
     try {
       let artifact: StepArtifact;
 
@@ -358,9 +369,27 @@ export class PipelineExecutor {
       this.callbacks.onStepComplete?.(step.id, artifact);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+
+      // For council steps that created a council before failing, write a partial
+      // artifact so the UI can still link to the deliberation ledger
+      if (stepCouncilId) {
+        pipelineStore.setStepArtifact(pipelineId, step.id, {
+          stepId: step.id,
+          content: `Step failed: ${message}`,
+          artifactType: 'output',
+          metadata: { councilId: stepCouncilId, stepName: step.name, stepType: step.config.type },
+          createdAt: new Date().toISOString(),
+        });
+      }
+
       pipelineStore.setStepStatus(pipelineId, step.id, 'failed', message);
       this.callbacks.onStepError?.(step.id, message);
       throw error;
+    } finally {
+      // Restore original callback
+      if (isCouncilType(step.config.type)) {
+        this.callbacks.onCouncilCreated = origOnCouncilCreated;
+      }
     }
   }
 
