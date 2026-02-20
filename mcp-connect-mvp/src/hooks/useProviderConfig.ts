@@ -507,14 +507,30 @@ export function useProviderConfig() {
   };
 
   const handleValidateCredentials = async (providerId: string) => {
+    let ok = false;
+    let providerLabel = '';
     if (providerId.startsWith('anthropic')) {
-      const { ok } = await anthropicClient.validateKey(anthropicKey);
-      return ok;
+      const result = await anthropicClient.validateKey(anthropicKey);
+      ok = result.ok;
+      providerLabel = 'Anthropic API';
     } else if (providerId.startsWith('openai')) {
-      const { ok } = await openaiClient.validateKey(openaiKey);
-      return ok;
+      const result = await openaiClient.validateKey(openaiKey);
+      ok = result.ok;
+      providerLabel = 'OpenAI API';
     }
-    return false;
+
+    // Update the validation report so the error banner clears on success
+    if (ok && providerLabel && validationReport) {
+      setValidationReport({
+        ...validationReport,
+        llmProviders: validationReport.llmProviders.map(r =>
+          r.provider === providerLabel
+            ? { ...r, status: 'ok' as const, message: 'Validated', details: undefined, action: undefined }
+            : r
+        ),
+      });
+    }
+    return ok;
   };
 
   const handleRefreshStatus = async () => {

@@ -421,10 +421,9 @@ export class OpenAIClient {
         },
       });
       if (!res.ok) {
-        // If the key lacks model.request scope, return sensible defaults
-        const text = await res.text().catch(() => '');
-        if (text.includes('Missing scopes') || text.includes('insufficient permissions')) {
-          console.log('[OpenAI] /v1/models not accessible (restricted key scopes), using defaults');
+        // Any auth error (401/403) likely means restricted scopes — return defaults
+        if (res.status === 401 || res.status === 403) {
+          console.log(`[OpenAI] /v1/models returned ${res.status} (restricted key scopes), using defaults`);
           return OpenAIClient.DEFAULT_MODELS;
         }
         return [];
@@ -441,18 +440,23 @@ export class OpenAIClient {
 
   async validateKey(key: string): Promise<{ ok: boolean; error?: string }> {
     try {
-      const res = await fetch('https://api.openai.com/v1/models', {
+      // Validate via a minimal chat completions call instead of /v1/models.
+      // /v1/models requires the model.request scope which many restricted keys
+      // lack, producing a 401 even though the key is valid for chat.
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
         headers: {
           Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 1,
+        }),
       });
       if (res.ok) return { ok: true };
-      const text = await res.text();
-      // A scope error means the key IS valid, just restricted — treat as OK
-      if (text.includes('Missing scopes') || text.includes('insufficient permissions')) {
-        console.log('[OpenAI] Key valid but has restricted scopes (no model.request)');
-        return { ok: true };
-      }
+      const text = await res.text().catch(() => '');
       return { ok: false, error: text || `HTTP ${res.status}` };
     } catch (err) {
       console.error('OpenAI key validation failed', err);
