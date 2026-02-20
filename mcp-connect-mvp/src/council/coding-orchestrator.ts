@@ -615,7 +615,6 @@ export class CodingOrchestrator {
         );
 
         console.log(`[CodingOrchestrator] Worker ${worker.name} fixing module ${module.name}`);
-        this.config.onAgentThinkingStart?.(worker);
 
         const response = await this.invokeAgentSafe(
           { personaId: worker.id, systemPrompt, userMessage },
