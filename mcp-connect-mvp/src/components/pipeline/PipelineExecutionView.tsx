@@ -5,8 +5,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import type { Pipeline, PipelineStep, StepArtifact } from '../../pipeline/types';
-import { isCouncilType } from '../../pipeline/types';
+import type { Pipeline, PipelineStep } from '../../pipeline/types';
 import type { Council, Persona } from '../../council/types';
 import { pipelineStore } from '../../pipeline/store';
 import DeliberationView from '../council/DeliberationView';
@@ -125,10 +124,9 @@ export default function PipelineExecutionView({
         for (const stage of p.stages) {
           for (const step of stage.steps) {
             if (step.status === 'running' || step.status === 'waiting_approval') {
-              // For council-type steps, try artifact metadata first, then fall back to activeCouncilId
-              const councilId = isCouncilType(step.config.type)
-                ? (step.artifact?.metadata?.councilId || activeCouncilIdRef.current)
-                : null;
+              // Any step with a councilId in artifact (or currently running non-gate) has a council
+              const councilId = step.artifact?.metadata?.councilId
+                || (step.status === 'running' && step.config.type !== 'gate' ? activeCouncilIdRef.current : null);
               if (councilId) {
                 setSelectedCouncilId(councilId);
               } else {
@@ -181,6 +179,15 @@ export default function PipelineExecutionView({
   // Determine which council to show: user-selected, or the currently active one
   const displayCouncilId = selectedCouncilId || activeCouncilId;
   const isRunning = pipeline.status === 'running';
+
+  // Find the step that produced the displayed council (for showing its artifact)
+  const displayedStep = displayCouncilId
+    ? pipeline.stages.flatMap((s) => s.steps).find(
+        (s) => s.artifact?.metadata?.councilId === displayCouncilId
+          || (s.status === 'running' && s.config.type !== 'gate'
+              && activeCouncilId === displayCouncilId)
+      )
+    : null;
 
   return (
     <div className="pipeline-execution">
@@ -253,11 +260,11 @@ export default function PipelineExecutionView({
                           gateResolver={gateResolvers.get(step.id)}
                           activeCouncilId={activeCouncilId}
                           isActiveCouncil={
-                            isCouncilType(step.config.type) &&
-                            (step.artifact?.metadata?.councilId === displayCouncilId ||
+                            !!(step.artifact?.metadata?.councilId || (step.status === 'running' && step.config.type !== 'gate' && activeCouncilId)) &&
+                            ((step.artifact?.metadata?.councilId === displayCouncilId) ||
                               (step.status === 'running' && activeCouncilId === displayCouncilId))
                           }
-                          isSelectedStep={!isCouncilType(step.config.type) && selectedStepId === step.id}
+                          isSelectedStep={selectedStepId === step.id}
                           onSelectCouncil={(councilId) => {
                             setSelectedCouncilId(councilId);
                             setSelectedStepId(null);
@@ -291,6 +298,9 @@ export default function PipelineExecutionView({
             onAbort={onAbortDeliberation}
             onUserMessage={onUserMessage}
           />
+          {displayedStep && (
+            <StepOutputPanel step={displayedStep} />
+          )}
         </div>
       ) : selectedStepId ? (
         <StepOutputViewer pipeline={pipeline} stepId={selectedStepId} />
@@ -337,10 +347,10 @@ function ExecutionStepCard({
   onRetry?: () => void;
 }) {
   const statusColor = getStatusColor(step.status);
-  // For running council steps, use activeCouncilId as fallback when artifact doesn't have councilId yet
-  const councilId = isCouncilType(step.config.type)
-    ? (step.artifact?.metadata?.councilId || (step.status === 'running' ? activeCouncilId : null))
-    : null;
+  // Any step with a councilId in its artifact (or currently running non-gate) has a council
+  const councilId = step.artifact?.metadata?.councilId
+    || (step.status === 'running' && step.config.type !== 'gate' ? activeCouncilId : null)
+    || null;
 
   return (
     <div
@@ -348,7 +358,7 @@ function ExecutionStepCard({
       onClick={() => {
         if (councilId && onSelectCouncil) {
           onSelectCouncil(councilId);
-        } else if (!isCouncilType(step.config.type) && onSelectStep) {
+        } else if (!councilId && onSelectStep) {
           onSelectStep(step.id);
         }
       }}
@@ -381,11 +391,11 @@ function ExecutionStepCard({
       )}
 
       {/* Step view indicator */}
-      {isCouncilType(step.config.type) && councilId ? (
+      {councilId ? (
         <div className="council-indicator">
           {isActiveCouncil ? 'Viewing deliberation' : 'Click to view deliberation'}
         </div>
-      ) : !isCouncilType(step.config.type) && (step.artifact || step.status === 'running') ? (
+      ) : !councilId && (step.artifact || step.status === 'running') ? (
         <div className="step-view-indicator">
           {isSelectedStep ? 'Viewing output' : 'Click to view output'}
         </div>
@@ -409,8 +419,8 @@ function ExecutionStepCard({
         </button>
       )}
 
-      {/* Artifact preview (compact, in card) */}
-      {step.artifact && !isCouncilType(step.config.type) && !isSelectedStep && (
+      {/* Artifact preview (compact, in card) — hide for steps with councils */}
+      {step.artifact && !councilId && !isSelectedStep && (
         <div className="artifact-preview">
           <button
             className="artifact-toggle"
@@ -486,6 +496,60 @@ function StepOutputViewer({
           )}
           {step.artifact.metadata.tokensUsed && (
             <span className="step-output-meta-item">Tokens: {step.artifact.metadata.tokensUsed}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// Step Output Panel — shown at bottom of deliberation for every step type
+// Displays the explicit artifact that downstream steps consume.
+// ============================================================================
+
+function StepOutputPanel({ step }: { step: PipelineStep }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const artifact = step.artifact;
+  const isRunning = step.status === 'running';
+
+  // Determine output label based on artifact content
+  const outputPath = artifact?.metadata?.outputPath;
+  const artifactLabel = artifact?.artifactType === 'decision' ? 'Decision'
+    : artifact?.artifactType === 'approval' ? 'Approval'
+    : outputPath ? 'File Output'
+    : 'Output';
+
+  return (
+    <div className="step-output-panel">
+      <button
+        className="step-output-panel-header"
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <span className={`collapse-arrow ${collapsed ? 'collapsed' : ''}`}>&#9662;</span>
+        <span className="step-output-panel-icon">{getStepIcon(step.config.type)}</span>
+        <span className="step-output-panel-title">Step Output</span>
+        <span className="step-output-panel-label">{step.name}</span>
+        <span className="step-output-panel-type">{artifactLabel}</span>
+        {step.status === 'completed' && <span className="step-output-panel-check">&#10003;</span>}
+        {isRunning && !artifact && <span className="step-output-panel-running">Running...</span>}
+      </button>
+
+      {!collapsed && (
+        <div className="step-output-panel-body">
+          {outputPath && (
+            <div className="step-output-panel-path">
+              <span className="path-label">File:</span>
+              <code className="path-value">{outputPath}</code>
+            </div>
+          )}
+
+          {artifact ? (
+            <pre className="step-output-panel-content">{artifact.content}</pre>
+          ) : isRunning ? (
+            <div className="step-output-panel-pending">Output will appear when the step completes.</div>
+          ) : (
+            <div className="step-output-panel-pending">No output yet.</div>
           )}
         </div>
       )}

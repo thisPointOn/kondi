@@ -77,6 +77,7 @@ export const personaSchema = z.object({
   verbosity: verbositySchema,
   muted: z.boolean().optional(),
   preferredDeliberationRole: deliberationRoleSchema.optional(),
+  allowedServerIds: z.array(z.string()).optional(),
 });
 
 export const presetPersonaSchema = z.object({
@@ -187,6 +188,8 @@ export const councilSchema = z.object({
   // Deliberation fields (optional, only when mode === 'deliberation')
   deliberation: z.lazy(() => deliberationConfigSchema).optional(),
   deliberationState: z.lazy(() => deliberationStateSchema).optional(),
+  // Pipeline linkage (set when council was created by a pipeline step)
+  pipelineId: z.string().optional(),
 });
 
 // ============================================================================
@@ -405,6 +408,8 @@ export const deliberationRoleAssignmentSchema = z.object({
   stance: z.string().optional(),
   suppressPersona: z.boolean().optional(),
   writePermissions: z.boolean().optional(),
+  allowedServerIds: z.array(z.string()).optional(),
+  toolAccess: z.enum(['full', 'none']).optional(),
 });
 
 export const patchDecisionSchema = z.object({
@@ -433,8 +438,8 @@ export const deliberationConfigSchema = z.object({
   enabled: z.boolean(),
   roleAssignments: z.array(deliberationRoleAssignmentSchema),
   minRounds: z.number().int().min(1).default(1),
-  maxRounds: z.number().int().min(1).max(10).default(4),
-  maxRevisions: z.number().int().min(1).max(10).default(3),
+  maxRounds: z.number().int().min(0).max(10).default(4),
+  maxRevisions: z.number().int().min(0).max(10).default(3),
   decisionCriteria: z.array(z.string()).optional(),
   summaryMode: summaryModeSchema.default('manager'),
   summarizeAfterRound: z.number().int().min(1).default(2),
@@ -455,6 +460,7 @@ export const deliberationConfigSchema = z.object({
   maxDebugCycles: z.number().int().optional(),
   maxReviewCycles: z.number().int().optional(),
   allowedServerIds: z.array(z.string()).optional(),
+  bootstrapContext: z.boolean().optional(),
 });
 
 export const deliberationStateSchema = z.object({
@@ -462,9 +468,9 @@ export const deliberationStateSchema = z.object({
   previousPhase: deliberationPhaseSchema.optional(),
   currentRound: z.number().int().min(0),
   roundRunId: z.string(),
-  maxRounds: z.number().int().min(1),
+  maxRounds: z.number().int().min(0),
   revisionCount: z.number().int().min(0),
-  maxRevisions: z.number().int().min(1),
+  maxRevisions: z.number().int().min(0),
   roundSubmissions: z.record(z.string(), z.array(z.string())),
   roundSummaries: z.record(z.string(), z.string()),
   activeContextId: z.string(),

@@ -13,7 +13,9 @@ export type ModelProvider =
   | 'openai-api'       // Direct OpenAI API (requires API key)
   | 'openai-cli'       // Codex CLI (subscription-based)
   | 'deepseek'
-  | 'google';
+  | 'google'
+  | 'xai'
+  | 'ollama';
 
 /** Legacy provider names for backwards compatibility */
 export type LegacyProvider = 'anthropic' | 'openai';
@@ -299,7 +301,31 @@ export const DEEPSEEK_MODELS: ModelDefinition[] = [
 // ============================================================================
 export const GOOGLE_MODELS: ModelDefinition[] = [
   {
-    id: 'gemini-2.0-flash-exp',
+    id: 'models/gemini-2.5-pro',
+    name: 'Gemini 2.5 Pro',
+    provider: 'google',
+    contextWindow: 1048576,
+    capabilities: ['text', 'vision', 'code', 'reasoning'],
+    inputCostPer1K: 0.00125,
+    outputCostPer1K: 0.01,
+    costDisplay: '~$0.005/msg',
+    featured: true,
+    tier: 1,
+  },
+  {
+    id: 'models/gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash',
+    provider: 'google',
+    contextWindow: 1048576,
+    capabilities: ['text', 'vision', 'code', 'reasoning'],
+    inputCostPer1K: 0.00015,
+    outputCostPer1K: 0.0006,
+    costDisplay: '~$0.001/msg',
+    featured: true,
+    tier: 2,
+  },
+  {
+    id: 'models/gemini-2.0-flash',
     name: 'Gemini 2.0 Flash',
     provider: 'google',
     contextWindow: 1048576,
@@ -307,11 +333,10 @@ export const GOOGLE_MODELS: ModelDefinition[] = [
     inputCostPer1K: 0.00035,
     outputCostPer1K: 0.00105,
     costDisplay: '~$0.001/msg',
-    featured: true,
     tier: 2,
   },
   {
-    id: 'gemini-1.5-pro',
+    id: 'models/gemini-1.5-pro',
     name: 'Gemini 1.5 Pro',
     provider: 'google',
     contextWindow: 2097152,
@@ -321,16 +346,85 @@ export const GOOGLE_MODELS: ModelDefinition[] = [
     costDisplay: '~$0.003/msg',
     tier: 2,
   },
+];
+
+// ============================================================================
+// x.ai (Grok) Models
+// ============================================================================
+export const XAI_MODELS: ModelDefinition[] = [
   {
-    id: 'gemini-1.5-flash',
-    name: 'Gemini 1.5 Flash',
-    provider: 'google',
-    contextWindow: 1048576,
-    capabilities: ['text', 'vision', 'code'],
-    inputCostPer1K: 0.000075,
-    outputCostPer1K: 0.0003,
-    costDisplay: '~$0.0002/msg',
+    id: 'grok-3',
+    name: 'Grok 3',
+    provider: 'xai',
+    contextWindow: 131072,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0.003,
+    outputCostPer1K: 0.015,
+    costDisplay: '~$0.005/msg',
+    featured: true,
+    tier: 1,
+  },
+  {
+    id: 'grok-3-fast',
+    name: 'Grok 3 Fast',
+    provider: 'xai',
+    contextWindow: 131072,
+    capabilities: ['text', 'code'],
+    inputCostPer1K: 0.005,
+    outputCostPer1K: 0.025,
+    costDisplay: '~$0.01/msg',
+    tier: 2,
+  },
+  {
+    id: 'grok-3-mini',
+    name: 'Grok 3 Mini',
+    provider: 'xai',
+    contextWindow: 131072,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0.0003,
+    outputCostPer1K: 0.0005,
+    costDisplay: '~$0.001/msg',
     tier: 3,
+  },
+];
+
+// ============================================================================
+// Ollama Models (local — populated dynamically, with common defaults)
+// ============================================================================
+export const OLLAMA_MODELS: ModelDefinition[] = [
+  {
+    id: 'llama3.1',
+    name: 'Llama 3.1',
+    provider: 'ollama',
+    contextWindow: 128000,
+    capabilities: ['text', 'code'],
+    inputCostPer1K: 0,
+    outputCostPer1K: 0,
+    costDisplay: 'Free (local)',
+    featured: true,
+    tier: 1,
+  },
+  {
+    id: 'qwen2.5-coder',
+    name: 'Qwen 2.5 Coder',
+    provider: 'ollama',
+    contextWindow: 32768,
+    capabilities: ['text', 'code'],
+    inputCostPer1K: 0,
+    outputCostPer1K: 0,
+    costDisplay: 'Free (local)',
+    tier: 2,
+  },
+  {
+    id: 'mistral',
+    name: 'Mistral',
+    provider: 'ollama',
+    contextWindow: 32768,
+    capabilities: ['text', 'code'],
+    inputCostPer1K: 0,
+    outputCostPer1K: 0,
+    costDisplay: 'Free (local)',
+    tier: 2,
   },
 ];
 
@@ -346,6 +440,8 @@ export const ALL_MODELS: ModelDefinition[] = [
   ...OPENAI_CLI_MODELS,
   ...DEEPSEEK_MODELS,
   ...GOOGLE_MODELS,
+  ...XAI_MODELS,
+  ...OLLAMA_MODELS,
 ];
 
 /** Get models by provider */
@@ -390,10 +486,11 @@ export function getModelsForPersonaSelector(): Array<{
     'openai-api': 3,
     'deepseek': 4,
     'google': 5,
+    'xai': 6,
+    'ollama': 7,
   };
 
   return ALL_MODELS
-    .filter(m => m.provider !== 'google') // Google not yet supported in council
     .sort((a, b) => {
       // Sort by provider first, then by tier
       const aOrder = providerOrder[a.provider] ?? 99;
@@ -491,6 +588,11 @@ export function resolveDefaultModel(
       model: OPENAI_CLI_TO_API_MODEL[model] || 'gpt-4o',
       provider: 'openai-api',
     };
+  }
+
+  // Non-CLI providers (deepseek, xai, google, ollama): return as-is if available
+  if (!provider.endsWith('-cli') && !provider.endsWith('-api') && available[provider]) {
+    return { model, provider };
   }
 
   // If neither CLI nor API is available for that vendor, try the other vendor

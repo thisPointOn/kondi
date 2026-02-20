@@ -63,6 +63,8 @@ import {
   isDeliberationMode,
 } from './store';
 
+import { bootstrapDirectoryContext } from './context-bootstrap';
+
 import {
   buildManagerFramingPrompt,
   buildManagerEvaluationPrompt,
@@ -92,10 +94,6 @@ export interface AgentInvocation {
   userMessage: string;
   /** When true, the invoker should NOT pass MCP tools (avoids slow MCP connections) */
   skipTools?: boolean;
-  /** Explicit list of CLI tools to allow (e.g. ['Read','Grep','Glob']). Undefined = default set. */
-  allowedTools?: string[];
-  /** Resume an existing CLI session (within a single step/council) */
-  conversationId?: string;
   /** MCP servers this invocation can access (undefined = all servers) */
   allowedServerIds?: string[];
 }
@@ -105,8 +103,6 @@ export interface AgentResponse {
   tokensUsed: number;
   latencyMs: number;
   structured?: Record<string, unknown>;
-  /** Session ID returned by the CLI, for resuming within this step/council */
-  sessionId?: string;
 }
 
 export type AgentInvoker = (invocation: AgentInvocation, persona: Persona) => Promise<AgentResponse>;
@@ -130,15 +126,15 @@ const PHASE_TRANSITIONS: Record<DeliberationPhase, {
   validNext: DeliberationPhase[];
   terminal: boolean;
 }> = {
-  created: { validNext: ['problem_framing'], terminal: false },
-  problem_framing: { validNext: ['round_independent'], terminal: false },
+  created: { validNext: ['problem_framing', 'executing'], terminal: false },
+  problem_framing: { validNext: ['round_independent', 'deciding'], terminal: false },
   round_independent: { validNext: ['round_waiting_for_manager'], terminal: false },
   round_interactive: { validNext: ['round_waiting_for_manager'], terminal: false },
   round_waiting_for_manager: { validNext: ['round_interactive', 'deciding', 'planning'], terminal: false },
   planning: { validNext: ['directing'], terminal: false },
-  deciding: { validNext: ['planning', 'directing'], terminal: false },
+  deciding: { validNext: ['planning', 'directing', 'completed'], terminal: false },
   directing: { validNext: ['executing'], terminal: false },
-  executing: { validNext: ['reviewing'], terminal: false },
+  executing: { validNext: ['reviewing', 'completed'], terminal: false },
   reviewing: { validNext: ['completed', 'revising', 'round_interactive'], terminal: false },
   revising: { validNext: ['reviewing', 'completed'], terminal: false },
   decomposing: { validNext: [], terminal: false },
@@ -159,8 +155,6 @@ const PHASE_TRANSITIONS: Record<DeliberationPhase, {
 export class DeliberationOrchestrator {
   private config: OrchestratorConfig;
   private activeCouncilId: string | null = null;
-  /** Per-persona session IDs for conversation persistence within a council */
-  private personaSessionIds: Map<string, string> = new Map();
 
   constructor(config: OrchestratorConfig) {
     this.config = config;
@@ -177,7 +171,6 @@ export class DeliberationOrchestrator {
   async runFullDeliberation(council: Council, rawProblem: string): Promise<void> {
     console.log('[Orchestrator] Starting full deliberation...');
     this.activeCouncilId = council.id;
-    this.personaSessionIds.clear();
 
     // Always read fresh from store to avoid stale React state
     council = councilStore.get(council.id) || council;
@@ -185,18 +178,17 @@ export class DeliberationOrchestrator {
     // Pre-flight check: log role assignments and personas for debugging
     const roleAssignments = council.deliberation?.roleAssignments || [];
     const consultantAssignments = roleAssignments.filter(r => r.role === 'consultant');
-    const consultantPersonas = consultantAssignments
-      .map(r => council.personas.find(p => p.id === r.personaId))
-      .filter(Boolean);
+    const managerAssignments = roleAssignments.filter(r => r.role === 'manager');
+    const workerAssignments = roleAssignments.filter(r => r.role === 'worker');
 
     console.log('[Orchestrator] PRE-FLIGHT CHECK:', {
       totalPersonas: council.personas.length,
       personaNames: council.personas.map(p => `${p.name} (${p.id.slice(0, 8)})`),
       totalRoleAssignments: roleAssignments.length,
       roleBreakdown: {
-        managers: roleAssignments.filter(r => r.role === 'manager').length,
+        managers: managerAssignments.length,
         consultants: consultantAssignments.length,
-        workers: roleAssignments.filter(r => r.role === 'worker').length,
+        workers: workerAssignments.length,
       },
       consultantDetails: consultantAssignments.map(r => {
         const p = council.personas.find(p => p.id === r.personaId);
@@ -212,7 +204,7 @@ export class DeliberationOrchestrator {
         .map(r => `${r.role}:${r.personaId.slice(0, 8)}`),
     });
 
-    if (consultantAssignments.length < 2) {
+    if (consultantAssignments.length < 2 && consultantAssignments.length > 0) {
       console.warn(`[Orchestrator] WARNING: Only ${consultantAssignments.length} consultant(s) found. ` +
         `If you expected more, check role assignments in Setup.`);
     }
@@ -234,6 +226,13 @@ export class DeliberationOrchestrator {
       councilStore.setRoleAssignments(council.id, repairedAssignments);
       // Re-fetch council with repaired assignments
       council = councilStore.get(council.id)!;
+    }
+
+    // Special path: 0 managers → direct execution (worker-only council)
+    if (managerAssignments.length === 0) {
+      console.log('[Orchestrator] No manager — running direct execution path');
+      await this.runDirectExecution(council, rawProblem);
+      return;
     }
 
     // Phase 1: Frame the problem
@@ -467,9 +466,22 @@ export class DeliberationOrchestrator {
     // Transition to problem_framing
     this.transitionPhase(council.id, 'problem_framing');
 
+    // Bootstrap directory context if enabled
+    let enrichedProblem = rawProblem;
+    if (council.deliberation?.bootstrapContext && council.deliberation?.workingDirectory) {
+      try {
+        const dirContext = await bootstrapDirectoryContext(council.deliberation.workingDirectory);
+        if (dirContext) {
+          enrichedProblem = `${dirContext}\n\n---\n\n${rawProblem}`;
+        }
+      } catch (error) {
+        console.warn('[Orchestrator] Directory context bootstrap failed:', error);
+      }
+    }
+
     // Build prompts per Section 9.1
     const systemPrompt = manager.predisposition.systemPrompt;
-    const userMessage = buildManagerFramingPrompt(rawProblem);
+    const userMessage = buildManagerFramingPrompt(enrichedProblem);
 
     // Invoke manager
     const response = await this.invokeAgentSafe(
@@ -497,9 +509,16 @@ export class DeliberationOrchestrator {
       [{ artifactType: 'context', artifactId: context.id, version: 1 }]
     );
 
-    // Transition to round_independent
-    this.transitionPhase(council.id, 'round_independent');
-    councilStore.advanceRound(council.id);
+    // Check if consultants exist — skip deliberation rounds if none
+    const consultants = this.getConsultants(council);
+    if (consultants.length === 0) {
+      console.log('[Orchestrator] 0 consultants — skipping deliberation rounds, moving to deciding');
+      this.transitionPhase(council.id, 'deciding');
+    } else {
+      // Transition to round_independent
+      this.transitionPhase(council.id, 'round_independent');
+      councilStore.advanceRound(council.id);
+    }
 
     return entry;
   }
@@ -1057,6 +1076,16 @@ export class DeliberationOrchestrator {
       [{ artifactType: 'decision', artifactId: decision.id }]
     );
 
+    // Check if workers exist — if not, decision IS the output
+    const workers = getPersonaByRole(council, 'worker');
+    if (workers.length === 0) {
+      console.log('[Orchestrator] 0 workers — decision is the final output');
+      councilStore.updateDeliberationState(council.id, { completionSummary: response.content });
+      this.transitionPhase(council.id, 'completed');
+      councilStore.setStatus(council.id, 'resolved');
+      return entry;
+    }
+
     // Transition to planning or directing
     const requirePlan = council.deliberation?.requirePlan || false;
     this.transitionPhase(council.id, requirePlan ? 'planning' : 'directing');
@@ -1480,6 +1509,100 @@ export class DeliberationOrchestrator {
 
     this.transitionPhase(council.id, 'reviewing');
     return entry;
+  }
+
+  // ==========================================================================
+  // Direct Execution (0 managers — worker-only council)
+  // ==========================================================================
+
+  /**
+   * Run direct execution: worker executes the raw input directly.
+   * No manager framing, no deliberation, no review.
+   * Used when a council has only worker(s) and no manager.
+   */
+  async runDirectExecution(council: Council, rawProblem: string): Promise<void> {
+    this.activeCouncilId = council.id;
+    const workers = getPersonaByRole(council, 'worker');
+    if (workers.length === 0) {
+      throw new Error('No workers assigned for direct execution');
+    }
+
+    const worker = workers[0];
+    const assignment = getRoleAssignment(council, worker.id);
+    const suppressPersona = assignment?.suppressPersona !== false;
+
+    // Bootstrap directory context if enabled
+    let enrichedProblem = rawProblem;
+    if (council.deliberation?.bootstrapContext && council.deliberation?.workingDirectory) {
+      try {
+        const dirContext = await bootstrapDirectoryContext(council.deliberation.workingDirectory);
+        if (dirContext) {
+          enrichedProblem = `${dirContext}\n\n---\n\n${rawProblem}`;
+        }
+      } catch (error) {
+        console.warn('[Orchestrator] Directory context bootstrap failed:', error);
+      }
+    }
+
+    // Create a synthetic directive from the raw input
+    this.transitionPhase(council.id, 'executing');
+
+    const directive = createDirective(council.id, enrichedProblem, 'direct-execution');
+    councilStore.setWorkDirective(council.id, directive.id);
+
+    this.createEntry(
+      council.id,
+      'worker',
+      worker.id,
+      'work_directive',
+      'executing',
+      enrichedProblem,
+      0, 0,
+      [{ artifactType: 'directive', artifactId: directive.id }]
+    );
+
+    // Build worker permissions
+    const workerPermissions: WorkerPermissions = {
+      writePermissions: assignment?.writePermissions,
+      workingDirectory: council.deliberation?.workingDirectory,
+      directoryConstrained: council.deliberation?.directoryConstrained,
+    };
+
+    const stepType = council.deliberation?.stepType;
+    const systemPrompt = suppressPersona
+      ? getMinimalWorkerSystemPrompt(workerPermissions, stepType)
+      : worker.predisposition.systemPrompt;
+
+    const userMessage = buildWorkerExecutionPrompt(enrichedProblem, workerPermissions, stepType);
+
+    const response = await this.invokeAgentSafe(
+      { personaId: worker.id, systemPrompt, userMessage },
+      worker,
+      'execution'
+    );
+
+    // Create output artifact
+    const output = createOutput(council.id, response.content, directive.id);
+    councilStore.setCurrentOutput(council.id, output.id);
+
+    this.createEntry(
+      council.id,
+      'worker',
+      worker.id,
+      'work_output',
+      'executing',
+      response.content,
+      response.tokensUsed,
+      response.latencyMs,
+      [{ artifactType: 'output', artifactId: output.id, version: output.version }]
+    );
+
+    // No review — first output is accepted
+    councilStore.updateDeliberationState(council.id, { completionSummary: response.content });
+    this.transitionPhase(council.id, 'completed');
+    councilStore.setStatus(council.id, 'resolved');
+
+    console.log('[Orchestrator] Direct execution completed');
   }
 
   // ==========================================================================
@@ -1991,16 +2114,19 @@ export class DeliberationOrchestrator {
       invocation = { ...invocation, allowedServerIds: effectiveServers };
     }
 
-    // Per-persona session persistence: ONLY for worker/execution phases.
-    // Manager and consultant calls rebuild context from scratch each time
-    // (via buildManagerEvalContext / buildRoundNContext), so resuming a session
-    // would duplicate the history and massively inflate token usage.
-    const workerPhases = ['execution', 'revision', 'debug'];
-    if (workerPhases.includes(context)) {
-      const existingSessionId = this.personaSessionIds.get(persona.id);
-      if (existingSessionId) {
-        invocation = { ...invocation, conversationId: existingSessionId };
-      }
+    // Apply per-persona tool access overrides from role assignment
+    const roleAssignment = council?.deliberation?.roleAssignments
+      ?.find(r => r.personaId === persona.id);
+
+    if (roleAssignment?.toolAccess === 'none') {
+      invocation = { ...invocation, skipTools: true };
+    } else if (roleAssignment?.toolAccess === 'full') {
+      const { skipTools: _, ...rest } = invocation;
+      invocation = rest as AgentInvocation;
+    }
+
+    if (roleAssignment?.allowedServerIds) {
+      invocation = { ...invocation, allowedServerIds: roleAssignment.allowedServerIds };
     }
 
     // Inject brevity instruction if maxWordsPerResponse is configured
@@ -2019,12 +2145,6 @@ export class DeliberationOrchestrator {
       this.config.onAgentThinkingStart?.(persona);
       const response = await this.config.invokeAgent(invocation, persona);
       this.config.onAgentThinkingEnd?.(persona);
-
-      // Store session ID for subsequent calls from this persona
-      if (response.sessionId) {
-        this.personaSessionIds.set(persona.id, response.sessionId);
-      }
-
       return response;
     } catch (error) {
       this.config.onAgentThinkingEnd?.(persona);

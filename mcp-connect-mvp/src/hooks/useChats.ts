@@ -210,19 +210,16 @@ export function useChats({
     try {
       let assistantMessage;
       if (provider === 'chatgpt' && openaiKey) {
-        openaiClient.setApiKey(openaiKey);
         const res = await openaiClient.chat([userMessage], available, openaiModel);
         assistantMessage = { ...res.message, timestamp: new Date() };
       } else if (anthropicKey) {
-        anthropicClient.setApiKey(anthropicKey);
         const res = await anthropicClient.chat([userMessage], available, anthropicModel);
         assistantMessage = { ...res.message, timestamp: new Date() };
       } else if (openaiKey) {
-        openaiClient.setApiKey(openaiKey);
         const res = await openaiClient.chat([userMessage], available, openaiModel);
         assistantMessage = { ...res.message, timestamp: new Date() };
       } else {
-        throw new Error('No LLM API key configured.');
+        throw new Error('No LLM provider configured. Add credentials in LLM Providers settings.');
       }
 
       const chatId = crypto.randomUUID();

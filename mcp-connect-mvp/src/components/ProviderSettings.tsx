@@ -405,7 +405,7 @@ const ProviderCard: FC<ProviderCardProps> = ({
                   {provider.activeAuthMethod === 'oauth' ? (
                     <>
                       <ExternalLink size={12} />
-                      OAuth ({provider.cliTool} CLI)
+                      Subscription (OAuth)
                     </>
                   ) : (
                     <>
@@ -434,7 +434,7 @@ const ProviderCard: FC<ProviderCardProps> = ({
                       <ExternalLink size={12} />
                       OAuth
                     </span>
-                    <span className="oauth-cli-name">via {provider.cliTool} CLI</span>
+                    <span className="oauth-cli-name">Subscription</span>
                   </div>
                   <div className="oauth-status-wrapper">
                     {provider.oauthAvailable ? (
@@ -508,7 +508,7 @@ const ProviderCard: FC<ProviderCardProps> = ({
                 {provider.oauthAvailable ? (
                   <div className="oauth-info">
                     <p className="oauth-detail">
-                      Using <code>{provider.cliTool}</code> CLI for API access (subscription)
+                      Using subscription credentials (OAuth token)
                     </p>
                     {provider.config.expiresAt && (
                       <span className="token-expiry">
@@ -517,16 +517,16 @@ const ProviderCard: FC<ProviderCardProps> = ({
                       </span>
                     )}
                     <p className="oauth-hint">
-                      Requests are routed through the CLI. To re-auth: <code>{provider.cliTool} login</code>
+                      To re-authenticate: run <code>{provider.cliTool}</code> in terminal, then click Refresh
                     </p>
                   </div>
                 ) : (
                   <div className="oauth-connect-hint">
                     <p className="oauth-instruction">
-                      Run <code>{provider.cliTool} login</code> in terminal, then click Refresh
+                      Click Connect to import credentials from <code>{provider.cliTool}</code> CLI
                     </p>
                     <p className="oauth-instruction-small">
-                      Uses your subscription via CLI (no API key needed)
+                      Uses your subscription (no API key needed)
                     </p>
                   </div>
                 )}
@@ -773,12 +773,19 @@ function getProviderIcon(providerId: string) {
   switch (providerId) {
     // Primary providers
     case 'anthropic':
+    case 'anthropic-cli':
+    case 'anthropic-api':
       return Bot;
     case 'openai':
+    case 'openai-cli':
+    case 'openai-api':
     case 'openai-oauth':
       return Cpu;
     case 'gemini':
+    case 'google':
       return Sparkles;
+    case 'xai':
+      return Brain;
 
     // OAuth/Device-code providers
     case 'copilot':

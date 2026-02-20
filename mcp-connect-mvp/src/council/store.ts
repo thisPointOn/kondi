@@ -168,6 +168,7 @@ export function createCouncil(params: {
   personas?: Persona[];
   orchestration?: Partial<OrchestrationConfig>;
   deliberation?: Partial<DeliberationConfig>;
+  pipelineId?: string;
 }): Council {
   const now = new Date().toISOString();
   const isDeliberationMode = params.orchestration?.mode === 'deliberation';
@@ -206,6 +207,7 @@ export function createCouncil(params: {
       minRounds: params.deliberation?.minRounds ?? 1,
       maxRounds: params.deliberation?.maxRounds ?? 4,
       maxRevisions: params.deliberation?.maxRevisions ?? 3,
+      expectedOutput: params.deliberation?.expectedOutput,
       decisionCriteria: params.deliberation?.decisionCriteria,
       summaryMode: params.deliberation?.summaryMode ?? 'hybrid',
       summarizeAfterRound: params.deliberation?.summarizeAfterRound ?? 1,
@@ -218,10 +220,18 @@ export function createCouncil(params: {
       directoryConstrained: params.deliberation?.directoryConstrained ?? true,
       saveDeliberation: params.deliberation?.saveDeliberation ?? false,
       saveDeliberationMode: params.deliberation?.saveDeliberationMode ?? 'full',
+      maxWordsPerResponse: params.deliberation?.maxWordsPerResponse,
+      bootstrapContext: params.deliberation?.bootstrapContext,
       stepType: params.deliberation?.stepType,
+      testCommand: params.deliberation?.testCommand,
+      maxDebugCycles: params.deliberation?.maxDebugCycles,
+      maxReviewCycles: params.deliberation?.maxReviewCycles,
+      allowedServerIds: params.deliberation?.allowedServerIds,
     } : undefined,
     // Deliberation state (initialized when deliberation starts)
     deliberationState: undefined,
+    // Pipeline linkage
+    pipelineId: params.pipelineId,
   };
 
   // Validate before saving

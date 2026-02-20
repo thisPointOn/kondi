@@ -10,11 +10,11 @@ import type {
   PipelinePersona,
   StepConfig,
   CouncilStepConfig,
-  LlmStepConfig,
   GateStepConfig,
   PipelineStepType,
 } from '../../pipeline/types';
-import { isCouncilType, isLlmType } from '../../pipeline/types';
+import { isCouncilType } from '../../pipeline/types';
+import type { OutputType } from '../../pipeline/types';
 import { detectTestCommand } from '../../pipeline/test-detect';
 import type { Persona, DeliberationRoleAssignment } from '../../council/types';
 import { allTemplates, templateCategories, createPersonaFromTemplate } from '../../council';
@@ -363,28 +363,51 @@ function defaultPlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): 
     },
     inputTemplate: '{{input}}',
     outputSelection: 'output',
+    outputType: 'string',
   };
 }
 
-function defaultDecisioningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): LlmStepConfig {
+function defaultDecisioningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const m = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'decisioning',
-    model: m.model,
-    provider: m.provider,
-    systemPrompt: 'You are a decision-making agent. Analyze the input, weigh the options, and provide a clear decision with rationale. Structure your response as: Decision, Rationale, Risks, and Next Steps.',
+    councilSetup: {
+      name: 'Decisioning',
+      personas: [{
+        name: 'Analyst',
+        role: 'manager',
+        model: m.model,
+        provider: m.provider,
+        avatar: '\uD83E\uDD14',
+        color: '#6366f1',
+        systemPrompt: 'You are a decision-making agent. Analyze the input, weigh the options, and provide a clear decision with rationale. Structure your response as: Decision, Rationale, Risks, and Next Steps.',
+        suppressPersona: true,
+        traits: ['analytical', 'decisive'],
+      }],
+      maxRounds: 0,
+      maxRevisions: 0,
+      allowedServerIds: [],
+    },
     inputTemplate: '{{input}}',
-    allowedServerIds: [],
+    outputSelection: 'decision',
+    outputType: 'string',
   };
 }
 
-function defaultExecutionConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): LlmStepConfig {
+function defaultExecutionConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const m = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'execution',
-    model: m.model,
-    provider: m.provider,
-    systemPrompt: `You are an execution agent with access to tools. Your job is to ACTUALLY EXECUTE the work described in the input — do not just describe what you would do.
+    councilSetup: {
+      name: 'Execution',
+      personas: [{
+        name: 'Executor',
+        role: 'worker',
+        model: m.model,
+        provider: m.provider,
+        avatar: '\uD83E\uDD16',
+        color: '#f59e0b',
+        systemPrompt: `You are an execution agent with access to tools. Your job is to ACTUALLY EXECUTE the work described in the input — do not just describe what you would do.
 
 Use your available tools to:
 - Read and write files
@@ -393,8 +416,17 @@ Use your available tools to:
 - Fix any errors you encounter
 
 After executing, report: what you did, what succeeded, what failed, and any remaining issues. Include actual command output and test results.`,
+        suppressPersona: true,
+        traits: ['thorough', 'detail-oriented'],
+        saveOutput: true,
+      }],
+      maxRounds: 0,
+      maxRevisions: 0,
+      allowedServerIds: [],
+    },
     inputTemplate: '{{input}}',
-    allowedServerIds: [],
+    outputSelection: 'output',
+    outputType: 'string',
   };
 }
 
@@ -422,6 +454,7 @@ function defaultCodingConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): Co
     },
     inputTemplate: '{{input}}',
     outputSelection: 'output',
+    outputType: 'directory',
   };
 }
 
@@ -505,21 +538,10 @@ export default function StepConfigPanel({
         </div>
       </div>
 
-      {/* Type-specific config */}
+      {/* Type-specific config — all non-gate types are council-based */}
       {isCouncilType(step.config.type) && (
         <CouncilConfig
           config={step.config as CouncilStepConfig}
-          pipelineSettings={pipelineSettings}
-          isFirstStage={isFirstStage}
-          availableInputSteps={availableInputSteps}
-          connectedServers={connectedServers}
-          onChange={onConfigUpdate}
-        />
-      )}
-
-      {isLlmType(step.config.type) && (
-        <LlmConfig
-          config={step.config as LlmStepConfig}
           pipelineSettings={pipelineSettings}
           isFirstStage={isFirstStage}
           availableInputSteps={availableInputSteps}
@@ -655,26 +677,25 @@ function CouncilConfig({
 
   // Determine which roles are required and can't be deleted
   const isRequiredRole = (persona: PipelinePersona): boolean => {
+    const countRole = (role: string) => config.councilSetup.personas.filter(p => p.role === role).length;
+
+    if (config.type === 'decisioning') {
+      // Decisioning: must have at least 1 manager
+      return persona.role === 'manager' && countRole('manager') <= 1;
+    }
+    if (config.type === 'execution') {
+      // Execution: must have at least 1 worker
+      return persona.role === 'worker' && countRole('worker') <= 1;
+    }
     if (config.type === 'coding') {
       // Coding: must have at least 1 manager, 1 worker
-      if (persona.role === 'manager') {
-        return config.councilSetup.personas.filter(p => p.role === 'manager').length <= 1;
-      }
-      if (persona.role === 'worker') {
-        return config.councilSetup.personas.filter(p => p.role === 'worker').length <= 1;
-      }
-    } else {
-      // Planning: must have at least 1 manager, 1 consultant, 1 worker
-      if (persona.role === 'manager') {
-        return config.councilSetup.personas.filter(p => p.role === 'manager').length <= 1;
-      }
-      if (persona.role === 'consultant') {
-        return config.councilSetup.personas.filter(p => p.role === 'consultant').length <= 1;
-      }
-      if (persona.role === 'worker') {
-        return config.councilSetup.personas.filter(p => p.role === 'worker').length <= 1;
-      }
+      if (persona.role === 'manager') return countRole('manager') <= 1;
+      if (persona.role === 'worker') return countRole('worker') <= 1;
+      return false;
     }
+    // Planning: must have at least 1 manager, 1 worker
+    if (persona.role === 'manager') return countRole('manager') <= 1;
+    if (persona.role === 'worker') return countRole('worker') <= 1;
     return false;
   };
 
@@ -765,7 +786,7 @@ function CouncilConfig({
             <label>Max Rounds</label>
             <input
               type="number"
-              min={1}
+              min={0}
               max={10}
               value={config.councilSetup.maxRounds ?? 4}
               onChange={(e) => updateSetup({ maxRounds: parseInt(e.target.value) || 4 })}
@@ -931,13 +952,36 @@ function CouncilConfig({
           <select
             value={config.outputSelection}
             onChange={(e) => update({ outputSelection: e.target.value as CouncilStepConfig['outputSelection'] })}
-            disabled
-            title="Planning and coding steps always use work output"
           >
-            <option value="output">Work Output</option>
+            <option value="decision">Decision (manager&apos;s final decision)</option>
+            <option value="output">Work Output (worker&apos;s deliverable)</option>
+            <option value="summary">Summary (abbreviated deliberation summary)</option>
           </select>
           <span className="hint">
-            {config.type === 'planning' ? 'Plan' : 'Code'} output is saved to the working directory
+            What this step passes to downstream steps — {config.outputSelection === 'decision'
+              ? 'the manager\'s decision and rationale'
+              : config.outputSelection === 'summary'
+              ? 'an abbreviated summary of the entire deliberation'
+              : 'the worker\'s final output, saved to the working directory'}
+          </span>
+        </div>
+        <div className="config-field">
+          <label>Output Type</label>
+          <select
+            value={config.outputType || 'string'}
+            onChange={(e) => update({ outputType: e.target.value as OutputType })}
+          >
+            <option value="string">String (text content passed directly)</option>
+            <option value="file">File (file path — next step reads the file)</option>
+            <option value="directory">Directory (directory path — next step reads all files)</option>
+          </select>
+          <span className="hint">
+            Tells downstream steps how to handle this output — {
+              (config.outputType || 'string') === 'directory'
+                ? 'the next step will be instructed to read all files in the output directory'
+                : (config.outputType || 'string') === 'file'
+                ? 'the next step will be instructed to read the output file'
+                : 'the output text is passed directly to the next step'}
           </span>
         </div>
         <div className="config-field">
@@ -986,95 +1030,6 @@ function CouncilConfig({
 }
 
 // ============================================================================
-// LLM Config (Decisioning / Execution)
-// ============================================================================
-
-function LlmConfig({
-  config,
-  pipelineSettings,
-  isFirstStage,
-  availableInputSteps,
-  connectedServers,
-  onChange,
-}: {
-  config: LlmStepConfig;
-  pipelineSettings: Pipeline['settings'];
-  isFirstStage?: boolean;
-  availableInputSteps?: AvailableInputStep[];
-  connectedServers?: ConnectedServerInfo[];
-  onChange: (c: StepConfig) => void;
-}) {
-  const update = (partial: Partial<LlmStepConfig>) => {
-    onChange({ ...config, ...partial });
-  };
-
-  return (
-    <>
-      <div className="config-section">
-        <div className="config-section-title">Model</div>
-        <div className="config-field">
-          <div className="model-groups">
-            {PROVIDER_ORDER.filter(p => MODELS_BY_PROVIDER[p]).map((providerName) => (
-              <div key={providerName} className="model-provider-group">
-                <div className="provider-header">{providerName}</div>
-                <div className="model-options">
-                  {MODELS_BY_PROVIDER[providerName].map((model) => (
-                    <div
-                      key={`${model.provider}:${model.id}`}
-                      className={`model-option ${config.model === model.id && config.provider === model.provider ? 'selected' : ''}`}
-                      onClick={() => update({ model: model.id, provider: model.provider })}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          update({ model: model.id, provider: model.provider });
-                        }
-                      }}
-                    >
-                      <span className="model-name">{model.name}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="config-section">
-        <div className="config-section-title">Prompts</div>
-        <div className="config-field">
-          <label>System Prompt</label>
-          <textarea
-            value={config.systemPrompt}
-            onChange={(e) => update({ systemPrompt: e.target.value })}
-            rows={4}
-          />
-        </div>
-        <InputSourcePicker
-          value={config.inputTemplate}
-          onChange={(v) => update({ inputTemplate: v })}
-          isFirstStage={isFirstStage}
-          availableInputSteps={availableInputSteps}
-        />
-        <DirectoryPicker
-          value={config.workingDirectory}
-          onChange={(dir) => update({ workingDirectory: dir })}
-          pipelineSettings={pipelineSettings}
-        />
-      </div>
-
-      <ToolAccessSection
-        allowedServerIds={config.allowedServerIds}
-        connectedServers={connectedServers}
-        onChange={(ids) => update({ allowedServerIds: ids })}
-      />
-    </>
-  );
-}
-
-// ============================================================================
 // Gate Config
 // ============================================================================
 
@@ -1086,17 +1041,30 @@ function GateConfig({
   onChange: (c: StepConfig) => void;
 }) {
   return (
-    <div className="config-section">
-      <div className="config-section-title">Gate Settings</div>
-      <div className="config-field">
-        <label>Approval Prompt</label>
-        <textarea
-          value={config.approvalPrompt}
-          onChange={(e) => onChange({ ...config, approvalPrompt: e.target.value })}
-          rows={4}
-          placeholder="What should the user see when asked to approve?"
-        />
+    <>
+      <div className="config-section">
+        <div className="config-section-title">Gate Settings</div>
+        <div className="config-field">
+          <label>Approval Prompt</label>
+          <textarea
+            value={config.approvalPrompt}
+            onChange={(e) => onChange({ ...config, approvalPrompt: e.target.value })}
+            rows={4}
+            placeholder="What should the user see when asked to approve?"
+          />
+        </div>
       </div>
-    </div>
+      <div className="config-section">
+        <div className="config-section-title">Input / Output</div>
+        <div className="config-field">
+          <label>Input</label>
+          <span className="hint">Gate receives all preceding step outputs for the user to review.</span>
+        </div>
+        <div className="config-field">
+          <label>Output</label>
+          <span className="hint">Gate outputs &ldquo;Approved&rdquo; when the user approves, or halts the pipeline if rejected.</span>
+        </div>
+      </div>
+    </>
   );
 }

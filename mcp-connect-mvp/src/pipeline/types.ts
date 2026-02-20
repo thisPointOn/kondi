@@ -9,6 +9,9 @@
 
 export type PipelineStepType = 'planning' | 'decisioning' | 'execution' | 'coding' | 'gate';
 
+/** What kind of data a step produces for downstream consumption */
+export type OutputType = 'string' | 'file' | 'directory';
+
 export type PipelineStepStatus =
   | 'pending'
   | 'running'
@@ -40,6 +43,7 @@ export interface StepArtifact {
     model?: string;
     tokensUsed?: number;
     outputPath?: string;   // file path where output was saved (planning/coding steps)
+    outputType?: OutputType; // what kind of data this artifact represents
     stepName?: string;     // human-readable name of the producing step
     stepType?: string;     // 'planning' | 'coding' | 'decisioning' | 'execution' | 'gate'
   };
@@ -72,6 +76,8 @@ export interface PipelinePersona {
   saveOutput?: boolean;
   /** MCP servers this persona can access (undefined = all servers) */
   allowedServerIds?: string[];
+  /** Override default tool behavior: 'full' = enable all tools, 'none' = disable tools */
+  toolAccess?: 'full' | 'none';
 }
 
 // ============================================================================
@@ -79,7 +85,7 @@ export interface PipelinePersona {
 // ============================================================================
 
 export interface CouncilStepConfig {
-  type: 'planning' | 'coding';
+  type: 'planning' | 'coding' | 'decisioning' | 'execution';
   councilSetup: {
     name: string;
     personas: PipelinePersona[];
@@ -98,6 +104,8 @@ export interface CouncilStepConfig {
   };
   inputTemplate: string;
   outputSelection: 'decision' | 'output' | 'summary';
+  /** What kind of data this step produces (default: 'string') */
+  outputType?: OutputType;
 }
 
 export interface LlmStepConfig {
@@ -106,6 +114,8 @@ export interface LlmStepConfig {
   provider: string;
   systemPrompt: string;
   inputTemplate: string;
+  /** What this step outputs to downstream steps (default: 'decision' for decisioning, 'output' for execution) */
+  outputSelection?: 'decision' | 'output' | 'summary';
   workingDirectory?: string;
   directoryConstrained?: boolean;
   /** MCP servers this step can access (undefined = all servers) */
@@ -119,14 +129,53 @@ export interface GateStepConfig {
 
 export type StepConfig = CouncilStepConfig | LlmStepConfig | GateStepConfig;
 
-/** Helper: is this a council-based step type? */
+/** Helper: is this a council-based step type? All non-gate types are councils. */
 export function isCouncilType(type: PipelineStepType): boolean {
-  return type === 'planning' || type === 'coding';
+  return type !== 'gate';
 }
 
-/** Helper: is this an LLM (non-council) step type? */
+/** Helper: is this a lightweight council (single-agent, 0-round)? */
+export function isLightweightCouncilType(type: PipelineStepType): boolean {
+  return type === 'decisioning' || type === 'execution';
+}
+
+/**
+ * @deprecated Use isLightweightCouncilType instead.
+ * Kept for backwards compatibility with existing code.
+ */
 export function isLlmType(type: PipelineStepType): boolean {
   return type === 'decisioning' || type === 'execution';
+}
+
+/**
+ * Migrate legacy LlmStepConfig to CouncilStepConfig.
+ * Old pipelines may have { type: 'decisioning'|'execution', model, provider, systemPrompt, ... }
+ * without a councilSetup. This creates one from the flat fields.
+ */
+export function migrateLlmConfig(config: LlmStepConfig): CouncilStepConfig {
+  const isDecisioning = config.type === 'decisioning';
+  return {
+    type: config.type,
+    councilSetup: {
+      name: isDecisioning ? 'Decisioning' : 'Execution',
+      personas: [{
+        name: isDecisioning ? 'Analyst' : 'Executor',
+        role: isDecisioning ? 'manager' : 'worker',
+        model: config.model,
+        provider: config.provider,
+        systemPrompt: config.systemPrompt,
+        suppressPersona: true,
+      }],
+      maxRounds: 0,
+      maxRevisions: 0,
+      workingDirectory: config.workingDirectory,
+      directoryConstrained: config.directoryConstrained,
+      allowedServerIds: config.allowedServerIds,
+    },
+    inputTemplate: config.inputTemplate,
+    outputSelection: config.outputSelection || (isDecisioning ? 'decision' : 'output'),
+    outputType: 'string',
+  };
 }
 
 // ============================================================================

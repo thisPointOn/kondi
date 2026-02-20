@@ -30,19 +30,19 @@ function getStepIcon(type: StepConfig['type']): string {
 
 function getStepSummary(step: PipelineStep): string {
   if (isCouncilType(step.config.type)) {
-    const c = step.config as { councilSetup: { personas: unknown[] }; outputSelection: string };
-    const count = c.councilSetup.personas.length;
-    return `${count} persona${count !== 1 ? 's' : ''} \u00B7 ${c.outputSelection}`;
+    // All non-gate types now use CouncilStepConfig with councilSetup
+    const c = step.config as { councilSetup?: { personas: unknown[] }; outputSelection?: string };
+    if (c.councilSetup) {
+      const count = c.councilSetup.personas.length;
+      return `${count} persona${count !== 1 ? 's' : ''} \u00B7 ${c.outputSelection || 'output'}`;
+    }
+    // Legacy LlmStepConfig fallback
+    return (step.config as { model?: string }).model || step.config.type;
   }
-  switch (step.config.type) {
-    case 'decisioning':
-    case 'execution':
-      return (step.config as { model: string }).model;
-    case 'gate':
-      return 'Approval checkpoint';
-    default:
-      return '';
+  if (step.config.type === 'gate') {
+    return 'Approval checkpoint';
   }
+  return '';
 }
 
 export default function StageRow({

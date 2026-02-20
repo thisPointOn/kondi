@@ -1,8 +1,7 @@
 /**
  * Pipeline Executor
  * Runs pipelines: sequential stages, parallel steps within stages.
- * Council steps create real councils via DeliberationOrchestrator.
- * Execution steps make direct LLM calls.
+ * All step types (planning, coding, decisioning, execution) create councils.
  * Gate steps pause for user approval.
  */
 
@@ -15,15 +14,16 @@ import type {
   LlmStepConfig,
   GateStepConfig,
 } from './types';
-import { isCouncilType } from './types';
+import { migrateLlmConfig } from './types';
 
 import { pipelineStore } from './store';
 import { councilStore } from '../council/store';
+import { createCouncilFromSetup } from '../council/factory';
 import { DeliberationOrchestrator } from '../council/deliberation-orchestrator';
 import { CodingOrchestrator } from '../council/coding-orchestrator';
 import { getDecision, getLatestOutput } from '../council/context-store';
 import { buildAbbreviatedSummary } from '../services/deliberationSummary';
-import type { Persona, DeliberationRoleAssignment } from '../council/types';
+import type { Persona } from '../council/types';
 import type { AgentInvocation, AgentResponse } from '../council/deliberation-orchestrator';
 
 // ============================================================================
@@ -33,17 +33,6 @@ import type { AgentInvocation, AgentResponse } from '../council/deliberation-orc
 export interface PipelineExecutorCallbacks {
   /** Same invokeAgent used by DeliberationOrchestrator */
   invokeAgent: (invocation: AgentInvocation, persona: Persona) => Promise<AgentResponse>;
-  /** Direct LLM call for execution steps */
-  llmComplete: (params: {
-    model: string;
-    provider: string;
-    systemPrompt: string;
-    userMessage: string;
-    conversationId?: string;
-    allowedServerIds?: string[];
-    skipTools?: boolean;
-    allowedTools?: string[];
-  }) => Promise<{ content: string; tokensUsed: number; sessionId?: string }>;
 
   onStageStart?: (stageIndex: number) => void;
   onStageComplete?: (stageIndex: number) => void;
@@ -87,8 +76,20 @@ function formatArtifactForInput(artifact: StepArtifact): string {
     const typeLabel = artifact.metadata.stepType ? ` (${artifact.metadata.stepType})` : '';
     lines.push(`[Source: ${artifact.metadata.stepName}${typeLabel}]`);
   }
-  if (artifact.metadata?.outputPath) {
-    lines.push(`[Output file: ${artifact.metadata.outputPath}]`);
+
+  const outputType = artifact.metadata?.outputType || 'string';
+  const outputPath = artifact.metadata?.outputPath;
+
+  if (outputType === 'directory' && outputPath) {
+    lines.push(`[Output type: directory]`);
+    lines.push(`[Output directory: ${outputPath}]`);
+    lines.push(`IMPORTANT: The previous step produced output in the directory above. Use your tools to list and read the files in that directory to understand the full context of what was produced.`);
+  } else if (outputType === 'file' && outputPath) {
+    lines.push(`[Output type: file]`);
+    lines.push(`[Output file: ${outputPath}]`);
+    lines.push(`IMPORTANT: The previous step produced output in the file above. Use your tools to read that file to understand the full context of what was produced.`);
+  } else if (outputPath) {
+    lines.push(`[Output file: ${outputPath}]`);
   }
 
   if (lines.length > 0) {
@@ -338,32 +339,23 @@ export class PipelineExecutor {
     this.callbacks.onStepStart?.(step.id);
 
     // Track council ID so we can link to the deliberation even if the step fails
+    // All step types now route through councils (including decisioning/execution)
     let stepCouncilId: string | null = null;
     const origOnCouncilCreated = this.callbacks.onCouncilCreated;
-    if (isCouncilType(step.config.type)) {
-      this.callbacks.onCouncilCreated = (stepId, councilId) => {
-        stepCouncilId = councilId;
-        origOnCouncilCreated?.(stepId, councilId);
-      };
-    }
+    this.callbacks.onCouncilCreated = (stepId, councilId) => {
+      stepCouncilId = councilId;
+      origOnCouncilCreated?.(stepId, councilId);
+    };
 
     try {
       let artifact: StepArtifact;
 
-      switch (step.config.type) {
-        case 'planning':
-        case 'coding':
-          artifact = await this.runCouncilStep(pipelineId, step, previousArtifacts, pipelineSettings);
-          break;
-        case 'decisioning':
-        case 'execution':
-          artifact = await this.runLlmStep(step, previousArtifacts, pipelineSettings);
-          break;
-        case 'gate':
-          artifact = await this.runGateStep(pipelineId, step);
-          break;
-        default:
-          throw new Error(`Unknown step type: ${(step.config as { type: string }).type}`);
+      if (step.config.type === 'gate') {
+        artifact = await this.runGateStep(pipelineId, step);
+      } else {
+        // Convert LLM steps (decisioning/execution) to lightweight council configs
+        const councilStep = this.normalizeToCouncilStep(step);
+        artifact = await this.runCouncilStep(pipelineId, councilStep, previousArtifacts, pipelineSettings);
       }
 
       pipelineStore.setStepArtifact(pipelineId, step.id, artifact);
@@ -372,7 +364,7 @@ export class PipelineExecutor {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
 
-      // For council steps that created a council before failing, write a partial
+      // For steps that created a council before failing, write a partial
       // artifact so the UI can still link to the deliberation ledger
       if (stepCouncilId) {
         pipelineStore.setStepArtifact(pipelineId, step.id, {
@@ -388,11 +380,26 @@ export class PipelineExecutor {
       this.callbacks.onStepError?.(step.id, message);
       throw error;
     } finally {
-      // Restore original callback
-      if (isCouncilType(step.config.type)) {
-        this.callbacks.onCouncilCreated = origOnCouncilCreated;
-      }
+      this.callbacks.onCouncilCreated = origOnCouncilCreated;
     }
+  }
+
+  /**
+   * Ensure a step has a CouncilStepConfig.
+   * Steps with councilSetup (new format) pass through unchanged.
+   * Legacy LlmStepConfig (flat model/provider/systemPrompt) is migrated.
+   */
+  private normalizeToCouncilStep(step: PipelineStep): PipelineStep {
+    const config = step.config;
+
+    // Already a CouncilStepConfig — has councilSetup
+    if ('councilSetup' in config) {
+      return step;
+    }
+
+    // Legacy LlmStepConfig — migrate to CouncilStepConfig
+    const migrated = migrateLlmConfig(config as LlmStepConfig);
+    return { ...step, config: migrated };
   }
 
   // --------------------------------------------------------------------------
@@ -416,76 +423,17 @@ export class PipelineExecutor {
       ? pipelineSettings.workingDirectory
       : config.councilSetup.workingDirectory || pipelineSettings.workingDirectory;
 
-    // Create personas for the council using full persona data
-    const personas: Persona[] = config.councilSetup.personas.map((p) => ({
-      id: crypto.randomUUID(),
-      name: p.name,
-      provider: p.provider,
-      model: p.model,
-      avatar: p.avatar,
-      color: p.color || (p.role === 'manager' ? '#6366f1' : p.role === 'worker' ? '#f59e0b' : p.role === 'reviewer' ? '#0ea5e9' : '#16a34a'),
-      predisposition: {
-        systemPrompt: p.systemPrompt || `You are ${p.name}, a ${p.role} in this deliberation.`,
-        stance: p.stance || 'neutral' as const,
-        traits: p.traits && p.traits.length > 0
-          ? p.traits
-          : p.role === 'manager' ? ['analytical', 'decisive']
-          : p.role === 'worker' ? ['thorough', 'detail-oriented']
-          : p.role === 'reviewer' ? ['critical', 'quality-focused']
-          : ['insightful', 'collaborative'],
-        interactionStyle: p.interactionStyle || 'build' as const,
-        domain: p.domain,
-      },
-      temperature: p.temperature ?? 0.7,
-      verbosity: p.verbosity || 'balanced' as const,
-      preferredDeliberationRole: p.role,
-      allowedServerIds: p.allowedServerIds,
-    }));
-
-    // Create role assignments using full persona data
-    const roleAssignments: DeliberationRoleAssignment[] = config.councilSetup.personas.map(
-      (p, i) => ({
-        personaId: personas[i].id,
-        role: p.role,
-        focusArea: p.focusArea,
-        stance: p.startingStance,
-        suppressPersona: p.suppressPersona ?? (p.role === 'manager' || p.role === 'worker' || p.role === 'reviewer'),
-        writePermissions: p.role === 'worker' ? true : undefined,
-      })
-    );
-
-    // Create a real council via councilStore
-    const council = councilStore.create({
-      name: `[Pipeline] ${config.councilSetup.name}`,
+    // Create council via factory
+    const council = createCouncilFromSetup({
+      ...config.councilSetup,
       topic: rawProblem.slice(0, 200),
-      personas,
-      orchestration: { mode: 'deliberation' },
-      deliberation: {
-        enabled: true,
-        roleAssignments,
-        maxRounds: config.councilSetup.maxRounds ?? 4,
-        maxRevisions: config.councilSetup.maxRevisions ?? 3,
-        expectedOutput: config.councilSetup.expectedOutput,
-        decisionCriteria: config.councilSetup.decisionCriteria,
-        workingDirectory: effectiveDir,
-        directoryConstrained: isConstrained,
-        summaryMode: 'hybrid',
-        summarizeAfterRound: 2,
-        contextTokenBudget: 80000,
-        consultantErrorPolicy: 'retry',
-        maxRetries: 2,
-        requirePlan: false,
-        consultantExecution: 'sequential',
-        saveDeliberation: true,
-        saveDeliberationMode: 'full',
-        stepType: config.type,
-        // Coding orchestrator config
-        testCommand: config.councilSetup.testCommand,
-        maxDebugCycles: config.councilSetup.maxDebugCycles ?? 5,
-        maxReviewCycles: config.councilSetup.maxReviewCycles ?? 2,
-        // MCP tool filtering
-        allowedServerIds: config.councilSetup.allowedServerIds,
-      },
+      workingDirectory: effectiveDir,
+      directoryConstrained: isConstrained,
+      saveDeliberation: true,
+      saveDeliberationMode: 'full',
+      stepType: config.type,
+      pipelinePrefix: '[Pipeline]',
+      pipelineId: pipelineId,
     });
 
     this.callbacks.onCouncilCreated?.(step.id, council.id);
@@ -570,6 +518,7 @@ export class PipelineExecutor {
     const metadata: StepArtifact['metadata'] = {
       councilId: council.id,
       outputPath: workerOutputPath,
+      outputType: config.outputType || 'string',
       stepName: step.name,
       stepType: config.type,
     };
@@ -601,61 +550,6 @@ export class PipelineExecutor {
       content,
       artifactType,
       metadata,
-      createdAt: new Date().toISOString(),
-    };
-  }
-
-  // --------------------------------------------------------------------------
-  // LLM Step (Decisioning / Execution)
-  // --------------------------------------------------------------------------
-
-  private async runLlmStep(
-    step: PipelineStep,
-    previousArtifacts: StepArtifact[],
-    pipelineSettings: Pipeline['settings']
-  ): Promise<StepArtifact> {
-    const config = step.config as LlmStepConfig;
-
-    // Resolve effective working directory with inheritance (default: constrained)
-    const effectiveDir = pipelineSettings.directoryConstrained !== false
-      ? pipelineSettings.workingDirectory
-      : config.workingDirectory || pipelineSettings.workingDirectory;
-
-    const userMessage = renderInputTemplate(config.inputTemplate, previousArtifacts);
-
-    // Set working directory
-    const previousDir = this.platform.getWorkingDir();
-    if (effectiveDir) {
-      this.platform.setWorkingDir(effectiveDir);
-    }
-
-    const isExecution = config.type === 'execution';
-
-    let result: { content: string; tokensUsed: number };
-    try {
-      result = await this.callbacks.llmComplete({
-        model: config.model,
-        provider: config.provider,
-        systemPrompt: config.systemPrompt,
-        userMessage,
-        allowedServerIds: config.allowedServerIds,
-        skipTools: !isExecution,
-      });
-    } finally {
-      // Restore previous working directory
-      this.platform.setWorkingDir(previousDir);
-    }
-
-    return {
-      stepId: step.id,
-      content: result.content,
-      artifactType: 'llm_response',
-      metadata: {
-        model: config.model,
-        tokensUsed: result.tokensUsed,
-        stepName: step.name,
-        stepType: config.type,
-      },
       createdAt: new Date().toISOString(),
     };
   }

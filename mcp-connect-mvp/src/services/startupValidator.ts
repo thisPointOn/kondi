@@ -1,12 +1,20 @@
 /**
  * Startup Validation Service
- * Validates LLM CLI connections and MCP server connections on app startup
- * Provides clear feedback to users about what's working and what isn't
+ * Validates LLM auth profiles and MCP server connections on app startup
  */
 
 import { anthropicClient } from './anthropicClient';
 import { openaiClient } from './openaiClient';
+import { deepseekClient, xaiClient, ollamaClient } from './openaiCompatibleClient';
+import { geminiClient } from './geminiClient';
 import { mcpClient } from './mcpClient';
+import {
+  hasProfiles,
+  listProfiles,
+  resolveApiKey,
+  importCliCredentials,
+  refreshExpiring,
+} from './auth-profiles';
 import type { MCPServer } from '../types/mcp';
 
 // ============================================================================
@@ -18,7 +26,7 @@ export interface ValidationResult {
   status: 'ok' | 'error' | 'skipped' | 'warning';
   message: string;
   details?: string;
-  action?: string; // Suggested action for user
+  action?: string;
 }
 
 export interface StartupValidationReport {
@@ -44,16 +52,10 @@ class StartupValidator {
   private lastReport: StartupValidationReport | null = null;
   private isRunning = false;
 
-  /**
-   * Get the most recent validation report
-   */
   getLastReport(): StartupValidationReport | null {
     return this.lastReport;
   }
 
-  /**
-   * Run full startup validation
-   */
   async validate(callbacks?: ValidationCallbacks): Promise<StartupValidationReport> {
     if (this.isRunning) {
       console.log('[StartupValidator] Validation already in progress, skipping');
@@ -65,24 +67,55 @@ class StartupValidator {
     const serverResults: ValidationResult[] = [];
 
     try {
+      callbacks?.onProgress?.('Importing CLI credentials...');
+
+      // Auto-import Claude CLI credentials if available
+      try {
+        await importCliCredentials();
+      } catch {
+        // Not an error — CLI credentials may not exist
+      }
+
+      // Proactively refresh near-expiry OAuth tokens
+      callbacks?.onProgress?.('Refreshing tokens...');
+      try {
+        await refreshExpiring();
+      } catch {
+        // Non-fatal
+      }
+
       // Validate LLM providers
       callbacks?.onProgress?.('Validating LLM connections...');
 
-      // Check Anthropic/Claude (separate results for CLI and API)
       const anthropicResults = await this.validateAnthropic();
       for (const r of anthropicResults) {
         llmResults.push(r);
         callbacks?.onProviderValidated?.(r);
       }
 
-      // Check OpenAI/ChatGPT (separate results for CLI and API)
       const openaiResults = await this.validateOpenAI();
       for (const r of openaiResults) {
         llmResults.push(r);
         callbacks?.onProviderValidated?.(r);
       }
 
-      // Validate MCP servers that claim to be connected
+      const deepseekResult = await this.validateDeepSeek();
+      llmResults.push(deepseekResult);
+      callbacks?.onProviderValidated?.(deepseekResult);
+
+      const xaiResult = await this.validateXai();
+      llmResults.push(xaiResult);
+      callbacks?.onProviderValidated?.(xaiResult);
+
+      const ollamaResult = await this.validateOllama();
+      llmResults.push(ollamaResult);
+      callbacks?.onProviderValidated?.(ollamaResult);
+
+      const googleResult = await this.validateGoogle();
+      llmResults.push(googleResult);
+      callbacks?.onProviderValidated?.(googleResult);
+
+      // Validate MCP servers
       callbacks?.onProgress?.('Validating MCP server connections...');
       const servers = mcpClient.getAllServers();
       const connectedServers = servers.filter(s => s.status === 'connected');
@@ -93,7 +126,6 @@ class StartupValidator {
         callbacks?.onServerValidated?.(server.id, result);
       }
 
-      // Compile report
       const report = this.compileReport(llmResults, serverResults);
       this.lastReport = report;
       callbacks?.onComplete?.(report);
@@ -104,9 +136,6 @@ class StartupValidator {
     }
   }
 
-  /**
-   * Validate just the LLM connections (quick check)
-   */
   async validateLLMOnly(callbacks?: ValidationCallbacks): Promise<ValidationResult[]> {
     const results: ValidationResult[] = [];
 
@@ -127,23 +156,16 @@ class StartupValidator {
     return results;
   }
 
-  /**
-   * Validate a specific MCP server
-   */
   async validateServer(serverId: string): Promise<ValidationResult> {
     const server = mcpClient.getAllServers().find(s => s.id === serverId);
     if (!server) {
-      return {
-        provider: serverId,
-        status: 'error',
-        message: 'Server not found',
-      };
+      return { provider: serverId, status: 'error', message: 'Server not found' };
     }
     return this.validateMcpServer(server);
   }
 
   // ============================================================================
-  // Private Methods - LLM Validation
+  // Anthropic Validation
   // ============================================================================
 
   private async validateAnthropic(): Promise<ValidationResult[]> {
@@ -153,92 +175,81 @@ class StartupValidator {
 
     const results: ValidationResult[] = [];
 
-    // --- Validate CLI (Claude Code) independently ---
-    const cliStatus = await anthropicClient.checkCliAvailable();
-    console.log('[StartupValidator] Claude CLI status check:', cliStatus);
+    // Validate subscription (OAuth) profiles
+    const oauthProfiles = listProfiles('anthropic').filter(
+      p => p.credential.type === 'oauth' || p.credential.type === 'token'
+    );
 
-    if (cliStatus.installed && cliStatus.authenticated) {
-      console.log('[StartupValidator] Claude CLI is available');
-      // Only auto-enable CLI wrapper if the user hasn't explicitly chosen API mode
-      const storedProviderId = localStorage.getItem('kondi-provider-id');
-      const userChoseApi = storedProviderId === 'anthropic-api';
-      if (!userChoseApi) {
-        anthropicClient.setUseCliWrapper(true);
-        localStorage.setItem('anthropic-use-cli-wrapper', 'true');
-        localStorage.setItem('anthropic-auth-method', 'oauth');
-      } else {
-        console.log('[StartupValidator] User explicitly chose API mode — not overriding');
-      }
-
-      // Test the CLI with an actual chat call
-      const cliResult = await this.testAnthropicCli();
-      results.push(cliResult);
-    } else if (cliStatus.installed) {
-      results.push({
-        provider: 'Anthropic CLI',
-        status: 'warning',
-        message: 'Not authenticated',
-        details: 'Claude CLI found but not logged in',
-        action: 'Run "claude" in terminal to log in',
-      });
+    if (oauthProfiles.length > 0) {
+      const subResult = await this.testAnthropicAuth('Anthropic CLI');
+      results.push(subResult);
     } else {
       results.push({
         provider: 'Anthropic CLI',
         status: 'skipped',
-        message: 'Claude CLI not installed',
+        message: 'No subscription credentials',
+        action: 'Connect via OAuth or import CLI credentials',
       });
     }
 
-    // --- Validate API key independently ---
-    const apiResult = await this.testAnthropicApiKey();
-    results.push(apiResult);
+    // Validate API key profiles
+    const apiKeyProfiles = listProfiles('anthropic').filter(
+      p => p.credential.type === 'api_key'
+    );
+
+    if (apiKeyProfiles.length > 0) {
+      const apiResult = await this.testAnthropicApiKey();
+      results.push(apiResult);
+    } else {
+      results.push({
+        provider: 'Anthropic API',
+        status: 'skipped',
+        message: 'No API key configured',
+      });
+    }
 
     return results;
   }
 
-  private async testAnthropicCli(): Promise<ValidationResult> {
+  private async testAnthropicAuth(label: string): Promise<ValidationResult> {
     try {
-      console.log('[StartupValidator] Testing Anthropic CLI chat pathway...');
-      const cliStatus = await anthropicClient.checkCliAvailable();
-
-      const testMessage = {
-        id: 'validation-test',
-        role: 'user' as const,
-        content: 'Say "OK" and nothing else.',
-        timestamp: new Date(),
-      };
-
-      const response = await anthropicClient.chat(
-        [testMessage],
-        new Map(),
-        'claude-haiku-4-5-20251001',
-      );
-
-      if (response.message && response.message.content) {
-        console.log('[StartupValidator] Anthropic CLI chat test passed');
+      console.log(`[StartupValidator] Testing ${label} auth...`);
+      const resolved = await resolveApiKey('anthropic');
+      if (!resolved) {
         return {
-          provider: 'Anthropic CLI',
+          provider: label,
+          status: 'error',
+          message: 'No usable credentials',
+          action: 'Connect via OAuth or import CLI credentials',
+        };
+      }
+
+      // Quick API test — list models
+      const result = await anthropicClient.validateKey(resolved.apiKey);
+      if (result.ok) {
+        return {
+          provider: label,
           status: 'ok',
           message: 'Connected and verified',
-          details: `CLI version: ${cliStatus.version || 'unknown'}`,
+          details: `Profile: ${resolved.profileId}`,
         };
       }
 
       return {
-        provider: 'Anthropic CLI',
+        provider: label,
         status: 'error',
-        message: 'Chat test returned empty response',
-        action: 'Check console for details',
+        message: 'Auth test failed',
+        details: result.error?.slice(0, 200),
+        action: 'Check credentials or reconnect',
       };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      console.error('[StartupValidator] Anthropic CLI test failed:', errMsg);
       return {
-        provider: 'Anthropic CLI',
+        provider: label,
         status: 'error',
-        message: 'Chat test failed',
+        message: 'Auth test failed',
         details: errMsg.slice(0, 200),
-        action: 'Check console for details and try reconnecting',
+        action: 'Check credentials or reconnect',
       };
     }
   }
@@ -246,33 +257,22 @@ class StartupValidator {
   private async testAnthropicApiKey(): Promise<ValidationResult> {
     console.log('[StartupValidator] Testing Anthropic API key...');
     try {
-      const stored = localStorage.getItem('mcp-api-keys');
-      if (stored) {
-        const keys = JSON.parse(stored);
-        if (keys.anthropic) {
-          const result = await anthropicClient.validateKey(keys.anthropic);
-          if (result.ok) {
-            return {
-              provider: 'Anthropic API',
-              status: 'ok',
-              message: 'API key valid',
-            };
-          } else {
-            return {
-              provider: 'Anthropic API',
-              status: 'error',
-              message: 'API key invalid',
-              details: result.error || 'Validation failed',
-              action: 'Check your API key in Settings',
-            };
-          }
-        }
+      // Find the API key profile
+      const apiProfile = listProfiles('anthropic').find(p => p.credential.type === 'api_key');
+      if (!apiProfile || apiProfile.credential.type !== 'api_key') {
+        return { provider: 'Anthropic API', status: 'skipped', message: 'No API key configured' };
       }
 
+      const result = await anthropicClient.validateKey(apiProfile.credential.key);
+      if (result.ok) {
+        return { provider: 'Anthropic API', status: 'ok', message: 'API key valid' };
+      }
       return {
         provider: 'Anthropic API',
-        status: 'skipped',
-        message: 'No API key configured',
+        status: 'error',
+        message: 'API key invalid',
+        details: result.error || 'Validation failed',
+        action: 'Check your API key in Settings',
       };
     } catch (err) {
       return {
@@ -284,6 +284,9 @@ class StartupValidator {
     }
   }
 
+  // ============================================================================
+  // OpenAI Validation
+  // ============================================================================
 
   private async validateOpenAI(): Promise<ValidationResult[]> {
     console.log('[StartupValidator] ========================================');
@@ -292,102 +295,101 @@ class StartupValidator {
 
     const results: ValidationResult[] = [];
 
-    // --- Validate CLI (Codex) independently ---
-    const cliStatus = await openaiClient.checkCliAvailable();
-    console.log('[StartupValidator] Codex CLI status check:', cliStatus);
+    // Validate subscription (OAuth) profiles
+    const oauthProfiles = listProfiles('openai').filter(
+      p => p.credential.type === 'oauth' || p.credential.type === 'token'
+    );
 
-    if (cliStatus.installed && cliStatus.authenticated) {
-      // checkCliAvailable already ran a real exec call and it succeeded
-      console.log('[StartupValidator] Codex CLI is available and authenticated');
-      // Only auto-enable CLI wrapper if the user hasn't explicitly chosen API mode
-      const storedProviderId = localStorage.getItem('kondi-provider-id');
-      const userChoseApi = storedProviderId === 'openai-api';
-      if (!userChoseApi) {
-        openaiClient.setUseCliWrapper(true);
-        localStorage.setItem('openai-use-cli-wrapper', 'true');
-        localStorage.setItem('openai-auth-method', 'oauth');
-      } else {
-        console.log('[StartupValidator] User explicitly chose API mode — not overriding');
-      }
-      results.push({
-        provider: 'OpenAI CLI',
-        status: 'ok',
-        message: 'Connected and verified',
-        details: `CLI version: ${cliStatus.version || 'unknown'}`,
-      });
-    } else if (cliStatus.installed) {
-      results.push({
-        provider: 'OpenAI CLI',
-        status: 'warning',
-        message: 'Not authenticated',
-        details: 'Codex CLI found but not logged in',
-        action: 'Run "codex login" in terminal',
-      });
+    if (oauthProfiles.length > 0) {
+      const subResult = await this.testOpenAIAuth('OpenAI CLI');
+      results.push(subResult);
     } else {
       results.push({
         provider: 'OpenAI CLI',
         status: 'skipped',
-        message: 'Codex CLI not installed',
+        message: 'No subscription credentials',
       });
     }
 
-    // --- Validate API key independently ---
-    const apiResult = await this.testOpenAIApiKey();
-    results.push(apiResult);
+    // Validate API key profiles
+    const apiKeyProfiles = listProfiles('openai').filter(
+      p => p.credential.type === 'api_key'
+    );
+
+    if (apiKeyProfiles.length > 0) {
+      const apiResult = await this.testOpenAIApiKey();
+      results.push(apiResult);
+    } else {
+      results.push({
+        provider: 'OpenAI API',
+        status: 'skipped',
+        message: 'No API key configured',
+      });
+    }
 
     return results;
   }
 
-  private async testOpenAIApiKey(): Promise<ValidationResult> {
-    console.log('[StartupValidator] Testing OpenAI API key mode...');
+  private async testOpenAIAuth(label: string): Promise<ValidationResult> {
     try {
-      const stored = localStorage.getItem('mcp-api-keys');
-      if (stored) {
-        const keys = JSON.parse(stored);
-        if (keys.openai) {
-          const result = await openaiClient.validateKey(keys.openai);
-          if (result.ok) {
-            // API key is valid, now test chat using the user's selected model
-            try {
-              const testMessage = {
-                id: 'validation-test',
-                role: 'user' as const,
-                content: 'Say "OK" and nothing else.',
-                timestamp: new Date(),
-              };
-              const selectedModel = keys.openaiModel || localStorage.getItem('kondi-openai-model') || 'gpt-4o-mini';
-              await openaiClient.chat([testMessage], new Map(), selectedModel);
-              return {
-                provider: 'OpenAI API',
-                status: 'ok',
-                message: 'API key valid and working',
-              };
-            } catch (chatErr) {
-              const errMsg = chatErr instanceof Error ? chatErr.message : String(chatErr);
-              return {
-                provider: 'OpenAI API',
-                status: 'error',
-                message: 'API key valid but chat failed',
-                details: errMsg,
-                action: 'Check console for details',
-              };
-            }
-          } else {
-            return {
-              provider: 'OpenAI API',
-              status: 'error',
-              message: 'API key invalid',
-              details: result.error || 'Validation failed',
-              action: 'Check your API key in Settings',
-            };
-          }
-        }
+      console.log(`[StartupValidator] Testing ${label} auth...`);
+      const resolved = await resolveApiKey('openai');
+      if (!resolved) {
+        return {
+          provider: label,
+          status: 'error',
+          message: 'No usable credentials',
+          action: 'Connect via OAuth or enter API key',
+        };
+      }
+
+      const result = await openaiClient.validateKey(resolved.apiKey);
+      if (result.ok) {
+        return {
+          provider: label,
+          status: 'ok',
+          message: 'Connected and verified',
+          details: `Profile: ${resolved.profileId}`,
+        };
       }
 
       return {
+        provider: label,
+        status: 'error',
+        message: 'Auth test failed',
+        details: result.error?.slice(0, 200),
+        action: 'Check credentials or reconnect',
+      };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return {
+        provider: label,
+        status: 'error',
+        message: 'Auth test failed',
+        details: errMsg.slice(0, 200),
+        action: 'Check credentials or reconnect',
+      };
+    }
+  }
+
+  private async testOpenAIApiKey(): Promise<ValidationResult> {
+    console.log('[StartupValidator] Testing OpenAI API key...');
+    try {
+      const apiProfile = listProfiles('openai').find(p => p.credential.type === 'api_key');
+      if (!apiProfile || apiProfile.credential.type !== 'api_key') {
+        return { provider: 'OpenAI API', status: 'skipped', message: 'No API key configured' };
+      }
+
+      const result = await openaiClient.validateKey(apiProfile.credential.key);
+      if (result.ok) {
+        return { provider: 'OpenAI API', status: 'ok', message: 'API key valid and working' };
+      }
+      return {
         provider: 'OpenAI API',
-        status: 'skipped',
-        message: 'No API key configured',
+        status: 'error',
+        message: 'API key invalid',
+        details: result.error || 'Validation failed',
+        action: 'Check your API key in Settings',
       };
     } catch (err) {
       return {
@@ -399,14 +401,86 @@ class StartupValidator {
     }
   }
 
+  // ============================================================================
+  // DeepSeek Validation
+  // ============================================================================
+
+  private async validateDeepSeek(): Promise<ValidationResult> {
+    if (!hasProfiles('deepseek')) {
+      return { provider: 'DeepSeek', status: 'skipped', message: 'No API key configured' };
+    }
+    try {
+      const result = await deepseekClient.validateConnection();
+      if (result.ok) {
+        return { provider: 'DeepSeek', status: 'ok', message: 'API key valid' };
+      }
+      return { provider: 'DeepSeek', status: 'error', message: 'API key invalid', details: result.error };
+    } catch (err) {
+      return { provider: 'DeepSeek', status: 'error', message: 'Validation failed', details: err instanceof Error ? err.message : String(err) };
+    }
+  }
 
   // ============================================================================
-  // Private Methods - MCP Server Validation
+  // x.ai Validation
+  // ============================================================================
+
+  private async validateXai(): Promise<ValidationResult> {
+    if (!hasProfiles('xai')) {
+      return { provider: 'xAI', status: 'skipped', message: 'No API key configured' };
+    }
+    try {
+      const result = await xaiClient.validateConnection();
+      if (result.ok) {
+        return { provider: 'xAI', status: 'ok', message: 'API key valid' };
+      }
+      return { provider: 'xAI', status: 'error', message: 'API key invalid', details: result.error };
+    } catch (err) {
+      return { provider: 'xAI', status: 'error', message: 'Validation failed', details: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // ============================================================================
+  // Ollama Validation
+  // ============================================================================
+
+  private async validateOllama(): Promise<ValidationResult> {
+    try {
+      const models = await ollamaClient.discoverModels();
+      if (models.length > 0) {
+        return { provider: 'Ollama', status: 'ok', message: `Running with ${models.length} model(s)`, details: models.map(m => m.name).slice(0, 5).join(', ') };
+      }
+      // Ollama reachable but no models
+      return { provider: 'Ollama', status: 'warning', message: 'Running but no models installed', action: 'Run "ollama pull llama3.1" to get started' };
+    } catch {
+      return { provider: 'Ollama', status: 'skipped', message: 'Not running locally' };
+    }
+  }
+
+  // ============================================================================
+  // Google (Gemini) Validation
+  // ============================================================================
+
+  private async validateGoogle(): Promise<ValidationResult> {
+    if (!hasProfiles('google')) {
+      return { provider: 'Google Gemini', status: 'skipped', message: 'No credentials configured' };
+    }
+    try {
+      const result = await geminiClient.validateConnection();
+      if (result.ok) {
+        return { provider: 'Google Gemini', status: 'ok', message: 'Connected and verified' };
+      }
+      return { provider: 'Google Gemini', status: 'error', message: 'Connection failed', details: result.error, action: 'Reconnect via OAuth' };
+    } catch (err) {
+      return { provider: 'Google Gemini', status: 'error', message: 'Validation failed', details: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // ============================================================================
+  // MCP Server Validation
   // ============================================================================
 
   private async validateMcpServer(server: MCPServer): Promise<ValidationResult> {
     try {
-      // Check if we can get tools from this server
       const tools = mcpClient.getTools(server.id);
 
       if (server.status === 'connected') {
@@ -439,53 +513,35 @@ class StartupValidator {
   }
 
   // ============================================================================
-  // Private Methods - Report Compilation
+  // Report Compilation
   // ============================================================================
 
   private compileReport(
     llmResults: ValidationResult[],
     serverResults: ValidationResult[]
   ): StartupValidationReport {
-    // Count by status
     const llmErrors = llmResults.filter(r => r.status === 'error');
     const llmWarnings = llmResults.filter(r => r.status === 'warning');
     const llmOk = llmResults.filter(r => r.status === 'ok');
     const serverErrors = serverResults.filter(r => r.status === 'error');
     const serverOk = serverResults.filter(r => r.status === 'ok');
 
-    // Determine overall status
     let overallStatus: 'healthy' | 'degraded' | 'critical' = 'healthy';
 
     if (llmErrors.length > 0 && llmOk.length === 0) {
-      // No working LLM providers - critical
       overallStatus = 'critical';
     } else if (llmErrors.length > 0 || llmWarnings.length > 0 || serverErrors.length > 0) {
-      // Some issues but at least one LLM works - degraded
       overallStatus = 'degraded';
     }
 
-    // Build summary message
     const summaryParts: string[] = [];
+    if (llmOk.length > 0) summaryParts.push(`${llmOk.length} LLM provider(s) ready`);
+    if (llmErrors.length > 0) summaryParts.push(`${llmErrors.length} LLM provider(s) have errors`);
+    if (llmWarnings.length > 0) summaryParts.push(`${llmWarnings.length} LLM provider(s) need attention`);
+    if (serverOk.length > 0) summaryParts.push(`${serverOk.length} MCP server(s) connected`);
+    if (serverErrors.length > 0) summaryParts.push(`${serverErrors.length} MCP server(s) disconnected`);
 
-    if (llmOk.length > 0) {
-      summaryParts.push(`${llmOk.length} LLM provider(s) ready`);
-    }
-    if (llmErrors.length > 0) {
-      summaryParts.push(`${llmErrors.length} LLM provider(s) have errors`);
-    }
-    if (llmWarnings.length > 0) {
-      summaryParts.push(`${llmWarnings.length} LLM provider(s) need attention`);
-    }
-    if (serverOk.length > 0) {
-      summaryParts.push(`${serverOk.length} MCP server(s) connected`);
-    }
-    if (serverErrors.length > 0) {
-      summaryParts.push(`${serverErrors.length} MCP server(s) disconnected`);
-    }
-
-    const summary = summaryParts.length > 0
-      ? summaryParts.join(', ')
-      : 'No providers configured';
+    const summary = summaryParts.length > 0 ? summaryParts.join(', ') : 'No providers configured';
 
     return {
       timestamp: new Date(),
@@ -506,9 +562,5 @@ class StartupValidator {
     };
   }
 }
-
-// ============================================================================
-// Export Singleton
-// ============================================================================
 
 export const startupValidator = new StartupValidator();

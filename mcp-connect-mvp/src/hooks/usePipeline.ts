@@ -3,7 +3,6 @@ import { PipelineExecutor, type PlatformAdapter } from '../pipeline';
 import { callLLM } from '../pipeline/gui-caller';
 import { filterToolsByServerIds } from '../utils/filterTools';
 import { saveDeliberationOutput } from '../services/deliberationSaveService';
-import { anthropicClient } from '../services/anthropicClient';
 import { localToolsService } from '../services/localTools';
 import { pipelineStore } from '../pipeline/store';
 import type { MCPTool } from '../types/mcp';
@@ -64,12 +63,13 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
     const resolverMap = new Map<string, (approved: boolean) => void>();
     setGateResolvers(resolverMap);
 
+    let platformWorkingDir = '';
     const tauriPlatform: PlatformAdapter = {
       writeFile: (path, content) => invoke('write_local_file', { path, content }),
       readFile: (path) => invoke<string>('read_local_file', { path }).catch(() => null),
       runCommand: (cmd, cwd) => invoke('run_command', { command: cmd, workingDir: cwd }),
-      setWorkingDir: (dir) => { anthropicClient.setWorkingDir(dir); localToolsService.setWorkingDirectory(dir); },
-      getWorkingDir: () => anthropicClient.getWorkingDir() || '',
+      setWorkingDir: (dir) => { platformWorkingDir = dir; localToolsService.setWorkingDirectory(dir); },
+      getWorkingDir: () => platformWorkingDir,
       saveDeliberationOutput: (council, mode) => saveDeliberationOutput(council, mode),
     };
 
@@ -85,29 +85,11 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
           systemPrompt: invocation.systemPrompt,
           userMessage: invocation.userMessage,
           skipTools: invocation.skipTools,
-          allowedTools: invocation.allowedTools,
-          conversationId: invocation.conversationId,
           temperature: persona.temperature,
-          workingDir: tauriPlatform.getWorkingDir() || undefined,
           availableTools: filteredTools,
           timeoutMs: isWorker ? 1_800_000 : undefined, // 30 min for workers
         });
-        return { ...result, sessionId: result.sessionId };
-      },
-      llmComplete: async (params) => {
-        const filteredTools = filterToolsByServerIds(availableTools, params.allowedServerIds);
-        const result = await callLLM({
-          model: params.model,
-          provider: params.provider,
-          systemPrompt: params.systemPrompt,
-          userMessage: params.userMessage,
-          conversationId: params.conversationId,
-          workingDir: tauriPlatform.getWorkingDir() || undefined,
-          availableTools: filteredTools,
-          skipTools: params.skipTools,
-          allowedTools: params.allowedTools,
-        });
-        return { content: result.content, tokensUsed: result.tokensUsed, sessionId: result.sessionId };
+        return result;
       },
       onStageStart: (idx) => console.log(`[Pipeline] Stage ${idx} started`),
       onStageComplete: (idx) => console.log(`[Pipeline] Stage ${idx} completed`),

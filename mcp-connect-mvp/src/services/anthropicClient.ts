@@ -2,9 +2,14 @@ import { invoke } from '@tauri-apps/api/core';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 import { LOCAL_SERVER_ID, localToolsService } from './localTools';
-import { claudeCliClient, claudeCodeWrapper, claudeSessionManager } from './cli-providers';
-import { oauthService } from './oauthService';
-import { conversationSummary } from './conversationSummary';
+import {
+  resolveApiKey,
+  resolveApiKeySync,
+  isOAuthToken,
+  getBetasForToken,
+  reportSuccess,
+  reportFailure,
+} from './auth-profiles';
 
 type AnthropicMessage = {
   role: 'user' | 'assistant';
@@ -26,135 +31,15 @@ When using tools:
 - If no relevant tool is available, that's fine - help the user with your general knowledge instead.
 - Present tool results clearly and concisely.`;
 
-// Required system prompt prefix when using Claude CLI OAuth tokens
-const CLAUDE_CODE_SYSTEM_PREFIX = `You are Claude Code, Anthropic's official CLI for Claude.`;
-
 class AnthropicClient {
-  private apiKey: string | null = null;
-  private oauthToken: string | null = null;
-  private useOAuth: boolean = false;
-  private useCliWrapper: boolean = false;  // Use Claude Code CLI instead of direct API
-  private currentConversationId: string | null = null;
-  private workingDir: string | null = null;
-
-  setApiKey(key: string) {
-    this.apiKey = key;
-  }
-
-  setOAuthToken(token: string | null) {
-    this.oauthToken = token;
-    console.log('[Anthropic] OAuth token', token ? 'set' : 'cleared');
-  }
-
-  setUseOAuth(use: boolean) {
-    this.useOAuth = use;
-    console.log('[Anthropic] Using', use ? 'OAuth (via CLI)' : 'API key');
-  }
-
-  /**
-   * Enable CLI wrapper mode - routes all requests through `claude -p`
-   * This is required for subscription-based auth since direct OAuth is blocked
-   */
-  setUseCliWrapper(use: boolean) {
-    this.useCliWrapper = use;
-    console.log('[Anthropic] CLI wrapper mode:', use ? 'enabled' : 'disabled');
-  }
-
-  getUseCliWrapper(): boolean {
-    return this.useCliWrapper;
-  }
-
-  getUseOAuth(): boolean {
-    return this.useOAuth;
-  }
-
-  getCurrentConversationId(): string | null {
-    return this.currentConversationId;
-  }
-
-  setCurrentConversationId(id: string | null) {
-    this.currentConversationId = id;
-  }
-
-  getWorkingDir(): string | null {
-    return this.workingDir;
-  }
-
-  setWorkingDir(dir: string | null) {
-    this.workingDir = dir;
-    if (dir) {
-      claudeCliClient.setWorkingDir(dir);
+  getAuthMethod(): 'oauth' | 'api_key' | 'none' {
+    // Synchronous check — looks at what profiles are available
+    // This is used for UI display only; actual auth resolution happens async in request()
+    const resolved = resolveApiKeySync('anthropic');
+    if (resolved) {
+      return resolved.credential.type === 'api_key' ? 'api_key' : 'oauth';
     }
-    console.log('[Anthropic] Working directory set to:', dir);
-  }
-
-  clearCliSession() {
-    claudeCliClient.clearSession();
-    if (this.currentConversationId) {
-      claudeSessionManager.clearSession(this.currentConversationId);
-    }
-  }
-
-  getAuthMethod(): 'oauth' | 'api_key' | 'cli' | 'none' {
-    // CLI wrapper mode takes precedence - this is the most reliable for subscription auth
-    if (this.useCliWrapper) return 'cli';
-
-    // Check for OAuth - only return 'oauth' if we have actual functional OAuth credentials
-    // The useOAuth flag alone isn't enough - we need actual tokens or a connected oauthService
-    if (this.useOAuth) {
-      // Direct token takes precedence (legacy path)
-      if (this.oauthToken) return 'oauth';
-      // Check if oauthService has valid credentials
-      if (oauthService.isConnected('anthropic')) return 'oauth';
-      // If useOAuth is true but no actual credentials, fall through to API key
-      console.log('[Anthropic] useOAuth is true but no OAuth credentials available, falling back');
-    }
-
-    // API key mode
-    if (this.apiKey) return 'api_key';
-
     return 'none';
-  }
-
-  /**
-   * Check if Claude Code CLI is available and authenticated
-   */
-  async checkCliAvailable(): Promise<{ installed: boolean; authenticated: boolean; version?: string }> {
-    const installCheck = await claudeCodeWrapper.checkInstalled();
-    if (!installCheck.installed) {
-      return { installed: false, authenticated: false };
-    }
-    const authCheck = await claudeCodeWrapper.checkAuthenticated();
-    return {
-      installed: true,
-      authenticated: authCheck,
-      version: installCheck.version,
-    };
-  }
-
-  private ensureInitialized(): string {
-    // This method is only for direct API access (API key mode)
-    // OAuth mode uses the CLI wrapper and doesn't call this method
-
-    if (this.apiKey) return this.apiKey;
-
-    // Try to recover API key from localStorage
-    try {
-      const stored = localStorage.getItem('mcp-api-keys');
-      if (stored) {
-        const keys = JSON.parse(stored);
-        if (keys.anthropic) {
-          console.log('[Anthropic] Re-initializing from stored key');
-          const key = keys.anthropic as string;
-          this.apiKey = key;
-          return key;
-        }
-      }
-    } catch (e) {
-      console.error('[Anthropic] Failed to recover key from storage:', e);
-    }
-
-    throw new Error('No API key configured. Please set your API key in settings or use OAuth (CLI) mode.');
   }
 
   private async request(
@@ -162,38 +47,51 @@ class AnthropicClient {
     method: 'GET' | 'POST',
     body?: Record<string, any>,
     apiKeyOverride?: string,
-    useOAuthToken?: boolean
   ): Promise<any> {
     const url = `https://api.anthropic.com${path}`;
     const payload = body ? JSON.stringify(body) : null;
 
-    // If using OAuth, get token from oauth service
-    if (useOAuthToken || (this.useOAuth && !apiKeyOverride)) {
-      const accessToken = await oauthService.getAccessToken('anthropic');
-      console.log('[Anthropic] Using OAuth Bearer token for request');
+    let token: string;
+    let profileId: string | null = null;
 
-      // Use Tauri proxy with OAuth token
+    if (apiKeyOverride) {
+      token = apiKeyOverride;
+    } else {
+      const resolved = await resolveApiKey('anthropic');
+      if (!resolved) {
+        throw new Error('No Anthropic authentication configured. Please set up credentials in Settings.');
+      }
+      token = resolved.apiKey;
+      profileId = resolved.profileId;
+    }
+
+    // Determine beta headers based on token type
+    const betas = getBetasForToken(token);
+
+    try {
       const text = await invoke<string>('anthropic_request', {
         url,
         method,
         body: payload,
-        apiKey: accessToken, // The Rust code will detect OAuth token format and use Bearer auth
+        apiKey: token,
+        betas,
       });
+
+      // Report success
+      if (profileId) reportSuccess(profileId);
+
       return JSON.parse(text);
+    } catch (err) {
+      // Parse HTTP status from error message (format: "HTTP 401: ...")
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const statusMatch = errMsg.match(/^HTTP (\d+):/);
+      const httpStatus = statusMatch ? parseInt(statusMatch[1]) : undefined;
+
+      // Report failure for rotation
+      if (profileId) reportFailure(profileId, httpStatus);
+
+      throw err;
     }
-
-    // Otherwise use API key
-    const apiKey = apiKeyOverride || this.ensureInitialized();
-    if (!apiKey) throw new Error('Anthropic client not initialized. Please set your API key in settings.');
-
-    // Use Tauri proxy to avoid CORS
-    const text = await invoke<string>('anthropic_request', {
-      url,
-      method,
-      body: payload,
-      apiKey,
-    });
-    return JSON.parse(text);
   }
 
   async validateKey(key: string): Promise<{ ok: boolean; error?: string }> {
@@ -224,36 +122,10 @@ class AnthropicClient {
     additionalSystemPrompt?: string
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     const authMethod = this.getAuthMethod();
-    console.log('[Anthropic] chat() called', {
-      useCliWrapper: this.useCliWrapper,
-      useOAuth: this.useOAuth,
-      hasApiKey: !!this.apiKey,
-      authMethod,
-    });
+    console.log('[Anthropic] chat() called', { authMethod, model });
 
-    // Use getAuthMethod() to determine the actual auth path to avoid inconsistencies
-    switch (authMethod) {
-      case 'cli':
-        // CLI Wrapper mode - route through `claude -p` command
-        return this.chatViaCli(messages, availableTools, model, additionalSystemPrompt);
-
-      case 'oauth':
-        // OAuth mode - getAuthMethod() already verified we have either oauthToken or oauthService connection
-        // We don't re-check oauthService.isConnected() here because getAuthMethod() already validated
-        // that we have a working OAuth path (either via direct token or service)
-        console.log('[Anthropic] Using OAuth (subscription) for API access');
-        // OAuth mode uses the same code path as API key, but with Bearer auth
-        // The request() method handles getting the OAuth token
-        break;
-
-      case 'api_key':
-        // API key mode - ensure key is available
-        this.ensureInitialized();
-        console.log('[Anthropic] Using API key for direct access');
-        break;
-
-      case 'none':
-        throw new Error('No Anthropic authentication configured. Please set up API key or CLI in Settings.');
+    if (authMethod === 'none') {
+      throw new Error('No Anthropic authentication configured. Please set up credentials in Settings.');
     }
 
     const toolMap = new Map<string, { serverId: string; tool: MCPTool }>();
@@ -289,11 +161,7 @@ class AnthropicClient {
       content: [{ type: 'text', text: m.content }],
     }));
 
-    // When using OAuth, prepend the Claude Code system prompt (required for OAuth tokens)
-    const isOAuthToken = this.useOAuth && this.oauthToken?.includes('sk-ant-oat');
-    const systemParts = isOAuthToken
-      ? [CLAUDE_CODE_SYSTEM_PREFIX, BASE_SYSTEM_PROMPT, additionalSystemPrompt, serverSummary]
-      : [BASE_SYSTEM_PROMPT, additionalSystemPrompt, serverSummary];
+    const systemParts = [BASE_SYSTEM_PROMPT, additionalSystemPrompt, serverSummary];
 
     const system = systemParts
       .filter(Boolean)
@@ -301,9 +169,8 @@ class AnthropicClient {
       .trim();
 
     // Agentic tool-use loop: keep sending requests until the model stops
-    // requesting tools or we hit the max turn limit. This handles chained
-    // tool calls like auth_status → actual_search without dropping the ball.
-    const MAX_TOOL_TURNS = 8;
+    // requesting tools or we hit the max turn limit.
+    const MAX_TOOL_TURNS = 25;
     const toolCalls: ToolCall[] = [];
     const allTextParts: string[] = [];
     let currentMessages = [...anthropicMessages];
@@ -419,178 +286,7 @@ class AnthropicClient {
   }
 
   /**
-   * Build a description of available MCP tools for the system prompt
-   */
-  private buildToolDescription(availableTools: Map<string, { serverId: string; tools: MCPTool[] }>): string {
-    if (availableTools.size === 0) return '';
-
-    const parts: string[] = ['## Available Tools\n'];
-    parts.push('These tools are ready to use. Call them directly to accomplish tasks.\n');
-
-    let toolIndex = 0;
-    for (const [, { tools }] of availableTools) {
-      if (tools.length === 0) continue;
-      for (const tool of tools) {
-        toolIndex++;
-        parts.push(`${toolIndex}. **${tool.name}**: ${tool.description || 'No description'}`);
-      }
-    }
-    return parts.join('\n');
-  }
-
-  /**
-   * Chat via Claude Code CLI wrapper
-   * This is used for subscription-based auth since direct OAuth is blocked
-   */
-  private async chatViaCli(
-    messages: Message[],
-    availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
-    model: string,
-    systemPrompt?: string
-  ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
-    console.log('[Anthropic] Using CLI wrapper for chat');
-
-    // Get the last user message
-    const lastUserMessage = messages.filter(m => m.role === 'user').pop();
-    if (!lastUserMessage) {
-      throw new Error('No user message found');
-    }
-
-    // Map model names to Claude Code model names
-    const cliModel = this.mapModelName(model);
-
-    // Get session ID for conversation continuity
-    const conversationId = this.currentConversationId || 'default';
-    const sessionId = claudeSessionManager.getClaudeSessionId(conversationId);
-
-    console.log('[Anthropic CLI] Conversation:', conversationId, 'Session:', sessionId || 'new');
-
-    // Build context: summary + last 2 messages
-    let messageWithContext = lastUserMessage.content;
-    const summaryContext = conversationSummary.buildContext(conversationId);
-
-    // Get last 2 messages (excluding current) for immediate context
-    const recentMessages = messages.slice(0, -1).slice(-2);
-    let recentContext = '';
-    if (recentMessages.length > 0) {
-      recentContext = recentMessages
-        .map(m => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 300)}${m.content.length > 300 ? '...' : ''}`)
-        .join('\n');
-    }
-
-    // Combine summary + recent + current message
-    if (summaryContext || recentContext) {
-      messageWithContext = '';
-      if (summaryContext) {
-        messageWithContext += summaryContext + '\n\n';
-      }
-      if (recentContext) {
-        messageWithContext += `<recent_messages>\n${recentContext}\n</recent_messages>\n\n`;
-      }
-      messageWithContext += lastUserMessage.content;
-    }
-
-    const hasTools = availableTools.size > 0;
-    const isResuming = !!sessionId;
-    let fullSystemPrompt: string | undefined;
-    let allowedTools: string[] = [];
-
-    if (isResuming) {
-      // When resuming, the session already has the system prompt and tool
-      // descriptions from the first message. Sending them again would
-      // duplicate context and waste tokens. We still pass --allowedTools
-      // (just permission names, not schemas) to ensure tool access.
-      console.log('[Anthropic CLI] Resuming session — skipping tool descriptions');
-      if (hasTools) {
-        allowedTools = await claudeCodeWrapper.listMCPServers();
-      }
-    } else {
-      // First message: build tool descriptions for the system prompt
-      const toolDescription = hasTools ? this.buildToolDescription(availableTools) : '';
-      fullSystemPrompt = systemPrompt || '';
-      if (toolDescription) {
-        fullSystemPrompt += '\n\n' + toolDescription;
-        fullSystemPrompt += '\n\nThese MCP tools are connected and available for you to use. When the user asks about data or functionality these tools can provide, USE the tools to get real information rather than just describing what you would do.';
-      }
-
-      if (hasTools) {
-        allowedTools = await claudeCodeWrapper.listMCPServers();
-        console.log('[Anthropic CLI] Tool count from app:', Array.from(availableTools.values()).reduce((sum, { tools }) => sum + tools.length, 0));
-        console.log('[Anthropic CLI] Claude Code MCP servers:', allowedTools);
-        console.log('[Anthropic CLI] Allowed tools being passed:', allowedTools.map(s => `mcp__${s}`));
-      } else {
-        console.log('[Anthropic CLI] No tools requested — skipping MCP server listing');
-      }
-    }
-
-    let resultText = '';
-    let newSessionId: string | null = null;
-
-    const result = await claudeCodeWrapper.call({
-      message: messageWithContext,
-      sessionId,
-      model: cliModel,
-      systemPrompt: fullSystemPrompt || undefined,
-      allowedTools: allowedTools.length > 0 ? allowedTools.map(s => `mcp__${s}`) : undefined,
-      maxTurns: hasTools ? 15 : 1,
-      cwd: this.workingDir || undefined,
-      onToken: (token) => {
-        resultText += token;
-      },
-      onSessionId: (sid) => {
-        newSessionId = sid;
-        if (!sessionId) {
-          claudeSessionManager.registerSession(conversationId, sid, cliModel);
-        } else {
-          claudeSessionManager.touch(conversationId);
-        }
-      },
-      onToolUse: (toolName, input) => {
-        console.log('[Anthropic CLI] Tool use:', toolName, input);
-      },
-      onError: (error) => {
-        console.error('[Anthropic CLI] Error:', error);
-      },
-    });
-
-    if (!result.success) {
-      throw new Error(result.error || 'Claude CLI call failed');
-    }
-
-    const responseContent = result.result || resultText || '[No response from Claude]';
-
-    // Update conversation summary with this exchange
-    conversationSummary.updateSummary(conversationId, lastUserMessage.content, responseContent);
-
-    return {
-      message: {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: responseContent,
-        timestamp: new Date(),
-      },
-      toolCalls: [],
-    };
-  }
-
-  /**
-   * Map API model names to Claude Code model names
-   */
-  private mapModelName(apiModel: string): string {
-    const modelMap: Record<string, string> = {
-      'claude-opus-4-6': 'opus',
-      'claude-sonnet-4-5-20250929': 'sonnet',
-      'claude-haiku-4-5-20251001': 'haiku',
-      'claude-opus-4-5-20251101': 'opus',
-      'claude-sonnet-4-20250514': 'sonnet',
-      'claude-opus-4-20250514': 'opus',
-    };
-    return modelMap[apiModel] || 'sonnet';
-  }
-
-  /**
    * Minimize a JSON Schema to reduce token count.
-   * Strips non-essential keywords while preserving enough info for correct tool use.
    */
   private minimizeSchema(schema: any): any {
     if (!schema || typeof schema !== 'object') return schema;

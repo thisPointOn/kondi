@@ -1,11 +1,28 @@
 import { invoke } from '@tauri-apps/api/core';
+import {
+  upsertProfile,
+  deleteProfile,
+  getProfile,
+  resolveApiKey,
+  PROFILE_IDS,
+  REFRESH_BUFFER_MS,
+} from './auth-profiles';
+import type { OAuthCredential, GeminiOAuthCredential } from './auth-profiles';
 
 export interface OAuthTokens {
   access_token: string;
   refresh_token: string;
   expires_at: number; // Unix timestamp in milliseconds
   token_type: string;
-  provider: 'anthropic' | 'openai';
+  provider: 'anthropic' | 'openai' | 'google';
+}
+
+export interface GeminiOAuthResult {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number;
+  project_id: string;
+  email?: string;
 }
 
 export interface OAuthSession {
@@ -14,54 +31,10 @@ export interface OAuthSession {
   state: string;
 }
 
-export interface AuthProfile {
-  provider: 'anthropic' | 'openai';
-  tokens: OAuthTokens;
-  createdAt: string;
-  lastUsed?: string;
-  status: 'active' | 'expired' | 'error';
-}
-
-const STORAGE_KEY = 'kondi-auth-profiles';
-const REFRESH_BUFFER_MS = 5 * 60 * 1000; // 5 minutes before expiry
-
 class OAuthService {
-  private profiles: Map<string, AuthProfile> = new Map();
-
-  constructor() {
-    this.loadFromStorage();
-  }
-
-  private loadFromStorage() {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const data = JSON.parse(stored);
-        for (const [key, profile] of Object.entries(data.profiles || {})) {
-          this.profiles.set(key, profile as AuthProfile);
-        }
-        console.log('[OAuth] Loaded profiles:', Array.from(this.profiles.keys()));
-      }
-    } catch (e) {
-      console.error('[OAuth] Failed to load profiles from storage:', e);
-    }
-  }
-
-  private saveToStorage() {
-    try {
-      const data = {
-        profiles: Object.fromEntries(this.profiles),
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch (e) {
-      console.error('[OAuth] Failed to save profiles to storage:', e);
-    }
-  }
-
   /**
    * Start Anthropic OAuth flow (step 1)
    * Opens browser for user to authenticate with Claude account
-   * Returns session info - caller must then call completeAnthropicOAuth with the code
    */
   async startAnthropicOAuth(): Promise<OAuthSession> {
     console.log('[OAuth] Starting Anthropic OAuth flow...');
@@ -84,15 +57,18 @@ class OAuthService {
         state,
       });
 
-      // Store the profile
-      const profile: AuthProfile = {
-        provider: 'anthropic',
-        tokens,
-        createdAt: new Date().toISOString(),
-        status: 'active',
-      };
-      this.profiles.set('anthropic', profile);
-      this.saveToStorage();
+      // Store in auth profile system
+      upsertProfile(
+        PROFILE_IDS.anthropicOAuth,
+        'anthropic',
+        {
+          type: 'oauth',
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          expiresAt: tokens.expires_at,
+        },
+        'OAuth (browser)',
+      );
 
       console.log('[OAuth] Anthropic connected successfully');
       return tokens;
@@ -107,22 +83,16 @@ class OAuthService {
    * Opens browser, prompts user for code, and completes the flow
    */
   async connectAnthropic(getCode: () => Promise<string | null>): Promise<OAuthTokens> {
-    // Step 1: Start OAuth and open browser
     const session = await this.startAnthropicOAuth();
-
-    // Step 2: Get code from user
     const code = await getCode();
     if (!code) {
       throw new Error('OAuth cancelled - no code provided');
     }
-
-    // Step 3: Exchange code for tokens
     return this.completeAnthropicOAuth(code, session.code_verifier, session.state);
   }
 
   /**
    * Start OpenAI OAuth flow
-   * Opens browser for user to authenticate with ChatGPT account
    */
   async connectOpenAI(): Promise<OAuthTokens> {
     console.log('[OAuth] Starting OpenAI OAuth flow...');
@@ -130,15 +100,18 @@ class OAuthService {
     try {
       const tokens = await invoke<OAuthTokens>('start_openai_oauth');
 
-      // Store the profile
-      const profile: AuthProfile = {
-        provider: 'openai',
-        tokens,
-        createdAt: new Date().toISOString(),
-        status: 'active',
-      };
-      this.profiles.set('openai', profile);
-      this.saveToStorage();
+      // Store in auth profile system
+      upsertProfile(
+        PROFILE_IDS.openaiOAuth,
+        'openai',
+        {
+          type: 'oauth',
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          expiresAt: tokens.expires_at,
+        },
+        'OAuth (browser)',
+      );
 
       console.log('[OAuth] OpenAI connected successfully');
       return tokens;
@@ -149,43 +122,48 @@ class OAuthService {
   }
 
   /**
-   * Get a valid access token for a provider, auto-refreshing if needed
+   * Start Gemini OAuth flow
+   * Opens browser for Google OAuth, provisions Cloud Code Assist project
+   */
+  async connectGemini(): Promise<GeminiOAuthResult> {
+    console.log('[OAuth] Starting Gemini OAuth flow...');
+
+    try {
+      const result = await invoke<GeminiOAuthResult>('start_gemini_oauth');
+
+      // Store in auth profile system as GeminiOAuthCredential
+      upsertProfile(
+        PROFILE_IDS.googleOAuth,
+        'google',
+        {
+          type: 'gemini_oauth',
+          accessToken: result.access_token,
+          refreshToken: result.refresh_token,
+          expiresAt: result.expires_at,
+          projectId: result.project_id,
+          email: result.email,
+        },
+        'Google OAuth',
+      );
+
+      console.log('[OAuth] Gemini connected successfully, project:', result.project_id);
+      return result;
+    } catch (err) {
+      console.error('[OAuth] Gemini OAuth failed:', err);
+      throw err;
+    }
+  }
+
+  /**
+   * Get a valid access token for a provider, auto-refreshing if needed.
+   * Delegates to auth profile system.
    */
   async getAccessToken(provider: 'anthropic' | 'openai'): Promise<string> {
-    const profile = this.profiles.get(provider);
-    if (!profile?.tokens) {
-      throw new Error(`No ${provider} OAuth profile found. Please connect your account first.`);
+    const resolved = await resolveApiKey(provider);
+    if (!resolved) {
+      throw new Error(`No ${provider} credentials found. Please connect your account first.`);
     }
-
-    // Check if token needs refresh
-    if (Date.now() + REFRESH_BUFFER_MS >= profile.tokens.expires_at) {
-      console.log(`[OAuth] ${provider} token expiring soon, refreshing...`);
-
-      try {
-        const newTokens = provider === 'anthropic'
-          ? await invoke<OAuthTokens>('refresh_anthropic_token', { refreshToken: profile.tokens.refresh_token })
-          : await invoke<OAuthTokens>('refresh_openai_token', { refreshToken: profile.tokens.refresh_token });
-
-        profile.tokens = newTokens;
-        profile.status = 'active';
-        profile.lastUsed = new Date().toISOString();
-        this.saveToStorage();
-
-        console.log(`[OAuth] ${provider} token refreshed successfully`);
-        return newTokens.access_token;
-      } catch (err) {
-        console.error(`[OAuth] ${provider} token refresh failed:`, err);
-        profile.status = 'expired';
-        this.saveToStorage();
-        throw new Error(`${provider} token refresh failed. Please reconnect your account.`);
-      }
-    }
-
-    // Update last used
-    profile.lastUsed = new Date().toISOString();
-    this.saveToStorage();
-
-    return profile.tokens.access_token;
+    return resolved.apiKey;
   }
 
   /**
@@ -196,102 +174,79 @@ class OAuthService {
     status: 'active' | 'expired' | 'error' | 'none';
     expiresAt?: number;
   } {
-    const profile = this.profiles.get(provider);
+    const profileId = provider === 'anthropic'
+      ? PROFILE_IDS.anthropicOAuth
+      : PROFILE_IDS.openaiOAuth;
+
+    const profile = getProfile(profileId);
     if (!profile) {
       return { connected: false, status: 'none' };
     }
-    return {
-      connected: profile.status === 'active',
-      status: profile.status,
-      expiresAt: profile.tokens?.expires_at,
-    };
+
+    if (profile.credential.type === 'oauth') {
+      const cred = profile.credential as OAuthCredential;
+      const expired = Date.now() >= cred.expiresAt;
+      const hasRefresh = !!cred.refreshToken;
+
+      if (expired && !hasRefresh) {
+        return { connected: false, status: 'expired', expiresAt: cred.expiresAt };
+      }
+
+      // If expired but has refresh token, still considered connected
+      return {
+        connected: true,
+        status: expired ? 'expired' : 'active',
+        expiresAt: cred.expiresAt,
+      };
+    }
+
+    return { connected: true, status: 'active' };
   }
 
   /**
    * Disconnect a provider (remove stored credentials)
    */
   disconnect(provider: 'anthropic' | 'openai') {
-    this.profiles.delete(provider);
-    this.saveToStorage();
+    const profileId = provider === 'anthropic'
+      ? PROFILE_IDS.anthropicOAuth
+      : PROFILE_IDS.openaiOAuth;
+    deleteProfile(profileId);
     console.log(`[OAuth] ${provider} disconnected`);
   }
 
   /**
    * Check if a provider has valid OAuth credentials
-   * This checks if tokens exist and are not expired
    */
   isConnected(provider: 'anthropic' | 'openai'): boolean {
-    const profile = this.profiles.get(provider);
-    if (!profile?.tokens?.access_token) return false;
-    if (profile.status !== 'active') return false;
-    // Check if token is fully expired (past expiry, not just needs refresh)
-    // Tokens that need refresh are still "connected" since refresh will happen in getAccessToken()
-    // But fully expired tokens with no refresh_token are not connected
-    if (profile.tokens.expires_at && Date.now() >= profile.tokens.expires_at) {
-      // Token is expired — only still "connected" if we have a refresh token to recover
-      if (!profile.tokens.refresh_token) {
-        console.log(`[OAuth] ${provider} token expired with no refresh token — marking disconnected`);
-        profile.status = 'expired';
-        this.saveToStorage();
-        return false;
-      }
-      // Has refresh token — still considered connected (refresh will happen on next getAccessToken call)
-    }
-    return true;
+    const status = this.getConnectionStatus(provider);
+    return status.connected;
   }
 
   /**
-   * Check if tokens are expired and need refresh
-   * Returns true if tokens exist but are expired or expiring soon
+   * Check if tokens need refresh
    */
   needsRefresh(provider: 'anthropic' | 'openai'): boolean {
-    const profile = this.profiles.get(provider);
-    if (!profile?.tokens?.expires_at) return false;
-    return Date.now() + REFRESH_BUFFER_MS >= profile.tokens.expires_at;
+    const profileId = provider === 'anthropic'
+      ? PROFILE_IDS.anthropicOAuth
+      : PROFILE_IDS.openaiOAuth;
+    const profile = getProfile(profileId);
+    if (!profile || profile.credential.type !== 'oauth') return false;
+    return Date.now() + REFRESH_BUFFER_MS >= profile.credential.expiresAt;
   }
 
   /**
-   * Check if tokens are completely expired (past expiry + buffer)
-   */
-  isExpired(provider: 'anthropic' | 'openai'): boolean {
-    const profile = this.profiles.get(provider);
-    if (!profile?.tokens?.expires_at) return false;
-    return Date.now() >= profile.tokens.expires_at;
-  }
-
-  /**
-   * Try to refresh token proactively (useful for startup validation)
-   * Returns true if refresh succeeded or wasn't needed
+   * Try to refresh token proactively
    */
   async tryRefresh(provider: 'anthropic' | 'openai'): Promise<{ success: boolean; error?: string }> {
-    const profile = this.profiles.get(provider);
-    if (!profile?.tokens) {
-      return { success: false, error: 'No OAuth profile found' };
-    }
-
-    // If not expired, no refresh needed
     if (!this.needsRefresh(provider)) {
       return { success: true };
     }
 
-    console.log(`[OAuth] Proactively refreshing ${provider} token...`);
-
     try {
-      const newTokens = provider === 'anthropic'
-        ? await invoke<OAuthTokens>('refresh_anthropic_token', { refreshToken: profile.tokens.refresh_token })
-        : await invoke<OAuthTokens>('refresh_openai_token', { refreshToken: profile.tokens.refresh_token });
-
-      profile.tokens = newTokens;
-      profile.status = 'active';
-      profile.lastUsed = new Date().toISOString();
-      this.saveToStorage();
-
-      console.log(`[OAuth] ${provider} token refreshed successfully`);
+      // resolveApiKey handles auto-refresh
+      await resolveApiKey(provider);
       return { success: true };
     } catch (err) {
-      console.error(`[OAuth] ${provider} token refresh failed:`, err);
-      profile.status = 'expired';
-      this.saveToStorage();
       return {
         success: false,
         error: err instanceof Error ? err.message : 'Token refresh failed'
@@ -303,9 +258,12 @@ class OAuthService {
    * Get time until token expires (in milliseconds)
    */
   getTimeUntilExpiry(provider: 'anthropic' | 'openai'): number | null {
-    const profile = this.profiles.get(provider);
-    if (!profile?.tokens?.expires_at) return null;
-    return Math.max(0, profile.tokens.expires_at - Date.now());
+    const profileId = provider === 'anthropic'
+      ? PROFILE_IDS.anthropicOAuth
+      : PROFILE_IDS.openaiOAuth;
+    const profile = getProfile(profileId);
+    if (!profile || profile.credential.type !== 'oauth') return null;
+    return Math.max(0, profile.credential.expiresAt - Date.now());
   }
 }
 

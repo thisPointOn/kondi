@@ -1100,6 +1100,7 @@ pub async fn anthropic_request(
     method: String,
     body: Option<String>,
     apiKey: String,
+    betas: Option<Vec<String>>,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
 
@@ -1121,19 +1122,27 @@ pub async fn anthropic_request(
         .header("Content-Type", "application/json")
         .header("anthropic-version", "2023-06-01");
 
-    // Build beta headers: always include prompt caching, add OAuth if needed
-    let mut beta_features: Vec<&str> = vec!["prompt-caching-2024-07-31"];
+    // Build beta headers
+    let beta_string = if let Some(ref custom_betas) = betas {
+        // Caller-provided betas override defaults
+        custom_betas.join(",")
+    } else if is_oauth_token {
+        // OAuth default: claude-code + oauth + prompt-caching
+        "claude-code-20250219,oauth-2025-04-20,prompt-caching-2024-07-31".to_string()
+    } else {
+        // API key default: prompt-caching only
+        "prompt-caching-2024-07-31".to_string()
+    };
 
     if is_oauth_token {
         // OAuth token: use Authorization Bearer header
         request = request.header("Authorization", format!("Bearer {}", apiKey));
-        beta_features.push("oauth-2025-04-20");
     } else {
         // API key: use x-api-key header
         request = request.header("x-api-key", &apiKey);
     }
 
-    request = request.header("anthropic-beta", beta_features.join(","));
+    request = request.header("anthropic-beta", beta_string);
 
     if let Some(body) = body {
         request = request.body(body);
@@ -1147,6 +1156,47 @@ pub async fn anthropic_request(
     }
 
     Ok(text)
+}
+
+/// Read Claude CLI credentials from ~/.claude/.credentials.json
+/// Returns { accessToken, refreshToken, expiresAt } from the claudeAiOauth field
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn read_claude_credentials() -> Result<serde_json::Value, String> {
+    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let creds_path = home.join(".claude").join(".credentials.json");
+
+    if !creds_path.exists() {
+        return Err("Claude credentials file not found (~/.claude/.credentials.json)".to_string());
+    }
+
+    let content = std::fs::read_to_string(&creds_path)
+        .map_err(|e| format!("Failed to read credentials file: {}", e))?;
+
+    let parsed: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse credentials JSON: {}", e))?;
+
+    // Extract claudeAiOauth field
+    let oauth = parsed.get("claudeAiOauth")
+        .ok_or("No claudeAiOauth field in credentials file")?;
+
+    let access_token = oauth.get("accessToken")
+        .and_then(|v| v.as_str())
+        .ok_or("No accessToken in claudeAiOauth")?;
+
+    let refresh_token = oauth.get("refreshToken")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let expires_at = oauth.get("expiresAt")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    Ok(serde_json::json!({
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+        "expiresAt": expires_at
+    }))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -2661,7 +2711,7 @@ pub async fn refresh_anthropic_token(refresh_token: String) -> Result<OAuthToken
 /// Start OpenAI OAuth flow and return tokens
 #[tauri::command]
 pub async fn start_openai_oauth() -> Result<OAuthTokens, String> {
-    let redirect_uri = format!("http://localhost:{}/callback", OPENAI_CALLBACK_PORT);
+    let redirect_uri = format!("http://localhost:{}/auth/callback", OPENAI_CALLBACK_PORT);
 
     // Generate PKCE
     let code_verifier: String = rand::thread_rng()
@@ -2679,9 +2729,9 @@ pub async fn start_openai_oauth() -> Result<OAuthTokens, String> {
         .map(char::from)
         .collect();
 
-    // Build authorization URL
+    // Build authorization URL (must match Codex CLI's parameters exactly)
     let auth_url = format!(
-        "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
+        "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}&id_token_add_organizations=true&codex_cli_simplified_flow=true&originator=kondi",
         OPENAI_AUTH_ENDPOINT,
         OPENAI_CLIENT_ID,
         urlencoding::encode(&redirect_uri),
@@ -2921,7 +2971,7 @@ async fn wait_for_oauth_callback(port: u16, timeout_secs: u64) -> Result<(String
                     let url_str = format!("http://localhost:{}{}", port, request.url());
 
                     // Skip non-callback requests (favicon, etc)
-                    if !request.url().starts_with("/callback") {
+                    if !request.url().starts_with("/callback") && !request.url().starts_with("/auth/callback") {
                         println!("[OAuth Callback] Skipping non-callback request");
                         let _ = request.respond(tiny_http::Response::from_string(""));
                         continue;
@@ -5053,6 +5103,305 @@ engines:
 
     println!("[Docker] SearXNG files created at: {:?}", docker_dir);
     Ok(compose_path.to_string_lossy().to_string())
+}
+
+// ============================================================================
+// Gemini (Google Cloud Code Assist) OAuth + API Proxy
+// ============================================================================
+
+const GEMINI_CLIENT_ID: &str = "REDACTED_GOOGLE_CLIENT_ID";
+const GEMINI_CLIENT_SECRET: &str = "REDACTED_GOOGLE_CLIENT_SECRET";
+const GEMINI_AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+const GEMINI_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
+const GEMINI_CALLBACK_PORT: u16 = 8085;
+const GEMINI_SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
+const GEMINI_CLOUDCODE_BASE: &str = "https://cloudcode-pa.googleapis.com";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GeminiOAuthResult {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_at: i64,
+    pub project_id: String,
+    pub email: Option<String>,
+}
+
+/// Start Gemini OAuth flow — opens browser, waits for callback, exchanges code,
+/// provisions Cloud Code Assist project, and returns tokens + project ID.
+#[tauri::command]
+pub async fn start_gemini_oauth() -> Result<GeminiOAuthResult, String> {
+    let redirect_uri = format!("http://localhost:{}/oauth2callback", GEMINI_CALLBACK_PORT);
+
+    // Generate PKCE
+    let code_verifier: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(64)
+        .map(char::from)
+        .collect();
+    let challenge_bytes = Sha256::digest(code_verifier.as_bytes());
+    let code_challenge = URL_SAFE_NO_PAD.encode(challenge_bytes);
+
+    // Generate state
+    let state: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+
+    let auth_url = format!(
+        "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}&access_type=offline&prompt=consent",
+        GEMINI_AUTH_ENDPOINT,
+        GEMINI_CLIENT_ID,
+        urlencoding::encode(&redirect_uri),
+        urlencoding::encode(GEMINI_SCOPES),
+        code_challenge,
+        state
+    );
+
+    println!("[Gemini OAuth] Starting OAuth flow...");
+
+    // Start callback server
+    let callback_handle = tokio::spawn(async move {
+        wait_for_oauth_callback(GEMINI_CALLBACK_PORT, 300).await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    if let Err(e) = webbrowser::open(&auth_url) {
+        println!("[Gemini OAuth] Failed to open browser: {}. URL: {}", e, auth_url);
+    }
+
+    let (code, returned_state) = callback_handle.await
+        .map_err(|e| format!("Callback task failed: {}", e))?
+        .map_err(|e| format!("OAuth callback error: {}", e))?;
+
+    if returned_state != state {
+        return Err("OAuth state mismatch".to_string());
+    }
+
+    // Exchange code for tokens
+    let client = reqwest::Client::new();
+    let params = [
+        ("grant_type", "authorization_code"),
+        ("code", code.as_str()),
+        ("redirect_uri", redirect_uri.as_str()),
+        ("client_id", GEMINI_CLIENT_ID),
+        ("client_secret", GEMINI_CLIENT_SECRET),
+        ("code_verifier", code_verifier.as_str()),
+    ];
+
+    println!("[Gemini OAuth] Exchanging code for tokens...");
+
+    let resp = client
+        .post(GEMINI_TOKEN_ENDPOINT)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Token exchange failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Gemini token exchange failed: HTTP {} - {}", status, text));
+    }
+
+    let token_json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    let access_token = token_json
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or("No access_token in response")?
+        .to_string();
+
+    let refresh_token = token_json
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .ok_or("No refresh_token in response")?
+        .to_string();
+
+    let expires_in = token_json
+        .get("expires_in")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(3600);
+    let expires_at = chrono::Utc::now().timestamp_millis() + (expires_in * 1000);
+
+    // Get user email from userinfo
+    let email = match client
+        .get("https://www.googleapis.com/oauth2/v3/userinfo")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            r.json::<serde_json::Value>().await.ok()
+                .and_then(|v| v.get("email").and_then(|e| e.as_str()).map(|s| s.to_string()))
+        }
+        _ => None,
+    };
+
+    println!("[Gemini OAuth] Got tokens, email: {:?}", email);
+
+    // Provision Cloud Code Assist project
+    println!("[Gemini OAuth] Provisioning Cloud Code Assist project...");
+    let provision_resp = client
+        .post(format!("{}/v1internal:loadCodeAssist", GEMINI_CLOUDCODE_BASE))
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Content-Type", "application/json")
+        .header("User-Agent", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .map_err(|e| format!("Project provisioning failed: {}", e))?;
+
+    let project_id = if provision_resp.status().is_success() {
+        let pv: serde_json::Value = provision_resp.json().await.unwrap_or_default();
+        println!("[Gemini OAuth] Provision response: {:?}", pv);
+        pv.get("project")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                // Try onboardUser as fallback
+                println!("[Gemini OAuth] No project in response, trying onboardUser...");
+                String::new()
+            })
+    } else {
+        let status = provision_resp.status();
+        let text = provision_resp.text().await.unwrap_or_default();
+        println!("[Gemini OAuth] Provision failed: HTTP {} - {}, trying onboardUser...", status, text);
+        String::new()
+    };
+
+    // If no project from loadCodeAssist, try onboardUser
+    let final_project_id = if project_id.is_empty() {
+        let onboard_resp = client
+            .post(format!("{}/v1internal:onboardUser", GEMINI_CLOUDCODE_BASE))
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(|e| format!("Onboard request failed: {}", e))?;
+
+        if onboard_resp.status().is_success() {
+            let ov: serde_json::Value = onboard_resp.json().await.unwrap_or_default();
+            println!("[Gemini OAuth] Onboard response: {:?}", ov);
+            ov.get("project")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "default-project".to_string())
+        } else {
+            println!("[Gemini OAuth] Onboard also failed, using default project");
+            "default-project".to_string()
+        }
+    } else {
+        project_id
+    };
+
+    println!("[Gemini OAuth] Successfully connected! Project: {}", final_project_id);
+
+    Ok(GeminiOAuthResult {
+        access_token,
+        refresh_token,
+        expires_at,
+        project_id: final_project_id,
+        email,
+    })
+}
+
+/// Refresh a Gemini OAuth token
+#[tauri::command]
+pub async fn refresh_gemini_token(refresh_token: String) -> Result<OAuthTokens, String> {
+    let client = reqwest::Client::new();
+    let params = [
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token.as_str()),
+        ("client_id", GEMINI_CLIENT_ID),
+        ("client_secret", GEMINI_CLIENT_SECRET),
+    ];
+
+    let resp = client
+        .post(GEMINI_TOKEN_ENDPOINT)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Refresh request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Gemini token refresh failed: HTTP {} - {}", status, text));
+    }
+
+    let token_json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    let access_token = token_json
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or("No access_token in refresh response")?
+        .to_string();
+
+    // Google refresh doesn't return a new refresh_token — reuse the old one
+    let new_refresh = token_json
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&refresh_token)
+        .to_string();
+
+    let expires_in = token_json
+        .get("expires_in")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(3600);
+    let expires_at = chrono::Utc::now().timestamp_millis() + (expires_in * 1000);
+
+    Ok(OAuthTokens {
+        access_token,
+        refresh_token: new_refresh,
+        expires_at,
+        token_type: "Bearer".to_string(),
+        provider: "google".to_string(),
+    })
+}
+
+/// Proxy requests to Gemini's cloudcode-pa.googleapis.com endpoint (CORS bypass)
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn gemini_request(
+    path: String,
+    method: String,
+    body: Option<String>,
+    accessToken: String,
+) -> Result<String, String> {
+    let url = format!("{}{}", GEMINI_CLOUDCODE_BASE, path);
+    let client = reqwest::Client::new();
+
+    let mut request = match method.to_uppercase().as_str() {
+        "GET" => client.get(&url),
+        "POST" => client.post(&url),
+        "PUT" => client.put(&url),
+        "DELETE" => client.delete(&url),
+        _ => return Err(format!("Unsupported method: {}", method)),
+    };
+
+    request = request
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", accessToken))
+        .header("User-Agent", "google-cloud-sdk vscode_cloudshelleditor/0.1");
+
+    if let Some(body) = body {
+        request = request.body(body);
+    }
+
+    let resp = request.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    Ok(text)
 }
 
 // ============================================================================

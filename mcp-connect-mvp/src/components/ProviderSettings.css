@@ -300,17 +300,26 @@
 }
 
 /* Primary Providers */
-.provider-icon.anthropic {
+.provider-icon.anthropic,
+.provider-icon.anthropic-cli,
+.provider-icon.anthropic-api {
   background: linear-gradient(135deg, #d97706, #f59e0b);
 }
 
 .provider-icon.openai,
+.provider-icon.openai-cli,
+.provider-icon.openai-api,
 .provider-icon.openai-oauth {
   background: linear-gradient(135deg, #10b981, #34d399);
 }
 
-.provider-icon.gemini {
+.provider-icon.gemini,
+.provider-icon.google {
   background: linear-gradient(135deg, #4285f4, #34a853);
+}
+
+.provider-icon.xai {
+  background: linear-gradient(135deg, #1a1a2e, #4a4a6a);
 }
 
 /* OAuth Providers */
