@@ -44,6 +44,7 @@ import {
   type WorkerPermissions,
 } from './prompts';
 
+import { bootstrapDirectoryContext } from './context-bootstrap';
 import { detectTestCommand } from '../pipeline/test-detect';
 import { detectBuildCommand } from '../pipeline/build-detect';
 import { detectInstallCommand } from '../pipeline/install-detect';
@@ -54,10 +55,6 @@ export interface AgentInvocation {
   systemPrompt: string;
   userMessage: string;
   skipTools?: boolean;
-  /** Explicit list of CLI tools to allow (e.g. ['Read','Grep','Glob']). Undefined = default set. */
-  allowedTools?: string[];
-  /** Resume an existing CLI session (within a single step) */
-  conversationId?: string;
   /** MCP servers this invocation can access (undefined = all servers) */
   allowedServerIds?: string[];
 }
@@ -67,8 +64,6 @@ export interface AgentResponse {
   tokensUsed: number;
   latencyMs: number;
   structured?: Record<string, unknown>;
-  /** Session ID returned by the CLI, for resuming within this step */
-  sessionId?: string;
 }
 
 export type AgentInvoker = (invocation: AgentInvocation, persona: Persona) => Promise<AgentResponse>;
@@ -109,8 +104,6 @@ const CODING_PHASE_TRANSITIONS: Record<string, {
 
 export class CodingOrchestrator {
   private config: CodingOrchestratorConfig;
-  /** Per-persona session IDs for conversation persistence within this step */
-  private personaSessionIds: Map<string, string> = new Map();
   /** Active council ID for the current workflow */
   private activeCouncilId: string | null = null;
 
@@ -123,7 +116,6 @@ export class CodingOrchestrator {
    */
   async runCodingWorkflow(council: Council, spec: string): Promise<void> {
     console.log('[CodingOrchestrator] Starting coding workflow...');
-    this.personaSessionIds.clear();
     this.activeCouncilId = council.id;
 
     // Always read fresh from store
@@ -136,6 +128,19 @@ export class CodingOrchestrator {
 
     const warnings: string[] = [];
 
+    // Bootstrap directory context if enabled
+    let enrichedSpec = spec;
+    if (council.deliberation?.bootstrapContext && council.deliberation?.workingDirectory) {
+      try {
+        const dirContext = await bootstrapDirectoryContext(council.deliberation.workingDirectory);
+        if (dirContext) {
+          enrichedSpec = `${dirContext}\n\n---\n\n${spec}`;
+        }
+      } catch (error) {
+        console.warn('[CodingOrchestrator] Directory context bootstrap failed:', error);
+      }
+    }
+
     try {
       // Git snapshot before any changes
       snapshotSha = await this.createGitSnapshot(council);
@@ -143,7 +148,7 @@ export class CodingOrchestrator {
       // Phase 1: Decompose
       this.transitionPhase(council.id, 'decomposing');
       try {
-        await this.decomposeSpec(council, spec);
+        await this.decomposeSpec(council, enrichedSpec);
       } catch (decomposeError) {
         const errMsg = (decomposeError as Error).message || String(decomposeError);
         console.error('[CodingOrchestrator] Decompose failed, using fallback single-module:', errMsg);
@@ -857,10 +862,19 @@ export class CodingOrchestrator {
       invocation = { ...invocation, allowedServerIds: effectiveServers };
     }
 
-    // Inject per-persona session ID for conversation persistence within this step
-    const existingSessionId = this.personaSessionIds.get(persona.id);
-    if (existingSessionId) {
-      invocation = { ...invocation, conversationId: existingSessionId };
+    // Apply per-persona tool access overrides from role assignment
+    const roleAssignment = council?.deliberation?.roleAssignments
+      ?.find(r => r.personaId === persona.id);
+
+    if (roleAssignment?.toolAccess === 'none') {
+      invocation = { ...invocation, skipTools: true };
+    } else if (roleAssignment?.toolAccess === 'full') {
+      const { skipTools: _, ...rest } = invocation;
+      invocation = rest as AgentInvocation;
+    }
+
+    if (roleAssignment?.allowedServerIds) {
+      invocation = { ...invocation, allowedServerIds: roleAssignment.allowedServerIds };
     }
 
     // Inject brevity instruction if configured
@@ -888,12 +902,6 @@ export class CodingOrchestrator {
       this.config.onAgentThinkingStart?.(persona);
       const response = await this.config.invokeAgent(invocation, persona);
       this.config.onAgentThinkingEnd?.(persona);
-
-      // Store session ID for subsequent calls from this persona
-      if (response.sessionId) {
-        this.personaSessionIds.set(persona.id, response.sessionId);
-      }
-
       return response;
     } catch (error) {
       this.config.onAgentThinkingEnd?.(persona);

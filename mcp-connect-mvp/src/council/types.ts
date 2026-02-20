@@ -181,6 +181,9 @@ export interface Council {
 
   /** Runtime deliberation state (only when mode === 'deliberation') */
   deliberationState?: DeliberationState;
+
+  /** Pipeline ID if this council was created by a pipeline step */
+  pipelineId?: string;
 }
 
 // ============================================================================
@@ -609,6 +612,10 @@ export interface DeliberationRoleAssignment {
   stance?: string;               // Optional: Consultant's starting position or bias
   suppressPersona?: boolean;     // Default: true for Worker, false for others
   writePermissions?: boolean;    // Worker: allow disk write operations
+  /** Per-role MCP server override (undefined = inherit from step/persona) */
+  allowedServerIds?: string[];
+  /** Override default tool behavior: 'full' = enable all tools, 'none' = disable tools */
+  toolAccess?: 'full' | 'none';
 }
 
 /**
@@ -720,6 +727,9 @@ export interface DeliberationConfig {
 
   /** MCP servers this step/council can access (undefined = all servers) */
   allowedServerIds?: string[];
+
+  /** Whether to auto-scan workingDirectory for context bootstrapping */
+  bootstrapContext?: boolean;
 }
 
 /**

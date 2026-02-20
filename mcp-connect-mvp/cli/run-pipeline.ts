@@ -22,6 +22,7 @@ import { pipelineStore } from '../src/pipeline/store';
 import { PipelineExecutor } from '../src/pipeline/executor';
 import type { PlatformAdapter } from '../src/pipeline/executor';
 import type { Pipeline, CouncilStepConfig, LlmStepConfig } from '../src/pipeline/types';
+import { migrateLlmConfig } from '../src/pipeline/types';
 import { callClaude } from './claude-caller';
 import { callCodex } from './codex-caller';
 import { createNodePlatform } from './node-platform';
@@ -252,8 +253,8 @@ function printPipelineStructure(pipeline: Pipeline) {
         console.log(`      ${C.dim}${step.description}${C.reset}`);
       }
 
-      // Show personas for council steps
-      if (step.config.type === 'planning' || step.config.type === 'coding') {
+      // Show personas for council steps (all non-gate types with councilSetup)
+      if ('councilSetup' in step.config) {
         const config = step.config as CouncilStepConfig;
         console.log(`      ${C.dim}Council: ${config.councilSetup.name}${C.reset}`);
         console.log(`      ${C.dim}Rounds: ${config.councilSetup.maxRounds ?? 4}, Revisions: ${config.councilSetup.maxRevisions ?? 3}${C.reset}`);
@@ -270,10 +271,17 @@ function printPipelineStructure(pipeline: Pipeline) {
         }
       }
 
-      // Show model for LLM steps
+      // Show model for lightweight council steps (decisioning/execution)
       if (step.config.type === 'decisioning' || step.config.type === 'execution') {
-        const config = step.config as LlmStepConfig;
-        console.log(`      ${C.dim}Model: ${config.model} (${config.provider})${C.reset}`);
+        if ('councilSetup' in step.config) {
+          const config = step.config as CouncilStepConfig;
+          for (const p of config.councilSetup.personas) {
+            console.log(`        ${C.dim}${p.name} (${p.role}) — ${p.model}${C.reset}`);
+          }
+        } else {
+          const config = step.config as LlmStepConfig;
+          console.log(`      ${C.dim}Model: ${config.model} (${config.provider})${C.reset}`);
+        }
       }
     }
   }
@@ -345,8 +353,8 @@ function saveExecutionReport(
           durationMs: logEntry?.durationMs,
         };
 
-        // Council step details
-        if (step.config.type === 'planning' || step.config.type === 'coding') {
+        // Council step details (all non-gate types with councilSetup)
+        if ('councilSetup' in step.config) {
           const config = step.config as CouncilStepConfig;
           stepReport.council = {
             name: config.councilSetup.name,
@@ -373,14 +381,27 @@ function saveExecutionReport(
           }
         }
 
-        // LLM step details
+        // Lightweight council step details (decisioning/execution)
         if (step.config.type === 'decisioning' || step.config.type === 'execution') {
-          const config = step.config as LlmStepConfig;
-          stepReport.llm = {
-            model: config.model,
-            provider: config.provider,
-            systemPrompt: config.systemPrompt,
-          };
+          if ('councilSetup' in step.config) {
+            const config = step.config as CouncilStepConfig;
+            stepReport.council = {
+              name: config.councilSetup.name,
+              councilId: logEntry?.councilId,
+              maxRounds: config.councilSetup.maxRounds,
+              maxRevisions: config.councilSetup.maxRevisions,
+              personas: config.councilSetup.personas.map(p => ({
+                name: p.name, role: p.role, model: p.model, provider: p.provider,
+              })),
+            };
+          } else {
+            const config = step.config as LlmStepConfig;
+            stepReport.llm = {
+              model: config.model,
+              provider: config.provider,
+              systemPrompt: config.systemPrompt,
+            };
+          }
         }
 
         // Input/output
@@ -504,27 +525,6 @@ async function main() {
       return { ...result, sessionId: result.sessionId };
     },
 
-    llmComplete: async (params) => {
-      log(C.green, 'LLM', `Calling ${params.model}...`);
-      // Build allowedTools from allowedServerIds if set (only when tools aren't skipped)
-      const allowedTools = params.skipTools
-        ? undefined
-        : params.allowedServerIds
-          ? ['Edit', 'Write', 'Read', 'Bash', 'Glob', 'Grep', ...params.allowedServerIds.map(id => `mcp__${id}`)]
-          : undefined;
-      const result = await callLLM({
-        systemPrompt: params.systemPrompt,
-        userMessage: params.userMessage,
-        model: params.model,
-        workingDir: platform.getWorkingDir(),
-        conversationId: params.conversationId,
-        allowedTools,
-        skipTools: params.skipTools,
-      });
-      log(C.green, 'LLM', `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);
-      return { content: result.content, tokensUsed: result.tokensUsed, sessionId: result.sessionId };
-    },
-
     onStageStart: (idx) => {
       const stage = pipelineStore.get(pipeline.id)?.stages[idx];
       log(C.blue, 'Stage', `Starting stage ${idx + 1}: ${stage?.name || '?'}`);
@@ -552,8 +552,8 @@ async function main() {
         status: 'running',
       };
 
-      // Capture personas for council steps
-      if (step && (step.config.type === 'planning' || step.config.type === 'coding')) {
+      // Capture personas for council steps (all non-gate types with councilSetup)
+      if (step && 'councilSetup' in step.config) {
         const config = step.config as CouncilStepConfig;
         record.councilName = config.councilSetup.name;
         record.maxRounds = config.councilSetup.maxRounds;
@@ -572,8 +572,16 @@ async function main() {
       }
 
       if (step && (step.config.type === 'decisioning' || step.config.type === 'execution')) {
-        const config = step.config as LlmStepConfig;
-        record.inputTemplate = config.inputTemplate;
+        if ('councilSetup' in step.config) {
+          const config = step.config as CouncilStepConfig;
+          record.inputTemplate = config.inputTemplate;
+          record.personas = config.councilSetup.personas.map(p => ({
+            name: p.name, role: p.role, model: p.model, provider: p.provider,
+          }));
+        } else {
+          const config = step.config as LlmStepConfig;
+          record.inputTemplate = config.inputTemplate;
+        }
       }
 
       executionLog.push(record);

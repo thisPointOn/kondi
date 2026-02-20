@@ -23,6 +23,7 @@ pub fn run() {
             commands::start_oauth,
             commands::mcp_request,
             commands::anthropic_request,
+            commands::read_claude_credentials,
             commands::probe_server,
             // Local file system tools
             commands::read_local_file,
@@ -51,6 +52,10 @@ pub fn run() {
             commands::refresh_anthropic_token,
             commands::start_openai_oauth,
             commands::refresh_openai_token,
+            // Gemini (Google Cloud Code Assist)
+            commands::start_gemini_oauth,
+            commands::refresh_gemini_token,
+            commands::gemini_request,
             // Claude Code CLI Wrapper
             commands::run_claude_command,
             commands::run_claude_streaming,

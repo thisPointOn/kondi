@@ -96,6 +96,7 @@ export default function DeliberationView({
   const [pausedUserInput, setPausedUserInput] = useState('');
   const [workingDirectory, setWorkingDirectory] = useState(council?.deliberation?.workingDirectory || '');
   const [directoryConstrained, setDirectoryConstrained] = useState(council?.deliberation?.directoryConstrained ?? true);
+  const [bootstrapContext, setBootstrapContext] = useState(council?.deliberation?.bootstrapContext ?? true);
   const [problemInput, setProblemInput] = useState(() => {
     const c = councilStore.get(councilId);
     return c?.deliberation?.savedProblem || '';
@@ -203,6 +204,9 @@ export default function DeliberationView({
       }
       if (c?.deliberation?.directoryConstrained !== undefined) {
         setDirectoryConstrained(c.deliberation.directoryConstrained);
+      }
+      if (c?.deliberation?.bootstrapContext !== undefined) {
+        setBootstrapContext(c.deliberation.bootstrapContext);
       }
     };
 
@@ -882,6 +886,16 @@ export default function DeliberationView({
                     ? 'All file operations will be restricted to this directory.'
                     : 'File operations can access files outside this directory.'}
                 </p>
+                <label className="constraint-toggle" style={{ marginTop: '6px' }}>
+                  <input
+                    type="checkbox"
+                    checked={bootstrapContext}
+                    onChange={(e) => setBootstrapContext(e.target.checked)}
+                  />
+                  <span className="constraint-label">
+                    Auto-scan directory for context
+                  </span>
+                </label>
               </div>
 
               {/* Council Mode */}
@@ -1150,6 +1164,7 @@ export default function DeliberationView({
                           ...freshCouncil.deliberation,
                           workingDirectory: workingDirectory || undefined,
                           directoryConstrained,
+                          bootstrapContext,
                           maxRounds: maxRounds,
                           saveDeliberation: saveMode !== 'none',
                           saveDeliberationMode: saveMode === 'none' ? 'full' : saveMode,

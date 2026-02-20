@@ -418,17 +418,6 @@ const ChatArea: FC<ChatAreaProps> = ({
     let message: Message;
     let toolCalls: any[];
 
-    // Set conversation ID for CLI session tracking (used by CLI wrapper modes)
-    if (chatId) {
-      openaiClient.setCurrentConversationId(chatId);
-      anthropicClient.setCurrentConversationId(chatId);
-    }
-
-    // Set working directory for both clients (unified experience across all LLMs)
-    const workingDir = localToolsService.getWorkingDirectory();
-    openaiClient.setWorkingDir(workingDir);
-    anthropicClient.setWorkingDir(workingDir);
-
     console.log('[ChatArea] callProvider called with:', {
       targetProvider,
       openaiAuthMode: openaiClient.getAuthMethod(),

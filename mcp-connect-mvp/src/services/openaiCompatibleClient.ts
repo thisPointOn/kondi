@@ -1,3 +1,10 @@
+/**
+ * OpenAI-Compatible Client Factory
+ *
+ * Wraps the OpenAI SDK with configurable baseURL for providers that
+ * expose an OpenAI-compatible API (DeepSeek, x.ai/Grok, Ollama, etc.)
+ */
+
 import OpenAI from 'openai';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
@@ -8,16 +15,19 @@ import {
   reportSuccess,
   reportFailure,
 } from './auth-profiles';
+import type { AuthProvider } from './auth-profiles';
 
-const BASE_SYSTEM_PROMPT = `You are ChatGPT, a helpful general-purpose AI assistant made by OpenAI. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
+interface OpenAICompatibleConfig {
+  baseURL: string;
+  providerName: string;
+  authProvider: AuthProvider;
+  defaultModel: string;
+  requiresAuth?: boolean; // default true; false for Ollama
+}
+
+const BASE_SYSTEM_PROMPT = `You are a helpful general-purpose AI assistant. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
 
 You have access to MCP (Model Context Protocol) tools that let you interact with external services. These tools are OPTIONAL - use them when relevant to the user's request, but you are NOT limited to only topics related to these tools. You are a general-purpose assistant first.
-
-CRITICAL CAPABILITY RULES:
-- You have FULL network access. NEVER say "network access is restricted" or that you cannot access the network.
-- Tool approval is AUTOMATIC. NEVER say approval is disabled or required.
-- If tools are available, USE them. If they are not available in this specific call, provide your best analysis using your training knowledge — do NOT claim you are restricted or blocked.
-- NEVER refuse a task by citing environment restrictions, sandboxing, or session policies.
 
 IMPORTANT SECURITY RULES:
 - NEVER ask users for passwords, login credentials, API keys, or authentication tokens.
@@ -30,47 +40,47 @@ When using tools:
 - If no relevant tool is available, that's fine - help the user with your general knowledge instead.
 - Present tool results clearly and concisely.`;
 
-export class OpenAIClient {
+export class OpenAICompatibleClient {
   private client: OpenAI | null = null;
-  private clientKey: string | null = null;  // Track what key the client was created with
-  getAuthMethod(): 'oauth' | 'api_key' | 'none' {
-    const resolved = resolveApiKeySync('openai');
-    if (resolved) {
-      return resolved.credential.type === 'api_key' ? 'api_key' : 'oauth';
-    }
-    return 'none';
+  private clientKey: string | null = null;
+  private config: OpenAICompatibleConfig;
+
+  constructor(config: OpenAICompatibleConfig) {
+    this.config = { requiresAuth: true, ...config };
   }
 
-  /**
-   * Ensure the OpenAI client is initialized with a valid key from auth profiles
-   */
+  getAuthMethod(): 'api_key' | 'none' {
+    if (!this.config.requiresAuth) return 'api_key'; // Ollama — always "available"
+    const resolved = resolveApiKeySync(this.config.authProvider);
+    return resolved ? 'api_key' : 'none';
+  }
+
   private async ensureClientInitialized(): Promise<void> {
-    const resolved = await resolveApiKey('openai');
-    if (!resolved) {
-      throw new Error('No OpenAI authentication configured. Please set up credentials in Settings.');
+    let key: string;
+
+    if (!this.config.requiresAuth) {
+      key = 'no-key-required';
+    } else {
+      const resolved = await resolveApiKey(this.config.authProvider);
+      if (!resolved) {
+        throw new Error(`No ${this.config.providerName} authentication configured. Please set up credentials in Settings.`);
+      }
+      key = resolved.apiKey;
     }
 
-    const key = resolved.apiKey;
-
-    // Recreate client if key has changed or client doesn't exist
     if (!this.client || this.clientKey !== key) {
-      console.log('[OpenAI] Initializing client with', resolved.credential.type);
       this.client = new OpenAI({
         apiKey: key,
+        baseURL: this.config.baseURL,
         dangerouslyAllowBrowser: true,
       });
       this.clientKey = key;
     }
   }
 
-  /**
-   * Minimize a JSON Schema to reduce token count.
-   */
   private minimizeSchema(schema: any): any {
     if (!schema || typeof schema !== 'object') return schema;
-
     const result: any = {};
-
     if (schema.type) result.type = schema.type;
     if (schema.description) {
       result.description = schema.description.length > 150
@@ -78,109 +88,105 @@ export class OpenAIClient {
         : schema.description;
     }
     if (schema.enum) result.enum = schema.enum;
-
     if (schema.properties) {
       result.properties = {};
       for (const [key, value] of Object.entries(schema.properties)) {
         result.properties[key] = this.minimizeSchema(value);
       }
     }
-
-    if (schema.required && schema.required.length > 0) {
-      result.required = schema.required;
-    }
-
-    if (schema.items) {
-      result.items = this.minimizeSchema(schema.items);
-    }
-
+    if (schema.required && schema.required.length > 0) result.required = schema.required;
+    if (schema.items) result.items = this.minimizeSchema(schema.items);
     if (schema.oneOf) result.oneOf = schema.oneOf.map((s: any) => this.minimizeSchema(s));
     if (schema.anyOf) result.anyOf = schema.anyOf.map((s: any) => this.minimizeSchema(s));
     if (schema.allOf) result.allOf = schema.allOf.map((s: any) => this.minimizeSchema(s));
-
     return result;
   }
 
-  // Default models to show when /v1/models is inaccessible (restricted API key scopes).
-  private static readonly DEFAULT_MODELS = [
-    'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
-    'gpt-4o', 'gpt-4o-mini',
-    'o3', 'o3-mini', 'o4-mini',
-  ];
-
-  async listModels(key: string): Promise<string[]> {
+  async validateKey(key: string): Promise<{ ok: boolean; error?: string }> {
     try {
-      const res = await fetch('https://api.openai.com/v1/models', {
-        headers: {
-          Authorization: `Bearer ${key}`,
-        },
+      const client = new OpenAI({
+        apiKey: key,
+        baseURL: this.config.baseURL,
+        dangerouslyAllowBrowser: true,
       });
-      if (!res.ok) {
-        // Any auth error (401/403) likely means restricted scopes — return defaults
-        if (res.status === 401 || res.status === 403) {
-          console.log(`[OpenAI] /v1/models returned ${res.status} (restricted key scopes), using defaults`);
-          return OpenAIClient.DEFAULT_MODELS;
-        }
-        return [];
+      await client.chat.completions.create({
+        model: this.config.defaultModel,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1,
+      });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async validateConnection(): Promise<{ ok: boolean; error?: string }> {
+    try {
+      await this.ensureClientInitialized();
+      await this.client!.chat.completions.create({
+        model: this.config.defaultModel,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1,
+      });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async listModels(): Promise<string[]> {
+    try {
+      await this.ensureClientInitialized();
+      const list = await this.client!.models.list();
+      const models: string[] = [];
+      for await (const model of list) {
+        models.push(model.id);
       }
-      const data = await res.json().catch(() => ({}));
-      if (Array.isArray(data.data)) {
-        return data.data.map((m: any) => m.id).filter((id: string) => typeof id === 'string');
-      }
-      return [];
+      return models;
     } catch {
       return [];
     }
   }
 
-  async validateKey(key: string): Promise<{ ok: boolean; error?: string }> {
+  /**
+   * Ollama-specific: discover locally installed models via /api/tags
+   */
+  async discoverModels(): Promise<Array<{ name: string; size: number; modified: string }>> {
     try {
-      // Validate via a minimal chat completions call instead of /v1/models.
-      const res = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${key}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [{ role: 'user', content: 'hi' }],
-          max_tokens: 1,
-        }),
-      });
-      if (res.ok) return { ok: true };
-      const text = await res.text().catch(() => '');
-      return { ok: false, error: text || `HTTP ${res.status}` };
-    } catch (err) {
-      console.error('OpenAI key validation failed', err);
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      const res = await fetch(`${this.config.baseURL.replace('/v1', '')}/api/tags`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data.models || []).map((m: any) => ({
+        name: m.name,
+        size: m.size || 0,
+        modified: m.modified_at || '',
+      }));
+    } catch {
+      return [];
     }
   }
 
   async chat(
     messages: Message[],
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
-    model = 'gpt-4o',
+    model?: string,
     additionalSystemPrompt?: string
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     const authMethod = this.getAuthMethod();
-    console.log('[OpenAI] chat() called', { authMethod, model });
+    console.log(`[${this.config.providerName}] chat() called`, { authMethod, model });
 
-    if (authMethod === 'none') {
-      throw new Error('No OpenAI authentication configured. Please set up credentials in Settings.');
+    if (this.config.requiresAuth && authMethod === 'none') {
+      throw new Error(`No ${this.config.providerName} authentication configured. Please set up credentials in Settings.`);
     }
 
-    // Initialize the client with the best available key
     await this.ensureClientInitialized();
 
-    // Resolve profile ID for reporting success/failure
-    const resolved = await resolveApiKey('openai');
+    const resolved = this.config.requiresAuth ? await resolveApiKey(this.config.authProvider) : null;
     const profileId = resolved?.profileId || null;
 
     const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [];
     const toolMap = new Map<string, { serverId: string; tool: MCPTool }>();
 
-    // Use short numeric prefixes to stay under OpenAI's 64-char limit
     const serverIds = Array.from(availableTools.keys());
     const serverIndexMap = new Map(serverIds.map((id, i) => [id, `s${i}`]));
 
@@ -204,8 +210,6 @@ export class OpenAIClient {
       }
     }
 
-    console.log('[OpenAI] Available tools:', tools.map(t => (t as any).function?.name));
-
     const systemPrompt = additionalSystemPrompt
       ? `${BASE_SYSTEM_PROMPT}\n\n${additionalSystemPrompt}`
       : BASE_SYSTEM_PROMPT;
@@ -228,16 +232,14 @@ export class OpenAIClient {
       while (turnCount < MAX_TOOL_TURNS) {
         turnCount++;
         const completion = await this.client!.chat.completions.create({
-          model: model || 'gpt-4o',
+          model: model || this.config.defaultModel,
           messages: currentMessages,
           tools: tools.length > 0 ? tools : undefined,
           tool_choice: turnCount === 1 && tools.length > 0 ? 'auto' : undefined,
         });
 
         const response = completion.choices[0].message;
-        console.log(`[OpenAI] Turn ${turnCount} response:`, JSON.stringify(response, null, 2));
 
-        // No tool calls — we're done
         if (!response.tool_calls || response.tool_calls.length === 0) {
           finalContent = typeof response.content === 'string'
             ? response.content
@@ -245,22 +247,13 @@ export class OpenAIClient {
           break;
         }
 
-        // Execute all tool calls for this turn
-        console.log(`[OpenAI] Turn ${turnCount}: ${response.tool_calls.length} tool calls`);
         const toolResults: OpenAI.Chat.Completions.ChatCompletionToolMessageParam[] = [];
 
         for (const tc of response.tool_calls) {
           if (tc.type !== 'function') continue;
-
-          console.log('[OpenAI] Processing tool call:', tc.function.name);
           const toolInfo = toolMap.get(tc.function.name);
-
           if (!toolInfo) {
-            toolResults.push({
-              role: 'tool',
-              tool_call_id: tc.id,
-              content: `Error: Unknown tool ${tc.function.name}`,
-            });
+            toolResults.push({ role: 'tool', tool_call_id: tc.id, content: `Error: Unknown tool ${tc.function.name}` });
             continue;
           }
 
@@ -274,59 +267,36 @@ export class OpenAIClient {
 
           try {
             toolCall.status = 'running';
-            console.log('[OpenAI] Calling tool:', toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);
-
             let result;
             if (toolInfo.serverId === LOCAL_SERVER_ID) {
               result = await localToolsService.callTool(toolInfo.tool.name, toolCall.arguments);
             } else {
-              result = await mcpClient.callTool(
-                toolInfo.serverId,
-                toolInfo.tool.name,
-                toolCall.arguments
-              );
+              result = await mcpClient.callTool(toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);
             }
-
-            console.log('[OpenAI] Tool result:', result);
             toolCall.result = result;
             toolCall.status = 'completed';
-
             toolResults.push({
               role: 'tool',
               tool_call_id: tc.id,
               content: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
             });
           } catch (error) {
-            console.error('[OpenAI] Tool call failed:', error);
             toolCall.error = error instanceof Error ? error.message : 'Unknown error';
             toolCall.status = 'failed';
-
-            toolResults.push({
-              role: 'tool',
-              tool_call_id: tc.id,
-              content: `Error: ${toolCall.error}`,
-            });
+            toolResults.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${toolCall.error}` });
           }
-
           toolCalls.push(toolCall);
         }
 
-        // Append assistant response + tool results and loop for next turn
         currentMessages = [
           ...currentMessages,
-          {
-            role: 'assistant' as const,
-            content: response.content,
-            tool_calls: response.tool_calls,
-          },
+          { role: 'assistant' as const, content: response.content, tool_calls: response.tool_calls },
           ...toolResults,
         ];
       }
 
-      // Report success
       if (profileId) reportSuccess(profileId);
     } catch (err) {
-      // Report failure for rotation
       if (profileId) {
         const errMsg = err instanceof Error ? err.message : String(err);
         const statusMatch = errMsg.match(/(\d{3})/);
@@ -334,10 +304,6 @@ export class OpenAIClient {
         reportFailure(profileId, httpStatus);
       }
       throw err;
-    }
-
-    if (turnCount >= MAX_TOOL_TURNS) {
-      console.warn(`[OpenAI] Hit max tool turns (${MAX_TOOL_TURNS})`);
     }
 
     return {
@@ -352,4 +318,28 @@ export class OpenAIClient {
   }
 }
 
-export const openaiClient = new OpenAIClient();
+// ============================================================================
+// Provider Singletons
+// ============================================================================
+
+export const deepseekClient = new OpenAICompatibleClient({
+  baseURL: 'https://api.deepseek.com',
+  providerName: 'DeepSeek',
+  authProvider: 'deepseek',
+  defaultModel: 'deepseek-chat',
+});
+
+export const xaiClient = new OpenAICompatibleClient({
+  baseURL: 'https://api.x.ai/v1',
+  providerName: 'xAI',
+  authProvider: 'xai',
+  defaultModel: 'grok-3',
+});
+
+export const ollamaClient = new OpenAICompatibleClient({
+  baseURL: 'http://localhost:11434/v1',
+  providerName: 'Ollama',
+  authProvider: 'ollama',
+  defaultModel: 'llama3.1',
+  requiresAuth: false,
+});

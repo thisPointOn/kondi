@@ -11,7 +11,9 @@ import type {
   PipelineStatus,
   StepConfig,
   StepArtifact,
+  LlmStepConfig,
 } from './types';
+import { migrateLlmConfig } from './types';
 
 const STORAGE_KEY = 'mcp-pipelines';
 
@@ -28,7 +30,7 @@ interface StorageData {
 function migrateV1toV2(data: StorageData): StorageData {
   if (data.version >= 2) return data;
 
-  console.log('[PipelineStore] Migrating v1 → v2: council→planning, execution stays, gate stays');
+  console.log('[PipelineStore] Migrating v1 \u2192 v2: council\u2192planning, execution stays, gate stays');
   for (const pipeline of data.pipelines) {
     for (const stage of pipeline.stages) {
       for (const step of stage.steps) {
@@ -43,18 +45,47 @@ function migrateV1toV2(data: StorageData): StorageData {
   return data;
 }
 
+/**
+ * v2 → v3: Convert legacy LlmStepConfig (flat model/provider/systemPrompt)
+ * to CouncilStepConfig (with councilSetup). All non-gate step types are now councils.
+ */
+function migrateV2toV3(data: StorageData): StorageData {
+  if (data.version >= 3) return data;
+
+  let migrated = 0;
+  for (const pipeline of data.pipelines) {
+    for (const stage of pipeline.stages) {
+      for (const step of stage.steps) {
+        const config = step.config as any;
+        // Detect legacy LlmStepConfig: has type decisioning/execution but no councilSetup
+        if ((config.type === 'decisioning' || config.type === 'execution') && !config.councilSetup) {
+          step.config = migrateLlmConfig(config as LlmStepConfig);
+          migrated++;
+        }
+      }
+    }
+  }
+
+  if (migrated > 0) {
+    console.log(`[PipelineStore] Migrating v2 → v3: converted ${migrated} LLM step(s) to council format`);
+  }
+  data.version = 3;
+  return data;
+}
+
 function loadFromStorage(): StorageData {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      return { version: 2, pipelines: [], lastUpdated: new Date().toISOString() };
+      return { version: 3, pipelines: [], lastUpdated: new Date().toISOString() };
     }
     let data = JSON.parse(raw) as StorageData;
     data = migrateV1toV2(data);
+    data = migrateV2toV3(data);
     return data;
   } catch (error) {
     console.error('[PipelineStore] Failed to load from storage:', error);
-    return { version: 2, pipelines: [], lastUpdated: new Date().toISOString() };
+    return { version: 3, pipelines: [], lastUpdated: new Date().toISOString() };
   }
 }
 

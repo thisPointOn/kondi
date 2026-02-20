@@ -189,6 +189,12 @@ export {
   ContextStore,
 } from './context-store';
 
+// Factory
+export {
+  createCouncilFromSetup,
+  type CouncilSetup,
+} from './factory';
+
 // Deliberation Orchestrator
 export {
   DeliberationOrchestrator,

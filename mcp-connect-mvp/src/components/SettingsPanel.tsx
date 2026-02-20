@@ -1,12 +1,14 @@
 import { useState, type FC } from 'react';
-import { openaiClient } from '../services/openaiClient';
+import { upsertProfile } from '../services/auth-profiles';
+import { PROFILE_IDS } from '../services/auth-profiles/constants';
 
 export const SettingsPanel: FC = () => {
   const [apiKey, setApiKey] = useState('');
   const [saved, setSaved] = useState(false);
 
   const handleSave = () => {
-    openaiClient.setApiKey(apiKey);
+    if (!apiKey.trim()) return;
+    upsertProfile(PROFILE_IDS.openaiApiKey, 'openai', { type: 'api_key', key: apiKey.trim() }, 'API Key');
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };

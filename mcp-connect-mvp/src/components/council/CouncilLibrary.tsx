@@ -3,8 +3,9 @@
  */
 
 import { useState, useEffect } from 'react';
-import type { Council, Persona, DeliberationRoleAssignment } from '../../council/types';
+import type { Council } from '../../council/types';
 import { councilStore, suggestedCombinations, getTemplateByName, createPersonaFromTemplate } from '../../council';
+import { createCouncilFromSetup } from '../../council/factory';
 import { resolveDefaultModel } from '../../config/models';
 import type { ConfiguredProviders } from '../../hooks/useProviderConfig';
 import './CouncilLibrary.css';
@@ -40,10 +41,12 @@ export default function CouncilLibrary({
     return unsubscribe;
   }, []);
 
-  const filteredCouncils = councils.filter((c) =>
-    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.topic.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredCouncils = councils
+    .filter((c) => !c.pipelineId)  // Hide pipeline-generated councils
+    .filter((c) =>
+      c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.topic.toLowerCase().includes(searchQuery.toLowerCase())
+    );
 
   const handleCreate = () => {
     if (!newCouncilName.trim() || !newCouncilTopic.trim()) return;
@@ -53,100 +56,58 @@ export default function CouncilLibrary({
     const managerModel = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
     const workerModel = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
 
-    // Create default personas: Manager (Claude, suppressed), Worker (OpenAI, suppressed), Consultants (mixed)
-    const managerPersona: Persona = {
-      id: crypto.randomUUID(),
-      name: 'Manager',
-      provider: managerModel.provider,
-      model: managerModel.model,
-      color: '#6366f1',
-      avatar: '👔',
-      predisposition: {
-        systemPrompt: 'You are the manager overseeing this deliberation.',
-        stance: 'neutral',
-        traits: ['decisive', 'analytical', 'organized'],
-        interactionStyle: 'synthesize',
-      },
-      temperature: 0.7,
-      verbosity: 'balanced',
-      preferredDeliberationRole: 'manager',
-      allowedServerIds: [],
-    };
-
-    const workerPersona: Persona = {
-      id: crypto.randomUUID(),
-      name: 'Worker',
-      provider: workerModel.provider,
-      model: workerModel.model,
-      color: '#f59e0b',
-      avatar: '🔧',
-      predisposition: {
-        systemPrompt: 'You are the worker who executes directives.',
-        stance: 'neutral',
-        traits: ['precise', 'thorough', 'methodical'],
-        interactionStyle: 'build',
-      },
-      temperature: 0.5,
-      verbosity: 'thorough',
-      preferredDeliberationRole: 'worker',
-      allowedServerIds: [],
-    };
-
-    // Get optimist template for consultant (OpenAI by default)
+    // Get optimist template for consultant
     const optimistTemplate = getTemplateByName('Optimist');
-    const optimistPersona: Persona = optimistTemplate
-      ? createPersonaFromTemplate(optimistTemplate)
-      : {
-          id: crypto.randomUUID(),
-          name: 'Optimist',
-          provider: 'openai-cli',
-          model: 'gpt-5.1-codex-max',
-          color: '#16A34A',
-          avatar: '🌟',
-          predisposition: {
-            systemPrompt: 'You see possibility where others see obstacles.',
-            stance: 'advocate',
-            traits: ['enthusiastic', 'creative', 'action-oriented'],
-            interactionStyle: 'build',
-          },
-          temperature: 0.7,
-          verbosity: 'balanced',
-          preferredDeliberationRole: 'consultant',
-          allowedServerIds: [],
-        };
+    const optimistFromTemplate = optimistTemplate ? createPersonaFromTemplate(optimistTemplate) : null;
 
-    const personas = [managerPersona, workerPersona, optimistPersona];
-
-    // Create role assignments with suppressed personas for manager and worker
-    const roleAssignments: DeliberationRoleAssignment[] = [
-      { personaId: managerPersona.id, role: 'manager', suppressPersona: true },
-      { personaId: workerPersona.id, role: 'worker', suppressPersona: true },
-      { personaId: optimistPersona.id, role: 'consultant', stance: 'optimistic' },
-    ];
-
-    // Create council with deliberation mode by default (can be changed in Setup)
-    const council = councilStore.create({
+    const council = createCouncilFromSetup({
       name: newCouncilName.trim(),
       topic: newCouncilTopic.trim(),
-      personas,
-      orchestration: { mode: 'deliberation' },
-      // Initialize deliberation config with role assignments
-      deliberation: {
-        enabled: true,
-        roleAssignments,
-        minRounds: 1,
-        maxRounds: 4,
-        maxRevisions: 3,
-        summaryMode: 'hybrid',
-        summarizeAfterRound: 1,
-        contextTokenBudget: 40000,
-        consultantErrorPolicy: 'retry',
-        maxRetries: 2,
-        requirePlan: false,
-        consultantExecution: 'sequential',  // Consultants see each other's responses
-        workingDirectory: defaultWorkingDirectory || undefined,
-        directoryConstrained: true,
-      },
+      personas: [
+        {
+          name: 'Manager',
+          role: 'manager',
+          provider: managerModel.provider,
+          model: managerModel.model,
+          avatar: '👔',
+          systemPrompt: 'You are the manager overseeing this deliberation.',
+          traits: ['decisive', 'analytical', 'organized'],
+          interactionStyle: 'synthesize',
+          suppressPersona: true,
+          allowedServerIds: [],
+        },
+        {
+          name: 'Worker',
+          role: 'worker',
+          provider: workerModel.provider,
+          model: workerModel.model,
+          avatar: '🔧',
+          systemPrompt: 'You are the worker who executes directives.',
+          traits: ['precise', 'thorough', 'methodical'],
+          temperature: 0.5,
+          verbosity: 'thorough',
+          suppressPersona: true,
+          allowedServerIds: [],
+        },
+        {
+          name: optimistFromTemplate?.name || 'Optimist',
+          role: 'consultant',
+          provider: optimistFromTemplate?.provider || 'openai-api',
+          model: optimistFromTemplate?.model || 'gpt-4o',
+          avatar: optimistFromTemplate?.avatar || '🌟',
+          color: optimistFromTemplate?.color || '#16A34A',
+          systemPrompt: optimistFromTemplate?.predisposition.systemPrompt || 'You see possibility where others see obstacles.',
+          stance: (optimistFromTemplate?.predisposition.stance as any) || 'advocate',
+          traits: optimistFromTemplate?.predisposition.traits || ['enthusiastic', 'creative', 'action-oriented'],
+          interactionStyle: optimistFromTemplate?.predisposition.interactionStyle || 'build',
+          startingStance: 'optimistic',
+          allowedServerIds: [],
+        },
+      ],
+      // Standalone council defaults (lower budgets than pipeline)
+      contextTokenBudget: 40000,
+      summarizeAfterRound: 1,
+      workingDirectory: defaultWorkingDirectory || undefined,
     });
 
     setShowCreateModal(false);
