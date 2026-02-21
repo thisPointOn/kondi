@@ -94,6 +94,14 @@ const BUILTIN_DEFS: BuiltinDef[] = [
     envKey: 'KONDI_SLACK_BOT_TOKEN',
     icon: '📨',
   },
+  {
+    id: 'kondi-git',
+    name: 'Git',
+    pkg: 'kondi-git-mcp',
+    description: 'View status, log, diff, commit, push, branch, and more',
+    envKey: 'KONDI_GIT_WORKING_DIR',
+    icon: '🔀',
+  },
 ];
 
 // ── public API ─────────────────────────────────────────────────────────────

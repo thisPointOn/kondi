@@ -189,14 +189,25 @@ export function useChats({
     }
   }, [chats, hasLoadedChats]);
 
-  const handleNewChat = () => {
+  const [showNewChatDialog, setShowNewChatDialog] = useState(false);
+
+  const requestNewChat = () => {
+    setShowNewChatDialog(true);
+  };
+
+  const createNewChat = (workingDir: string) => {
     const id = crypto.randomUUID();
     setChats((prev) => ({ ...prev, [id]: [] }));
-    if (globalWorkingDirectory) {
-      setChatWorkingDir(id, globalWorkingDirectory);
+    if (workingDir) {
+      setChatWorkingDir(id, workingDir);
     }
     setCurrentChatId(id);
+    setShowNewChatDialog(false);
     setCurrentView('chat');
+  };
+
+  const cancelNewChat = () => {
+    setShowNewChatDialog(false);
   };
 
   const handleChatMessagesChange = (chatId: string, messages: Message[]) => {
@@ -306,7 +317,10 @@ export function useChats({
     setChatActiveProvider,
     chatMessages,
     sidebarChats,
-    handleNewChat,
+    showNewChatDialog,
+    requestNewChat,
+    createNewChat,
+    cancelNewChat,
     handleChatMessagesChange,
     handleDeleteChat,
     handleGithubCheck,

@@ -7,6 +7,7 @@ import { PipelineLibrary, PipelineBuilder, PipelineExecutionView } from './compo
 import SearchServicePanel from './components/SearchServicePanel';
 import { CouncilLibrary, CouncilView } from './components/council';
 import { CollapsibleSection } from './components/CollapsibleSection';
+import NewChatDialog from './components/NewChatDialog';
 import { mcpClient } from './services/mcpClient';
 import { open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import {
@@ -62,7 +63,7 @@ function App() {
         onViewChange={setCurrentView}
         currentChatId={chats.currentChatId}
         onChatSelect={chats.setCurrentChatId}
-        onNewChat={chats.handleNewChat}
+        onNewChat={chats.requestNewChat}
         onChatDelete={chats.handleDeleteChat}
         chats={chats.sidebarChats}
         showToolsPanel={serverHook.showToolsPanel}
@@ -351,6 +352,14 @@ function App() {
           />
         )}
       </div>
+
+      {chats.showNewChatDialog && (
+        <NewChatDialog
+          defaultDir={providerConfig.globalWorkingDirectory}
+          onConfirm={chats.createNewChat}
+          onCancel={chats.cancelNewChat}
+        />
+      )}
 
       {serverHook.showToolsPanel && (
         <ToolsPanel
