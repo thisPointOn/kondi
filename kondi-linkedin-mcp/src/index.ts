@@ -6,6 +6,13 @@ import { loadConfig } from './config.js';
 import { registerCreatePostTool } from './tools/create-post.js';
 import { registerGetProfileTool } from './tools/get-profile.js';
 import { registerGetConnectionsTool } from './tools/get-connections.js';
+import { registerGetPostsTool } from './tools/get-posts.js';
+import { registerDeletePostTool } from './tools/delete-post.js';
+import { registerGetPostCommentsTool } from './tools/get-post-comments.js';
+import { registerReplyToCommentTool } from './tools/reply-to-comment.js';
+import { registerGetPostLikesTool } from './tools/get-post-likes.js';
+import { registerLikePostTool } from './tools/like-post.js';
+import { registerGetOrganizationTool } from './tools/get-organization.js';
 
 const VERSION = '1.0.0';
 
@@ -28,7 +35,7 @@ async function main() {
       console.log(`
 kondi-linkedin-mcp v${VERSION}
 
-MCP server providing LinkedIn API tools for posting, profile, and connections.
+MCP server providing LinkedIn API tools for posting, engagement, profile, and connections.
 
 Usage:
   kondi-linkedin-mcp [options]
@@ -51,9 +58,16 @@ Config File:
   ~/.config/kondi-linkedin/config.json
 
 Tools:
-  linkedin_create_post     Create a LinkedIn post
-  linkedin_get_profile     Get authenticated user's profile
-  linkedin_get_connections Get user's connections list
+  linkedin_create_post        Create a LinkedIn post
+  linkedin_get_profile        Get authenticated user's profile
+  linkedin_get_connections    Get user's connections list
+  linkedin_get_posts          Get your recent LinkedIn posts
+  linkedin_delete_post        Delete one of your LinkedIn posts
+  linkedin_get_post_comments  Get comments on a LinkedIn post
+  linkedin_reply_to_comment   Reply to or comment on a post
+  linkedin_get_post_likes     Get likes/reactions on a post
+  linkedin_like_post          Like a LinkedIn post
+  linkedin_get_organization   Get company/organization info
 `);
       process.exit(0);
     }
@@ -69,6 +83,13 @@ Tools:
   registerCreatePostTool(server, config);
   registerGetProfileTool(server, config);
   registerGetConnectionsTool(server, config);
+  registerGetPostsTool(server, config);
+  registerDeletePostTool(server, config);
+  registerGetPostCommentsTool(server, config);
+  registerReplyToCommentTool(server, config);
+  registerGetPostLikesTool(server, config);
+  registerLikePostTool(server, config);
+  registerGetOrganizationTool(server, config);
 
   // Log startup info to stderr (stdout is reserved for MCP protocol)
   const log = (msg: string) => {
@@ -84,7 +105,7 @@ Tools:
   log(`  API Base: ${config.api.base_url}`);
   log(`  Auth: ${config.auth.access_token ? 'token configured' : 'NO TOKEN - tools will return errors'}`);
   log(`  Person ID: ${config.auth.person_id || 'NOT SET - create_post will return errors'}`);
-  log(`  Tools: linkedin_create_post, linkedin_get_profile, linkedin_get_connections`);
+  log(`  Tools: linkedin_create_post, linkedin_get_profile, linkedin_get_connections, linkedin_get_posts, linkedin_delete_post, linkedin_get_post_comments, linkedin_reply_to_comment, linkedin_get_post_likes, linkedin_like_post, linkedin_get_organization`);
 
   // Start appropriate transport
   if (transport === 'stdio') {

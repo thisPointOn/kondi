@@ -82,3 +82,91 @@ export interface ConversationsListResponse extends SlackApiResponse {
 }
 
 export interface ReactionsAddResponse extends SlackApiResponse {}
+
+export interface ReactionsRemoveResponse extends SlackApiResponse {}
+
+export interface SearchMessagesResponse extends SlackApiResponse {
+  messages: {
+    total: number;
+    matches: SlackSearchMatch[];
+  };
+}
+
+export interface SlackSearchMatch {
+  type: string;
+  user: string;
+  username: string;
+  text: string;
+  ts: string;
+  channel: {
+    id: string;
+    name: string;
+  };
+  permalink: string;
+}
+
+export interface SlackUserProfile {
+  real_name?: string;
+  display_name?: string;
+  email?: string;
+  title?: string;
+  status_text?: string;
+  status_emoji?: string;
+  image_48?: string;
+}
+
+export interface SlackUser {
+  id: string;
+  name: string;
+  real_name?: string;
+  profile: SlackUserProfile;
+  is_admin: boolean;
+  is_bot: boolean;
+  is_app_user: boolean;
+  deleted: boolean;
+  tz?: string;
+  tz_label?: string;
+}
+
+export interface UsersInfoResponse extends SlackApiResponse {
+  user: SlackUser;
+}
+
+export interface UsersListResponse extends SlackApiResponse {
+  members: SlackUser[];
+  response_metadata?: { next_cursor?: string };
+}
+
+export interface ChatUpdateResponse extends SlackApiResponse {
+  channel: string;
+  ts: string;
+  text: string;
+}
+
+export interface ChatDeleteResponse extends SlackApiResponse {
+  channel: string;
+  ts: string;
+}
+
+export interface ConversationsInfoResponse extends SlackApiResponse {
+  channel: SlackChannel;
+}
+
+export interface PinsAddResponse extends SlackApiResponse {}
+
+export interface SlackPinnedItem {
+  type: string;
+  channel: string;
+  message?: SlackMessage;
+  created: number;
+  created_by: string;
+}
+
+export interface PinsListResponse extends SlackApiResponse {
+  items: SlackPinnedItem[];
+}
+
+export interface ReactionsGetResponse extends SlackApiResponse {
+  message: SlackMessage;
+  channel: string;
+}

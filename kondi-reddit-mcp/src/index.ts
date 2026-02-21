@@ -7,6 +7,16 @@ import { registerSubmitPostTool } from './tools/submit-post.js';
 import { registerGetPostsTool } from './tools/get-posts.js';
 import { registerGetCommentsTool } from './tools/get-comments.js';
 import { registerSubmitCommentTool } from './tools/submit-comment.js';
+import { registerSearchTool } from './tools/search.js';
+import { registerGetSubredditInfoTool } from './tools/get-subreddit-info.js';
+import { registerGetMeTool } from './tools/get-me.js';
+import { registerVoteTool } from './tools/vote.js';
+import { registerGetUserTool } from './tools/get-user.js';
+import { registerGetPostDetailTool } from './tools/get-post-detail.js';
+import { registerSaveTool } from './tools/save.js';
+import { registerGetSavedTool } from './tools/get-saved.js';
+import { registerGetSubredditRulesTool } from './tools/get-subreddit-rules.js';
+import { registerDeleteTool } from './tools/delete.js';
 
 const VERSION = '1.0.0';
 
@@ -54,10 +64,20 @@ Config File:
   ~/.config/kondi-reddit/config.json
 
 Tools:
-  reddit_submit_post     Submit a new post to a subreddit
-  reddit_get_posts       Get hot posts from a subreddit
-  reddit_get_comments    Get comments on a post
-  reddit_submit_comment  Reply to a post or comment
+  reddit_submit_post          Submit a new post to a subreddit
+  reddit_get_posts            Get hot posts from a subreddit
+  reddit_get_comments         Get comments on a post
+  reddit_submit_comment       Reply to a post or comment
+  reddit_search               Search Reddit for posts, subreddits, or users
+  reddit_get_subreddit_info   Get detailed info about a subreddit
+  reddit_get_me               Get the authenticated user's profile
+  reddit_vote                 Vote on a post or comment
+  reddit_get_user             Get a user's public profile
+  reddit_get_post_detail      Get a post with its full comment tree
+  reddit_save                 Save a post or comment for later
+  reddit_get_saved            Get your saved posts and comments
+  reddit_get_subreddit_rules  Get the rules for a subreddit
+  reddit_delete               Delete your own post or comment
 `);
       process.exit(0);
     }
@@ -74,6 +94,16 @@ Tools:
   registerGetPostsTool(server, config);
   registerGetCommentsTool(server, config);
   registerSubmitCommentTool(server, config);
+  registerSearchTool(server, config);
+  registerGetSubredditInfoTool(server, config);
+  registerGetMeTool(server, config);
+  registerVoteTool(server, config);
+  registerGetUserTool(server, config);
+  registerGetPostDetailTool(server, config);
+  registerSaveTool(server, config);
+  registerGetSavedTool(server, config);
+  registerGetSubredditRulesTool(server, config);
+  registerDeleteTool(server, config);
 
   // Log startup info to stderr (stdout is reserved for MCP protocol)
   const log = (msg: string) => {
@@ -87,7 +117,7 @@ Tools:
   log(`Starting kondi-reddit-mcp v${VERSION}`);
   log(`  Transport: ${transport}`);
   log(`  Auth: ${config.auth.access_token ? 'configured' : 'NOT configured (set KONDI_REDDIT_ACCESS_TOKEN)'}`);
-  log(`  Tools: reddit_submit_post, reddit_get_posts, reddit_get_comments, reddit_submit_comment`);
+  log(`  Tools: reddit_submit_post, reddit_get_posts, reddit_get_comments, reddit_submit_comment, reddit_search, reddit_get_subreddit_info, reddit_get_me, reddit_vote, reddit_get_user, reddit_get_post_detail, reddit_save, reddit_get_saved, reddit_get_subreddit_rules, reddit_delete`);
 
   // Start appropriate transport
   if (transport === 'stdio') {

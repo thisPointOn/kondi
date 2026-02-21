@@ -76,3 +76,109 @@ export interface InsightItem {
 export interface InsightsResponse {
   data: InsightItem[];
 }
+
+// ── Profile ──────────────────────────────────────────────────────
+
+export interface ProfileResponse {
+  id: string;
+  username?: string;
+  name?: string;
+  biography?: string;
+  followers_count?: number;
+  follows_count?: number;
+  media_count?: number;
+  profile_picture_url?: string;
+  website?: string;
+}
+
+// ── Comments ─────────────────────────────────────────────────────
+
+export interface CommentReply {
+  id: string;
+  text: string;
+  username: string;
+  timestamp: string;
+}
+
+export interface CommentItem {
+  id: string;
+  text: string;
+  username: string;
+  timestamp: string;
+  like_count?: number;
+  replies?: {
+    data: CommentReply[];
+  };
+}
+
+export interface CommentsResponse {
+  data: CommentItem[];
+  paging?: {
+    cursors: {
+      before: string;
+      after: string;
+    };
+    next?: string;
+  };
+}
+
+export interface CommentPostResponse {
+  id: string;
+}
+
+// ── Hashtag search ───────────────────────────────────────────────
+
+export interface HashtagSearchResponse {
+  data: { id: string }[];
+}
+
+export interface HashtagMediaItem {
+  id: string;
+  caption?: string;
+  media_type?: string;
+  media_url?: string;
+  timestamp?: string;
+  permalink?: string;
+  like_count?: number;
+  comments_count?: number;
+}
+
+export interface HashtagMediaResponse {
+  data: HashtagMediaItem[];
+  paging?: {
+    cursors?: {
+      before: string;
+      after: string;
+    };
+    next?: string;
+  };
+}
+
+// ── Stories ───────────────────────────────────────────────────────
+
+export interface StoryItem {
+  id: string;
+  media_type?: string;
+  media_url?: string;
+  timestamp?: string;
+  caption?: string;
+}
+
+export interface StoriesResponse {
+  data: StoryItem[];
+}
+
+// ── Media detail ─────────────────────────────────────────────────
+
+export interface MediaDetailResponse {
+  id: string;
+  caption?: string;
+  media_type?: string;
+  media_url?: string;
+  thumbnail_url?: string;
+  timestamp?: string;
+  permalink?: string;
+  like_count?: number;
+  comments_count?: number;
+  is_shared_to_feed?: boolean;
+}

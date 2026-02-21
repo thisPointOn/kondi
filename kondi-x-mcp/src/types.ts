@@ -62,6 +62,47 @@ export interface DeleteTweetResponse {
   };
 }
 
+export interface UserData {
+  id: string;
+  name: string;
+  username: string;
+  description?: string;
+  profile_image_url?: string;
+  verified?: boolean;
+  created_at?: string;
+  public_metrics?: {
+    followers_count: number;
+    following_count: number;
+    tweet_count: number;
+    listed_count: number;
+  };
+  [key: string]: unknown;
+}
+
+export interface UserResponse {
+  data: UserData;
+}
+
+export interface UsersResponse {
+  data: UserData[];
+  meta?: {
+    result_count: number;
+    next_token?: string;
+  };
+}
+
+export interface LikeResponse {
+  data: {
+    liked: boolean;
+  };
+}
+
+export interface RetweetResponse {
+  data: {
+    retweeted: boolean;
+  };
+}
+
 export interface XApiError {
   title: string;
   detail: string;

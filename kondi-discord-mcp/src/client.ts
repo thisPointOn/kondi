@@ -1,4 +1,4 @@
-import type { Config, DiscordMessage, DiscordChannel, DiscordEmbed } from './types.js';
+import type { Config, DiscordMessage, DiscordChannel, DiscordEmbed, DiscordGuild, DiscordGuildMember } from './types.js';
 
 export class DiscordClient {
   private baseUrl: string;
@@ -105,6 +105,83 @@ export class DiscordClient {
     const encodedEmoji = encodeURIComponent(emoji);
     await this.request<Record<string, never>>(
       'PUT',
+      `/channels/${channelId}/messages/${messageId}/reactions/${encodedEmoji}/@me`
+    );
+  }
+
+  async editMessage(
+    channelId: string,
+    messageId: string,
+    content: string
+  ): Promise<DiscordMessage> {
+    return this.request<DiscordMessage>(
+      'PATCH',
+      `/channels/${channelId}/messages/${messageId}`,
+      { content }
+    );
+  }
+
+  async deleteMessage(channelId: string, messageId: string): Promise<void> {
+    await this.request<Record<string, never>>(
+      'DELETE',
+      `/channels/${channelId}/messages/${messageId}`
+    );
+  }
+
+  async getGuild(guildId: string): Promise<DiscordGuild> {
+    return this.request<DiscordGuild>(
+      'GET',
+      `/guilds/${guildId}?with_counts=true`
+    );
+  }
+
+  async pinMessage(channelId: string, messageId: string): Promise<void> {
+    await this.request<Record<string, never>>(
+      'PUT',
+      `/channels/${channelId}/pins/${messageId}`
+    );
+  }
+
+  async getPinnedMessages(channelId: string): Promise<DiscordMessage[]> {
+    return this.request<DiscordMessage[]>(
+      'GET',
+      `/channels/${channelId}/pins`
+    );
+  }
+
+  async createThread(
+    channelId: string,
+    messageId: string,
+    name: string,
+    autoArchiveDuration?: number
+  ): Promise<DiscordChannel> {
+    const body: Record<string, unknown> = { name };
+    if (autoArchiveDuration !== undefined) {
+      body.auto_archive_duration = autoArchiveDuration;
+    }
+    return this.request<DiscordChannel>(
+      'POST',
+      `/channels/${channelId}/messages/${messageId}/threads`,
+      body
+    );
+  }
+
+  async getGuildMembers(guildId: string, limit: number = 100): Promise<DiscordGuildMember[]> {
+    const clampedLimit = Math.min(Math.max(1, limit), 1000);
+    return this.request<DiscordGuildMember[]>(
+      'GET',
+      `/guilds/${guildId}/members?limit=${clampedLimit}`
+    );
+  }
+
+  async removeReaction(
+    channelId: string,
+    messageId: string,
+    emoji: string
+  ): Promise<void> {
+    const encodedEmoji = encodeURIComponent(emoji);
+    await this.request<Record<string, never>>(
+      'DELETE',
       `/channels/${channelId}/messages/${messageId}/reactions/${encodedEmoji}/@me`
     );
   }

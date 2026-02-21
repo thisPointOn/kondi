@@ -137,6 +137,53 @@ export class LinkedInClient {
     }
   }
 
+  async delete(path: string): Promise<void> {
+    const fullUrl = `${this.baseUrl}${path.startsWith('/') ? path : '/' + path}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(fullUrl, {
+        method: 'DELETE',
+        headers: this.getHeaders(),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        let apiError: LinkedInApiError;
+        try {
+          apiError = JSON.parse(errorBody) as LinkedInApiError;
+        } catch {
+          apiError = { status: response.status, message: errorBody || response.statusText };
+        }
+        throw new LinkedInRequestError(
+          `LinkedIn API error ${response.status}: ${apiError.message}`,
+          response.status,
+          apiError
+        );
+      }
+    } catch (error) {
+      if (error instanceof LinkedInRequestError) throw error;
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          throw new LinkedInRequestError('Request timed out', 408);
+        }
+        if (error.message.includes('fetch failed') || error.message.includes('ECONNREFUSED')) {
+          throw new LinkedInRequestError(
+            `Could not connect to LinkedIn API at ${this.baseUrl}`,
+            0
+          );
+        }
+        throw new LinkedInRequestError(error.message, 0);
+      }
+      throw new LinkedInRequestError('Unknown request error', 0);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   hasToken(): boolean {
     return this.accessToken.length > 0;
   }

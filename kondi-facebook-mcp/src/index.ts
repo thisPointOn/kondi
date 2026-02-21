@@ -8,6 +8,14 @@ import { registerPagePostTool } from './tools/page-post.js';
 import { registerGetPagePostsTool } from './tools/get-page-posts.js';
 import { registerGetPostTool } from './tools/get-post.js';
 import { registerDeletePostTool } from './tools/delete-post.js';
+import { registerGetPostCommentsTool } from './tools/get-post-comments.js';
+import { registerReplyToCommentTool } from './tools/reply-to-comment.js';
+import { registerGetPageInfoTool } from './tools/get-page-info.js';
+import { registerGetPostReactionsTool } from './tools/get-post-reactions.js';
+import { registerGetPageInsightsTool } from './tools/get-page-insights.js';
+import { registerPublishPhotoTool } from './tools/publish-photo.js';
+import { registerGetPostInsightsTool } from './tools/get-post-insights.js';
+import { registerDeleteCommentTool } from './tools/delete-comment.js';
 
 const VERSION = '1.0.0';
 
@@ -30,7 +38,7 @@ async function main() {
       console.log(`
 kondi-facebook-mcp v${VERSION}
 
-MCP server for Facebook/Meta Graph API — post, read, and delete page content.
+MCP server for Facebook/Meta Graph API — manage page content, comments, reactions, photos, and analytics.
 
 Usage:
   kondi-facebook-mcp [options]
@@ -53,10 +61,18 @@ Config File:
   ~/.config/kondi-facebook/config.json
 
 Tools:
-  fb_page_post       Publish a post to a Page's feed
-  fb_get_page_posts  Retrieve recent posts from a Page
-  fb_get_post        Get details of a specific post
-  fb_delete_post     Delete a post by ID
+  fb_page_post          Publish a post to a Page's feed
+  fb_get_page_posts     Retrieve recent posts from a Page
+  fb_get_post           Get details of a specific post
+  fb_delete_post        Delete a post by ID
+  fb_get_post_comments  Get comments on a post
+  fb_reply_to_comment   Reply to a comment
+  fb_get_page_info      Get detailed page information
+  fb_get_post_reactions Get reactions on a post
+  fb_get_page_insights  Get page analytics/insights
+  fb_publish_photo      Publish a photo to a page
+  fb_get_post_insights  Get analytics for a specific post
+  fb_delete_comment     Delete a comment
 `);
       process.exit(0);
     }
@@ -73,6 +89,14 @@ Tools:
   registerGetPagePostsTool(server, config);
   registerGetPostTool(server, config);
   registerDeletePostTool(server, config);
+  registerGetPostCommentsTool(server, config);
+  registerReplyToCommentTool(server, config);
+  registerGetPageInfoTool(server, config);
+  registerGetPostReactionsTool(server, config);
+  registerGetPageInsightsTool(server, config);
+  registerPublishPhotoTool(server, config);
+  registerGetPostInsightsTool(server, config);
+  registerDeleteCommentTool(server, config);
 
   // Log startup info to stderr (stdout is reserved for MCP protocol)
   const log = (msg: string) => {
@@ -113,7 +137,7 @@ Tools:
     log(`  Page ID: not set (must be passed per-call)`);
   }
 
-  log(`  Tools: fb_page_post, fb_get_page_posts, fb_get_post, fb_delete_post`);
+  log(`  Tools: fb_page_post, fb_get_page_posts, fb_get_post, fb_delete_post, fb_get_post_comments, fb_reply_to_comment, fb_get_page_info, fb_get_post_reactions, fb_get_page_insights, fb_publish_photo, fb_get_post_insights, fb_delete_comment`);
 
   // Start appropriate transport
   if (transport === 'stdio') {

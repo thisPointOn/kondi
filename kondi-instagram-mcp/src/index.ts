@@ -7,6 +7,14 @@ import { InstagramClient } from './client.js';
 import { registerPublishPhotoTool } from './tools/publish-photo.js';
 import { registerGetMediaTool } from './tools/get-media.js';
 import { registerGetPostInsightsTool } from './tools/get-post-insights.js';
+import { registerGetProfileTool } from './tools/get-profile.js';
+import { registerGetCommentsTool } from './tools/get-comments.js';
+import { registerReplyToCommentTool } from './tools/reply-to-comment.js';
+import { registerGetHashtagSearchTool } from './tools/get-hashtag-search.js';
+import { registerGetAccountInsightsTool } from './tools/get-account-insights.js';
+import { registerGetStoriesTool } from './tools/get-stories.js';
+import { registerDeleteCommentTool } from './tools/delete-comment.js';
+import { registerGetMediaDetailTool } from './tools/get-media-detail.js';
 
 const VERSION = '1.0.0';
 
@@ -52,9 +60,17 @@ Config File:
   ~/.config/kondi-instagram/config.json
 
 Tools:
-  ig_publish_photo      Publish a photo to Instagram
-  ig_get_media          Get recent media posts
-  ig_get_post_insights  Get insights for a media post
+  ig_publish_photo        Publish a photo to Instagram
+  ig_get_media            Get recent media posts
+  ig_get_post_insights    Get insights for a media post
+  ig_get_profile          Get profile info (bio, followers, etc.)
+  ig_get_comments         Get comments on a post
+  ig_reply_to_comment     Reply to a comment on your post
+  ig_get_hashtag_search   Search posts by hashtag
+  ig_get_account_insights Get account-level analytics
+  ig_get_stories          Get active stories
+  ig_delete_comment       Delete a comment on your post
+  ig_get_media_detail     Get detailed info about a post
 `);
       process.exit(0);
     }
@@ -70,6 +86,14 @@ Tools:
   registerPublishPhotoTool(server, config);
   registerGetMediaTool(server, config);
   registerGetPostInsightsTool(server, config);
+  registerGetProfileTool(server, config);
+  registerGetCommentsTool(server, config);
+  registerReplyToCommentTool(server, config);
+  registerGetHashtagSearchTool(server, config);
+  registerGetAccountInsightsTool(server, config);
+  registerGetStoriesTool(server, config);
+  registerDeleteCommentTool(server, config);
+  registerGetMediaDetailTool(server, config);
 
   // Log startup info to stderr (stdout is reserved for MCP protocol)
   const log = (msg: string) => {
@@ -102,7 +126,7 @@ Tools:
     }
   }
 
-  log(`  Tools: ig_publish_photo, ig_get_media, ig_get_post_insights`);
+  log(`  Tools: ig_publish_photo, ig_get_media, ig_get_post_insights, ig_get_profile, ig_get_comments, ig_reply_to_comment, ig_get_hashtag_search, ig_get_account_insights, ig_get_stories, ig_delete_comment, ig_get_media_detail`);
 
   // Start appropriate transport
   if (transport === 'stdio') {

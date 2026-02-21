@@ -122,6 +122,39 @@ export class InstagramClient {
     }
   }
 
+  /** Generic DELETE request against the Graph API. */
+  async delete(path: string): Promise<void> {
+    const token = this.resolveToken();
+    const url = new URL(path, this.baseUrl + '/');
+    url.searchParams.set('access_token', token);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url.toString(), {
+        method: 'DELETE',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        const err = data as GraphApiError;
+        throw new Error(
+          `Graph API error ${response.status}: ${err.error?.message || response.statusText}`
+        );
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`Request timed out after ${this.timeout}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   // ── Convenience methods ──────────────────────────────────────────
 
   /**
