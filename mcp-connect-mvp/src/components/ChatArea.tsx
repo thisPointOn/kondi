@@ -313,6 +313,53 @@ const ChatArea: FC<ChatAreaProps> = ({
     }
   }, [chatId]);
 
+  // Compress context when working directory changes
+  const prevDirRef = useRef(chatWorkingDir || globalWorkingDirectory || '');
+  const handleDirChange = useCallback((newDir: string | null) => {
+    const oldDir = prevDirRef.current;
+    const resolvedNew = newDir || globalWorkingDirectory || '';
+
+    // Update the directory
+    console.log('[ChatArea] handleDirChange:', { newDir, oldDir, resolvedNew, chatId });
+    onChatWorkingDirChange?.(newDir);
+
+    // If there are meaningful messages and directory actually changed, compress
+    const hasContent = messages.some(m => m.role === 'user' || m.role === 'assistant');
+    if (hasContent && oldDir && resolvedNew && oldDir !== resolvedNew) {
+      // Build a mechanical summary of the conversation
+      const turns = messages.filter(m => m.role === 'user' || m.role === 'assistant');
+      const summaryLines: string[] = [];
+      for (const msg of turns) {
+        const prefix = msg.role === 'user' ? 'User' : 'Assistant';
+        // Take first ~200 chars of each message
+        const snippet = msg.content.length > 200
+          ? msg.content.slice(0, 200).trimEnd() + '...'
+          : msg.content;
+        summaryLines.push(`${prefix}: ${snippet}`);
+      }
+
+      const summaryMsg: Message = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: `**Context from previous working directory** (\`${oldDir}\`)\n\n` +
+          `The conversation below was compressed when the working directory changed to \`${resolvedNew}\`.\n\n` +
+          `---\n\n` +
+          summaryLines.join('\n\n') +
+          `\n\n---\n\n*${turns.length} messages compressed. Continuing in \`${resolvedNew}\`.*`,
+        timestamp: new Date(),
+      };
+
+      onMessagesChange([summaryMsg]);
+    }
+
+    prevDirRef.current = resolvedNew;
+  }, [messages, globalWorkingDirectory, onChatWorkingDirChange, onMessagesChange]);
+
+  // Keep prevDirRef in sync when props change without user action
+  useEffect(() => {
+    prevDirRef.current = chatWorkingDir || globalWorkingDirectory || '';
+  }, [chatWorkingDir, globalWorkingDirectory]);
+
   // Close dropdown when clicking outside
   useEffect(() => {
     if (!showModelDropdown) return;
@@ -691,7 +738,7 @@ const ChatArea: FC<ChatAreaProps> = ({
                 defaultPath: chatWorkingDir || globalWorkingDirectory || undefined,
               });
               if (selected && typeof selected === 'string') {
-                onChatWorkingDirChange?.(selected);
+                handleDirChange(selected);
               }
             } catch (err) {
               console.error('[ChatArea] Error selecting directory:', err);
@@ -711,7 +758,7 @@ const ChatArea: FC<ChatAreaProps> = ({
         {chatWorkingDir && (
           <button
             className="chat-dir-clear-btn"
-            onClick={() => onChatWorkingDirChange?.(null)}
+            onClick={() => handleDirChange(null)}
             title="Clear per-chat directory (use global fallback)"
           >
             <X size={12} />
