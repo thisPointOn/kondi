@@ -1,0 +1,39 @@
+{
+  "name": "kondi-telegram-mcp",
+  "version": "1.0.0",
+  "description": "MCP server providing Telegram Bot API tools",
+  "entrypoint": "dist/index.js",
+  "runtime": "node",
+  "run": {
+    "command": "node",
+    "args": ["dist/index.js"],
+    "env": {
+      "KONDI_TELEGRAM_BOT_TOKEN": ""
+    }
+  },
+  "tools": [
+    {
+      "name": "telegram_send_message",
+      "description": "Send a text message to a Telegram chat."
+    },
+    {
+      "name": "telegram_get_updates",
+      "description": "Receive incoming updates (messages, edits, etc.) from the Telegram bot."
+    },
+    {
+      "name": "telegram_send_photo",
+      "description": "Send a photo to a Telegram chat by URL."
+    },
+    {
+      "name": "telegram_get_chat",
+      "description": "Get information about a Telegram chat."
+    },
+    {
+      "name": "telegram_get_me",
+      "description": "Get basic information about the bot."
+    }
+  ],
+  "requirements": {
+    "env": ["KONDI_TELEGRAM_BOT_TOKEN"]
+  }
+}

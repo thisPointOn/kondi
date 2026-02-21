@@ -1,0 +1,39 @@
+{
+  "name": "kondi-x-mcp",
+  "version": "1.0.0",
+  "description": "MCP server providing X (Twitter) API tools",
+  "entrypoint": "dist/index.js",
+  "runtime": "node",
+  "run": {
+    "command": "node",
+    "args": ["dist/index.js"],
+    "env": {
+      "KONDI_X_BEARER_TOKEN": ""
+    }
+  },
+  "tools": [
+    {
+      "name": "x_post_tweet",
+      "description": "Post a new tweet to X (Twitter). Optionally reply to an existing tweet."
+    },
+    {
+      "name": "x_get_tweet",
+      "description": "Get a single tweet by ID with optional field expansions."
+    },
+    {
+      "name": "x_get_user_tweets",
+      "description": "Get recent tweets from a user by their user ID."
+    },
+    {
+      "name": "x_search_tweets",
+      "description": "Search recent tweets matching a query."
+    },
+    {
+      "name": "x_delete_tweet",
+      "description": "Delete a tweet by ID."
+    }
+  ],
+  "requirements": {
+    "auth": "X (Twitter) API Bearer Token"
+  }
+}

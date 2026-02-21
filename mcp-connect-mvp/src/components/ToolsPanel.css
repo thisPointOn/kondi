@@ -529,7 +529,47 @@
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+}
+
+.servers-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.servers-section-header {
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+}
+
+.servers-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #666;
+}
+
+.servers-section-empty {
+  padding: 12px 14px;
+  font-size: 12px;
+  color: #555;
+  background: #141414;
+  border: 1px dashed #2a2a2a;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.light-theme .servers-section-label {
+  color: #999;
+}
+
+.light-theme .servers-section-empty {
+  background: #f9f9f9;
+  border-color: #e0e0e0;
+  color: #888;
 }
 
 .server-card {

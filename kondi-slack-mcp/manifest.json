@@ -1,0 +1,39 @@
+{
+  "name": "kondi-slack-mcp",
+  "version": "1.0.0",
+  "description": "MCP server providing Slack Web API tools for messaging, channels, and reactions",
+  "entrypoint": "dist/index.js",
+  "runtime": "node",
+  "run": {
+    "command": "node",
+    "args": ["dist/index.js"],
+    "env": {
+      "KONDI_SLACK_BOT_TOKEN": ""
+    }
+  },
+  "tools": [
+    {
+      "name": "slack_post_message",
+      "description": "Post a message to a Slack channel or reply to a thread."
+    },
+    {
+      "name": "slack_get_messages",
+      "description": "Retrieve recent messages from a Slack channel."
+    },
+    {
+      "name": "slack_get_thread",
+      "description": "Retrieve all replies in a Slack thread."
+    },
+    {
+      "name": "slack_list_channels",
+      "description": "List Slack channels the bot has access to."
+    },
+    {
+      "name": "slack_add_reaction",
+      "description": "Add an emoji reaction to a Slack message."
+    }
+  ],
+  "requirements": {
+    "slack_bot_token": true
+  }
+}
