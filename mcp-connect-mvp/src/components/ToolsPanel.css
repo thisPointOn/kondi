@@ -1845,3 +1845,87 @@
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* Builtin credential inputs */
+.builtin-creds {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.builtin-cred-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.builtin-cred-label {
+  font-size: 12px;
+  color: #888;
+  font-weight: 500;
+}
+
+.builtin-cred-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.builtin-cred-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #e8e8e8;
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  font-family: inherit;
+}
+
+.builtin-cred-input::placeholder {
+  color: #555;
+}
+
+.builtin-cred-toggle {
+  background: transparent;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+}
+
+.builtin-cred-toggle:hover {
+  color: #aaa;
+}
+
+.light-theme .builtin-cred-label {
+  color: #555;
+}
+
+.light-theme .builtin-cred-input-wrap {
+  background: #f5f5f5;
+  border-color: #ddd;
+}
+
+.light-theme .builtin-cred-input {
+  color: #222;
+}
+
+.light-theme .builtin-cred-input::placeholder {
+  color: #999;
+}
+
+.light-theme .builtin-cred-toggle {
+  color: #999;
+}
+
+.light-theme .builtin-cred-toggle:hover {
+  color: #555;
+}
