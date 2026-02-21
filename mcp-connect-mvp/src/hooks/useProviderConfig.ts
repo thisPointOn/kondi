@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { openaiClient } from '../services/openaiClient';
 import { anthropicClient } from '../services/anthropicClient';
+import { ollamaClient } from '../services/openaiCompatibleClient';
 import { oauthService } from '../services/oauthService';
 import { startupValidator, type StartupValidationReport } from '../services/startupValidator';
 import { getModelsForProviderSettings } from '../config/models';
@@ -56,6 +57,14 @@ export function useProviderConfig() {
   const [xaiKey, setXaiKey] = useState('');
   const [ollamaAvailable, setOllamaAvailable] = useState(false);
 
+  // Per-provider model state (for providers beyond anthropic/openai)
+  const [providerModels, setProviderModels] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem('kondi-provider-models');
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
+
   // Auth profile state — derived from auth-profiles store
   const [anthropicHasOAuth, setAnthropicHasOAuth] = useState(false);
   const [openaiHasOAuth, setOpenaiHasOAuth] = useState(false);
@@ -67,6 +76,9 @@ export function useProviderConfig() {
   const [validationReport, setValidationReport] = useState<StartupValidationReport | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [hasLoadedKeys, setHasLoadedKeys] = useState(false);
+
+  // Discovered Ollama models (from /api/tags)
+  const [ollamaModels, setOllamaModels] = useState<Array<{ id: string; name: string }>>([]);
 
   const [globalWorkingDirectory, setGlobalWorkingDirectory] = useState(() => {
     return localStorage.getItem('kondi-global-working-directory') || '';
@@ -197,6 +209,17 @@ export function useProviderConfig() {
         // Refresh auth state after validation (which may have imported/refreshed tokens)
         refreshAuthProfileState();
 
+        // Discover installed Ollama models
+        try {
+          const discovered = await ollamaClient.discoverModels();
+          if (discovered.length > 0) {
+            setOllamaModels(discovered.map(m => ({
+              id: m.name,
+              name: m.name,
+            })));
+          }
+        } catch { /* Ollama not running */ }
+
         console.log('[StartupValidator] Validation complete:', report.summary);
       } catch (err) {
         console.error('[StartupValidator] Validation failed:', err);
@@ -212,6 +235,9 @@ export function useProviderConfig() {
   useEffect(() => { localStorage.setItem('kondi-provider', provider); }, [provider]);
   useEffect(() => { localStorage.setItem('kondi-openai-model', openaiModel); }, [openaiModel]);
   useEffect(() => { localStorage.setItem('kondi-anthropic-model', anthropicModel); }, [anthropicModel]);
+  useEffect(() => {
+    try { localStorage.setItem('kondi-provider-models', JSON.stringify(providerModels)); } catch {}
+  }, [providerModels]);
   useEffect(() => {
     if (globalWorkingDirectory) {
       localStorage.setItem('kondi-global-working-directory', globalWorkingDirectory);
@@ -347,9 +373,10 @@ export function useProviderConfig() {
           anthropicModel: anthropicModel || null,
         }
       }).catch(() => {});
+    } else {
+      // For new providers (deepseek, xai, google, ollama), persist model into providerModels
+      setProviderModels(prev => ({ ...prev, [providerId]: modelId }));
     }
-    // For new providers (deepseek, xai, google, ollama), just set selectedProviderId
-    // The model is already set via localStorage persistence
   };
 
   const handleValidateCredentials = async (providerId: string) => {
@@ -519,17 +546,21 @@ export function useProviderConfig() {
     alert('OpenAI CLI login is no longer supported. Please use an API key.');
   };
 
-  const handleProviderModelChange = (legacyId: 'claude' | 'chatgpt', providerId: string, modelId: string) => {
-    setProvider(legacyId);
+  const handleProviderModelChange = (providerId: string, modelId: string) => {
     setSelectedProviderId(providerId);
-    localStorage.setItem('kondi-provider', legacyId);
     localStorage.setItem('kondi-provider-id', providerId);
-    if (legacyId === 'claude') {
+    if (providerId.startsWith('anthropic')) {
+      setProvider('claude');
       setAnthropicModel(modelId);
+      localStorage.setItem('kondi-provider', 'claude');
       localStorage.setItem('kondi-anthropic-model', modelId);
-    } else {
+    } else if (providerId.startsWith('openai')) {
+      setProvider('chatgpt');
       setOpenaiModel(modelId);
+      localStorage.setItem('kondi-provider', 'chatgpt');
       localStorage.setItem('kondi-openai-model', modelId);
+    } else {
+      setProviderModels(prev => ({ ...prev, [providerId]: modelId }));
     }
   };
 
@@ -686,6 +717,7 @@ export function useProviderConfig() {
       id: 'ollama',
       name: 'Ollama (Local)',
       description: 'Run models locally with Ollama - no API key needed',
+      authMethods: ['local'],
       status: (() => {
         const result = validationReport?.llmProviders.find(r => r.provider === 'Ollama');
         if (result?.status === 'error') return 'error' as const;
@@ -700,7 +732,9 @@ export function useProviderConfig() {
         return err ? { message: err.message, details: err.details, action: err.action } : undefined;
       })(),
       config: {},
-      models: getModelsForProviderSettings('ollama'),
+      models: ollamaModels.length > 0
+        ? ollamaModels.map(m => ({ id: m.id, name: m.name, contextWindow: 0, capabilities: ['text', 'code'] }))
+        : getModelsForProviderSettings('ollama'),
     },
   ];
 
@@ -715,6 +749,16 @@ export function useProviderConfig() {
     google: googleHasOAuth,
     ollama: !!validationReport?.llmProviders.find(r => r.provider === 'Ollama' && (r.status === 'ok' || r.status === 'warning')),
   };
+
+  // Derived: active model ID for the selected provider
+  const chatModelId = (() => {
+    if (selectedProviderId.startsWith('anthropic')) return anthropicModel;
+    if (selectedProviderId.startsWith('openai')) return openaiModel;
+    if (providerModels[selectedProviderId]) return providerModels[selectedProviderId];
+    // Fall back to first model from the provider's model list
+    const providerInfo = providersList.find(p => p.id === selectedProviderId);
+    return providerInfo?.models?.[0]?.id || '';
+  })();
 
   return {
     // State
@@ -740,6 +784,9 @@ export function useProviderConfig() {
     // Derived
     providersList,
     configuredProviders,
+    chatModelId,
+    providerModels,
+    ollamaModels,
 
     // Handlers
     handleProviderUpdate,

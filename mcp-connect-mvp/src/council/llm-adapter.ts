@@ -18,6 +18,7 @@ interface CompletionParams {
   userMessage: string;
   temperature?: number;
   availableTools?: Map<string, { serverId: string; tools: MCPTool[] }>;
+  workingDirectory?: string;
 }
 
 interface CompletionResult {
@@ -108,7 +109,8 @@ export class LLMAdapter implements LLMProvider {
       availableTools,
       params.model || 'claude-sonnet-4-5-20250929',
       undefined,
-      params.systemPrompt
+      params.systemPrompt,
+      params.workingDirectory
     );
 
     const latencyMs = Date.now() - startTime;
@@ -141,7 +143,8 @@ export class LLMAdapter implements LLMProvider {
       messages,
       availableTools,
       params.model || 'gpt-4o',
-      params.systemPrompt
+      params.systemPrompt,
+      params.workingDirectory
     );
 
     const latencyMs = Date.now() - startTime;
@@ -174,7 +177,8 @@ export class LLMAdapter implements LLMProvider {
       messages,
       availableTools,
       params.model,
-      params.systemPrompt
+      params.systemPrompt,
+      params.workingDirectory
     );
 
     const latencyMs = Date.now() - startTime;
@@ -207,7 +211,8 @@ export class LLMAdapter implements LLMProvider {
       messages,
       availableTools,
       params.model || 'models/gemini-2.5-flash',
-      params.systemPrompt
+      params.systemPrompt,
+      params.workingDirectory
     );
 
     const latencyMs = Date.now() - startTime;

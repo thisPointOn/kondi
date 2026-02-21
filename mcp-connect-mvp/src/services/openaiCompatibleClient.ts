@@ -170,7 +170,8 @@ export class OpenAICompatibleClient {
     messages: Message[],
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
     model?: string,
-    additionalSystemPrompt?: string
+    additionalSystemPrompt?: string,
+    workingDirectory?: string
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     const authMethod = this.getAuthMethod();
     console.log(`[${this.config.providerName}] chat() called`, { authMethod, model });
@@ -210,9 +211,14 @@ export class OpenAICompatibleClient {
       }
     }
 
-    const systemPrompt = additionalSystemPrompt
-      ? `${BASE_SYSTEM_PROMPT}\n\n${additionalSystemPrompt}`
-      : BASE_SYSTEM_PROMPT;
+    const systemParts = [BASE_SYSTEM_PROMPT];
+    if (workingDirectory) {
+      systemParts.push(`Current working directory: ${workingDirectory}`);
+    }
+    if (additionalSystemPrompt) {
+      systemParts.push(additionalSystemPrompt);
+    }
+    const systemPrompt = systemParts.join('\n\n');
 
     const openaiMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: systemPrompt },
@@ -269,7 +275,7 @@ export class OpenAICompatibleClient {
             toolCall.status = 'running';
             let result;
             if (toolInfo.serverId === LOCAL_SERVER_ID) {
-              result = await localToolsService.callTool(toolInfo.tool.name, toolCall.arguments);
+              result = await localToolsService.callTool(toolInfo.tool.name, toolCall.arguments, workingDirectory);
             } else {
               result = await mcpClient.callTool(toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);
             }

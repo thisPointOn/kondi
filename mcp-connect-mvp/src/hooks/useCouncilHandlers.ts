@@ -34,6 +34,7 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
             allowedTools: invocation.allowedTools,
             availableTools: invocation.skipTools ? undefined : filterToolsByServerIds(availableTools, invocation.allowedServerIds),
             conversationId: invocation.conversationId,
+            workingDirectory: invocation.workingDirectory,
           });
           console.log('[Council] invokeAgent completed', { personaName: persona.name });
           return { ...result, sessionId: result.sessionId };

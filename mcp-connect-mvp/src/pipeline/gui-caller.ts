@@ -30,6 +30,8 @@ export interface CallLLMOptions {
   availableTools?: Map<string, { serverId: string; tools: MCPTool[] }>;
   /** Timeout in ms (default: 600_000 / 10 min) */
   timeoutMs?: number;
+  /** Working directory override for local tool calls (bypasses singleton) */
+  workingDirectory?: string;
 }
 
 // ============================================================================
@@ -60,6 +62,7 @@ async function callAnthropicApi(opts: CallLLMOptions): Promise<CallerResult> {
     opts.model || 'claude-sonnet-4-5-20250929',
     undefined,
     opts.systemPrompt,
+    opts.workingDirectory,
   );
 
   const latencyMs = Date.now() - start;
@@ -96,6 +99,7 @@ async function callOpenAiApi(opts: CallLLMOptions): Promise<CallerResult> {
     tools,
     opts.model || 'gpt-4o',
     opts.systemPrompt,
+    opts.workingDirectory,
   );
 
   const latencyMs = Date.now() - start;
@@ -122,7 +126,7 @@ async function callCompatibleApi(
   ];
   const tools = opts.skipTools ? new Map() : (opts.availableTools || new Map());
 
-  const result = await client.chat(messages, tools, opts.model, opts.systemPrompt);
+  const result = await client.chat(messages, tools, opts.model, opts.systemPrompt, opts.workingDirectory);
 
   const latencyMs = Date.now() - start;
   const inputTokens = Math.ceil((opts.systemPrompt.length + opts.userMessage.length) / 4);
@@ -141,7 +145,7 @@ async function callGeminiApi(opts: CallLLMOptions): Promise<CallerResult> {
   ];
   const tools = opts.skipTools ? new Map() : (opts.availableTools || new Map());
 
-  const result = await geminiClient.chat(messages, tools, opts.model || 'models/gemini-2.5-flash', opts.systemPrompt);
+  const result = await geminiClient.chat(messages, tools, opts.model || 'models/gemini-2.5-flash', opts.systemPrompt, opts.workingDirectory);
 
   const latencyMs = Date.now() - start;
   const inputTokens = Math.ceil((opts.systemPrompt.length + opts.userMessage.length) / 4);

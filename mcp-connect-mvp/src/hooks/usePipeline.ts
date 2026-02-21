@@ -3,7 +3,6 @@ import { PipelineExecutor, type PlatformAdapter } from '../pipeline';
 import { callLLM } from '../pipeline/gui-caller';
 import { filterToolsByServerIds } from '../utils/filterTools';
 import { saveDeliberationOutput } from '../services/deliberationSaveService';
-import { localToolsService } from '../services/localTools';
 import { pipelineStore } from '../pipeline/store';
 import type { MCPTool } from '../types/mcp';
 import type { Persona } from '../council/types';
@@ -68,7 +67,7 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
       writeFile: (path, content) => invoke('write_local_file', { path, content }),
       readFile: (path) => invoke<string>('read_local_file', { path }).catch(() => null),
       runCommand: (cmd, cwd) => invoke('run_command', { command: cmd, workingDir: cwd }),
-      setWorkingDir: (dir) => { platformWorkingDir = dir; localToolsService.setWorkingDirectory(dir); },
+      setWorkingDir: (dir) => { platformWorkingDir = dir; },
       getWorkingDir: () => platformWorkingDir,
       saveDeliberationOutput: (council, mode) => saveDeliberationOutput(council, mode),
     };
@@ -88,6 +87,7 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
           temperature: persona.temperature,
           availableTools: filteredTools,
           timeoutMs: isWorker ? 1_800_000 : undefined, // 30 min for workers
+          workingDirectory: invocation.workingDirectory,
         });
         return result;
       },

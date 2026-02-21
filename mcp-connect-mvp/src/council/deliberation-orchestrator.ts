@@ -96,6 +96,8 @@ export interface AgentInvocation {
   skipTools?: boolean;
   /** MCP servers this invocation can access (undefined = all servers) */
   allowedServerIds?: string[];
+  /** Working directory override for local tool calls (bypasses singleton) */
+  workingDirectory?: string;
 }
 
 export interface AgentResponse {
@@ -2139,6 +2141,12 @@ export class DeliberationOrchestrator {
         userMessage: invocation.userMessage +
           `\n\nIMPORTANT: Keep your response concise — aim for approximately ${wordLimit} words or fewer. Be direct and avoid unnecessary elaboration.`,
       };
+    }
+
+    // Thread working directory from council so each invocation uses its own dir
+    const councilDir = council?.deliberation?.workingDirectory;
+    if (councilDir) {
+      invocation = { ...invocation, workingDirectory: councilDir };
     }
 
     try {
