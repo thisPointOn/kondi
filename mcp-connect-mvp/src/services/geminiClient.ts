@@ -101,7 +101,8 @@ class GeminiClient {
     messages: Message[],
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
     model = 'models/gemini-2.5-flash',
-    additionalSystemPrompt?: string
+    additionalSystemPrompt?: string,
+    workingDirectory?: string
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     const authMethod = this.getAuthMethod();
     console.log('[Gemini] chat() called', { authMethod, model });
@@ -142,9 +143,14 @@ class GeminiClient {
       }
     }
 
-    const systemPrompt = additionalSystemPrompt
-      ? `${BASE_SYSTEM_PROMPT}\n\n${additionalSystemPrompt}`
-      : BASE_SYSTEM_PROMPT;
+    const systemParts = [BASE_SYSTEM_PROMPT];
+    if (workingDirectory) {
+      systemParts.push(`Current working directory: ${workingDirectory}`);
+    }
+    if (additionalSystemPrompt) {
+      systemParts.push(additionalSystemPrompt);
+    }
+    const systemPrompt = systemParts.join('\n\n');
 
     // Convert messages to Gemini format
     const contents: GeminiContent[] = messages.map(m => ({
@@ -232,7 +238,7 @@ class GeminiClient {
             call.status = 'running';
             let result;
             if (call.serverId === LOCAL_SERVER_ID) {
-              result = await localToolsService.callTool(call.toolName, call.arguments);
+              result = await localToolsService.callTool(call.toolName, call.arguments, workingDirectory);
             } else {
               result = await mcpClient.callTool(call.serverId, call.toolName, call.arguments);
             }

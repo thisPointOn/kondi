@@ -1073,10 +1073,6 @@ export default function DeliberationView({
                       });
                     }
                     if (trimmedProblem) setTaskSaved(true);
-                    // Sync working directory with local tools service
-                    if (workingDirectory) {
-                      localToolsService.setWorkingDirectory(workingDirectory);
-                    }
                     // Close setup panel after saving
                     setActivePanel(null);
                   }}

@@ -50,7 +50,7 @@ export interface Message {
   content: string;
   toolCalls?: ToolCall[];
   timestamp: Date;
-  provider?: 'claude' | 'chatgpt';
+  provider?: string;
   attachments?: MessageAttachment[];
 }
 

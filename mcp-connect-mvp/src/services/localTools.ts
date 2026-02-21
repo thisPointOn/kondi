@@ -115,8 +115,9 @@ export class LocalToolsService {
     }
   }
 
-  private resolvePath(path: string): string {
-    if (!this.workingDirectory) {
+  private resolvePath(path: string, workingDirectory?: string): string {
+    const dir = workingDirectory ?? this.workingDirectory;
+    if (!dir) {
       return path;
     }
     // If path is absolute, use it as-is
@@ -125,14 +126,15 @@ export class LocalToolsService {
     }
     // Handle "." as working directory
     if (path === '.') {
-      return this.workingDirectory;
+      return dir;
     }
     // Resolve relative path
-    return `${this.workingDirectory}/${path}`.replace(/\/+/g, '/');
+    return `${dir}/${path}`.replace(/\/+/g, '/');
   }
 
-  private async checkScope(path: string): Promise<boolean> {
-    if (!this.workingDirectory) {
+  private async checkScope(path: string, workingDirectory?: string): Promise<boolean> {
+    const dir = workingDirectory ?? this.workingDirectory;
+    if (!dir) {
       // No working directory set - allow all operations
       return true;
     }
@@ -140,13 +142,13 @@ export class LocalToolsService {
     try {
       const inScope = await invoke<boolean>('is_path_in_scope', {
         path,
-        workingDir: this.workingDirectory,
+        workingDir: dir,
       });
       return inScope;
     } catch {
       // If we can't check (path doesn't exist yet for writes), allow if it's clearly within working dir
-      const resolvedPath = this.resolvePath(path);
-      return resolvedPath.startsWith(this.workingDirectory);
+      const resolvedPath = this.resolvePath(path, workingDirectory);
+      return resolvedPath.startsWith(dir);
     }
   }
 
@@ -167,11 +169,13 @@ export class LocalToolsService {
     return true;
   }
 
-  async callTool(toolName: string, args: Record<string, any>): Promise<any> {
+  async callTool(toolName: string, args: Record<string, any>, workingDirectory?: string): Promise<any> {
+    const dir = workingDirectory ?? this.workingDirectory;
+
     switch (toolName) {
       case 'read_file': {
-        const resolvedPath = this.resolvePath(args.path);
-        const inScope = await this.checkScope(resolvedPath);
+        const resolvedPath = this.resolvePath(args.path, workingDirectory);
+        const inScope = await this.checkScope(resolvedPath, workingDirectory);
         if (!inScope) {
           await this.requestPermission('read', resolvedPath);
         }
@@ -180,11 +184,11 @@ export class LocalToolsService {
       }
 
       case 'write_file': {
-        if (!this.workingDirectory) {
+        if (!dir) {
           throw new Error('Working directory must be set before writing files. Please set a working directory in the Local Tools settings.');
         }
-        const resolvedPath = this.resolvePath(args.path);
-        const inScope = await this.checkScope(resolvedPath);
+        const resolvedPath = this.resolvePath(args.path, workingDirectory);
+        const inScope = await this.checkScope(resolvedPath, workingDirectory);
         if (!inScope) {
           await this.requestPermission('write to', resolvedPath);
         }
@@ -193,8 +197,8 @@ export class LocalToolsService {
       }
 
       case 'list_directory': {
-        const resolvedPath = this.resolvePath(args.path);
-        const inScope = await this.checkScope(resolvedPath);
+        const resolvedPath = this.resolvePath(args.path, workingDirectory);
+        const inScope = await this.checkScope(resolvedPath, workingDirectory);
         if (!inScope) {
           await this.requestPermission('list', resolvedPath);
         }
@@ -208,12 +212,12 @@ export class LocalToolsService {
       }
 
       case 'run_command': {
-        if (!this.workingDirectory) {
+        if (!dir) {
           throw new Error('Working directory must be set before running commands. Please set a working directory in the Local Tools settings.');
         }
         const result = await invoke<CommandOutput>('run_command', {
           command: args.command,
-          workingDir: this.workingDirectory,
+          workingDir: dir,
         });
 
         let output = '';

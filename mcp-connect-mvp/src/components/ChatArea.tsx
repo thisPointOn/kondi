@@ -637,48 +637,6 @@ const ChatArea: FC<ChatAreaProps> = ({
           <ChevronDown size={14} className={`model-chevron ${showModelDropdown ? 'open' : ''}`} />
         </button>
 
-        <button
-          className="chat-dir-indicator"
-          onClick={async () => {
-            try {
-              const selected = await tauriOpen({
-                directory: true,
-                multiple: false,
-                title: 'Select Chat Working Directory',
-                defaultPath: chatWorkingDir || globalWorkingDirectory || undefined,
-              });
-              if (selected && typeof selected === 'string') {
-                onChatWorkingDirChange?.(selected);
-              }
-            } catch (err) {
-              console.error('[ChatArea] Error selecting directory:', err);
-            }
-          }}
-          disabled={sending}
-          title={chatWorkingDir || globalWorkingDirectory || 'Set working directory for this chat'}
-        >
-          <FolderOpen size={14} />
-          <span className="chat-dir-path">
-            {chatWorkingDir
-              ? chatWorkingDir.split('/').slice(-2).join('/')
-              : globalWorkingDirectory
-                ? globalWorkingDirectory.split('/').slice(-2).join('/') + ' (global)'
-                : 'Set directory...'}
-          </span>
-          {chatWorkingDir && (
-            <span
-              className="chat-dir-clear"
-              onClick={(e) => {
-                e.stopPropagation();
-                onChatWorkingDirChange?.(null);
-              }}
-              title="Clear per-chat directory (use global fallback)"
-            >
-              <X size={12} />
-            </span>
-          )}
-        </button>
-
         {showModelDropdown && (
           <div className="provider-model-dropdown">
             {availableProviders.map((pm) => {
@@ -717,6 +675,47 @@ const ChatArea: FC<ChatAreaProps> = ({
               <div className="no-providers">No providers configured. Set up API keys or CLI auth in Settings.</div>
             )}
           </div>
+        )}
+      </div>
+
+      {/* Working directory bar */}
+      <div className="chat-dir-bar">
+        <button
+          className="chat-dir-indicator"
+          onClick={async () => {
+            try {
+              const selected = await tauriOpen({
+                directory: true,
+                multiple: false,
+                title: 'Select Chat Working Directory',
+                defaultPath: chatWorkingDir || globalWorkingDirectory || undefined,
+              });
+              if (selected && typeof selected === 'string') {
+                onChatWorkingDirChange?.(selected);
+              }
+            } catch (err) {
+              console.error('[ChatArea] Error selecting directory:', err);
+            }
+          }}
+          disabled={sending}
+          title={chatWorkingDir || globalWorkingDirectory || 'Set working directory for this chat'}
+        >
+          <FolderOpen size={14} />
+          <span className="chat-dir-path">
+            {chatWorkingDir || globalWorkingDirectory || 'No working directory set'}
+          </span>
+          {!chatWorkingDir && globalWorkingDirectory && (
+            <span className="chat-dir-source">global</span>
+          )}
+        </button>
+        {chatWorkingDir && (
+          <button
+            className="chat-dir-clear-btn"
+            onClick={() => onChatWorkingDirChange?.(null)}
+            title="Clear per-chat directory (use global fallback)"
+          >
+            <X size={12} />
+          </button>
         )}
       </div>
 

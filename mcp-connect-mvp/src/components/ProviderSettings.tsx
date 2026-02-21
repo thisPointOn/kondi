@@ -393,7 +393,8 @@ const ProviderCard: FC<ProviderCardProps> = ({
             </div>
           )}
 
-          {/* Authentication Section */}
+          {/* Authentication Section — hide entirely for local-only providers */}
+          {!(provider.authMethods?.length === 1 && provider.authMethods[0] === 'local') && (
           <div className="config-section">
             <label className="config-label">Authentication</label>
 
@@ -533,8 +534,8 @@ const ProviderCard: FC<ProviderCardProps> = ({
               </div>
             )}
 
-            {/* API Key Option - only show for non-CLI providers */}
-            {!provider.id.endsWith('-cli') && (
+            {/* API Key Option - hide for CLI-only and local-only providers */}
+            {!provider.id.endsWith('-cli') && !(provider.authMethods?.length === 1 && provider.authMethods[0] === 'local') && (
               <div className={`auth-option api-key-option ${provider.activeAuthMethod !== 'oauth' ? 'active-method' : ''}`}>
                 <div className="api-key-header-row">
                   <div className="api-key-left">
@@ -616,6 +617,7 @@ const ProviderCard: FC<ProviderCardProps> = ({
               </div>
             )}
           </div>
+          )}
 
           {/* Models Section */}
           <div className="config-section">

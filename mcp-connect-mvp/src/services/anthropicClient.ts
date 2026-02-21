@@ -119,7 +119,8 @@ class AnthropicClient {
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
     model = 'claude-sonnet-4-5-20250929',
     serverSummary?: string,
-    additionalSystemPrompt?: string
+    additionalSystemPrompt?: string,
+    workingDirectory?: string
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     const authMethod = this.getAuthMethod();
     console.log('[Anthropic] chat() called', { authMethod, model });
@@ -161,7 +162,12 @@ class AnthropicClient {
       content: [{ type: 'text', text: m.content }],
     }));
 
-    const systemParts = [BASE_SYSTEM_PROMPT, additionalSystemPrompt, serverSummary];
+    const systemParts = [
+      BASE_SYSTEM_PROMPT,
+      workingDirectory ? `Current working directory: ${workingDirectory}` : undefined,
+      additionalSystemPrompt,
+      serverSummary,
+    ];
 
     const system = systemParts
       .filter(Boolean)
@@ -230,7 +236,7 @@ class AnthropicClient {
 
           let result;
           if (call.serverId === LOCAL_SERVER_ID) {
-            result = await localToolsService.callTool(call.toolName, call.arguments);
+            result = await localToolsService.callTool(call.toolName, call.arguments, workingDirectory);
           } else {
             result = await mcpClient.callTool(call.serverId, call.toolName, call.arguments);
           }
