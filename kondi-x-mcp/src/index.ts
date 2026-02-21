@@ -8,6 +8,14 @@ import { registerGetTweetTool } from './tools/get-tweet.js';
 import { registerGetUserTweetsTool } from './tools/get-user-tweets.js';
 import { registerSearchTweetsTool } from './tools/search-tweets.js';
 import { registerDeleteTweetTool } from './tools/delete-tweet.js';
+import { registerGetUserByUsernameTool } from './tools/get-user-by-username.js';
+import { registerGetMeTool } from './tools/get-me.js';
+import { registerGetMentionsTool } from './tools/get-mentions.js';
+import { registerLikeTweetTool } from './tools/like-tweet.js';
+import { registerUnlikeTweetTool } from './tools/unlike-tweet.js';
+import { registerRetweetTool } from './tools/retweet.js';
+import { registerGetFollowersTool } from './tools/get-followers.js';
+import { registerGetFollowingTool } from './tools/get-following.js';
 
 const VERSION = '1.0.0';
 
@@ -52,11 +60,19 @@ Config File:
   ~/.config/kondi-x/config.json
 
 Tools:
-  x_post_tweet       Post a new tweet
-  x_get_tweet        Get a tweet by ID
-  x_get_user_tweets  Get a user's recent tweets
-  x_search_tweets    Search recent tweets
-  x_delete_tweet     Delete a tweet
+  x_post_tweet              Post a new tweet
+  x_get_tweet               Get a tweet by ID
+  x_get_user_tweets         Get a user's recent tweets
+  x_search_tweets           Search recent tweets
+  x_delete_tweet            Delete a tweet
+  x_get_user_by_username    Look up a user by @username
+  x_get_me                  Get authenticated user profile
+  x_get_mentions            Get mentions of a user
+  x_like_tweet              Like a tweet
+  x_unlike_tweet            Unlike a tweet
+  x_retweet                 Retweet a tweet
+  x_get_followers           Get a user's followers
+  x_get_following           Get who a user follows
 `);
       process.exit(0);
     }
@@ -74,6 +90,14 @@ Tools:
   registerGetUserTweetsTool(server, config);
   registerSearchTweetsTool(server, config);
   registerDeleteTweetTool(server, config);
+  registerGetUserByUsernameTool(server, config);
+  registerGetMeTool(server, config);
+  registerGetMentionsTool(server, config);
+  registerLikeTweetTool(server, config);
+  registerUnlikeTweetTool(server, config);
+  registerRetweetTool(server, config);
+  registerGetFollowersTool(server, config);
+  registerGetFollowingTool(server, config);
 
   // Log startup info to stderr (stdout is reserved for MCP protocol)
   const log = (msg: string) => {
@@ -88,7 +112,7 @@ Tools:
   log(`  Transport: ${transport}`);
   log(`  API Base: ${config.api.base_url}`);
   log(`  Auth: ${config.auth.bearer_token ? 'Bearer token configured' : 'WARNING: No bearer token set'}`);
-  log(`  Tools: x_post_tweet, x_get_tweet, x_get_user_tweets, x_search_tweets, x_delete_tweet`);
+  log(`  Tools: x_post_tweet, x_get_tweet, x_get_user_tweets, x_search_tweets, x_delete_tweet, x_get_user_by_username, x_get_me, x_get_mentions, x_like_tweet, x_unlike_tweet, x_retweet, x_get_followers, x_get_following`);
 
   // Start appropriate transport
   if (transport === 'stdio') {

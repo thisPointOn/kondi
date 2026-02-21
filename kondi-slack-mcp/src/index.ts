@@ -9,6 +9,16 @@ import { registerGetMessagesTool } from './tools/get-messages.js';
 import { registerGetThreadTool } from './tools/get-thread.js';
 import { registerListChannelsTool } from './tools/list-channels.js';
 import { registerAddReactionTool } from './tools/add-reaction.js';
+import { registerSearchMessagesTool } from './tools/search-messages.js';
+import { registerGetUserInfoTool } from './tools/get-user-info.js';
+import { registerListUsersTool } from './tools/list-users.js';
+import { registerUpdateMessageTool } from './tools/update-message.js';
+import { registerDeleteMessageTool } from './tools/delete-message.js';
+import { registerGetChannelInfoTool } from './tools/get-channel-info.js';
+import { registerPinMessageTool } from './tools/pin-message.js';
+import { registerGetPinsTool } from './tools/get-pins.js';
+import { registerRemoveReactionTool } from './tools/remove-reaction.js';
+import { registerGetReactionsTool } from './tools/get-reactions.js';
 
 const VERSION = '1.0.0';
 
@@ -53,11 +63,21 @@ Config File:
   ~/.config/kondi-slack/config.json
 
 Tools:
-  slack_post_message   Post a message to a channel or thread
-  slack_get_messages   Retrieve recent messages from a channel
-  slack_get_thread     Retrieve replies in a thread
-  slack_list_channels  List channels the bot can access
-  slack_add_reaction   Add an emoji reaction to a message
+  slack_post_message      Post a message to a channel or thread
+  slack_get_messages      Retrieve recent messages from a channel
+  slack_get_thread        Retrieve replies in a thread
+  slack_list_channels     List channels the bot can access
+  slack_add_reaction      Add an emoji reaction to a message
+  slack_search_messages   Search for messages across the workspace
+  slack_get_user_info     Get detailed profile info for a user
+  slack_list_users        List all users in the workspace
+  slack_update_message    Update an existing message
+  slack_delete_message    Delete a message from a channel
+  slack_get_channel_info  Get detailed info about a channel
+  slack_pin_message       Pin a message in a channel
+  slack_get_pins          Get all pinned items in a channel
+  slack_remove_reaction   Remove a reaction from a message
+  slack_get_reactions     Get all reactions on a message
 `);
       process.exit(0);
     }
@@ -78,6 +98,16 @@ Tools:
   registerGetThreadTool(server, client);
   registerListChannelsTool(server, client);
   registerAddReactionTool(server, client);
+  registerSearchMessagesTool(server, client);
+  registerGetUserInfoTool(server, client);
+  registerListUsersTool(server, client);
+  registerUpdateMessageTool(server, client);
+  registerDeleteMessageTool(server, client);
+  registerGetChannelInfoTool(server, client);
+  registerPinMessageTool(server, client);
+  registerGetPinsTool(server, client);
+  registerRemoveReactionTool(server, client);
+  registerGetReactionsTool(server, client);
 
   // Log startup info to stderr (stdout is reserved for MCP protocol)
   const log = (msg: string) => {
@@ -109,7 +139,7 @@ Tools:
     }
   }
 
-  log(`  Tools: slack_post_message, slack_get_messages, slack_get_thread, slack_list_channels, slack_add_reaction`);
+  log(`  Tools: slack_post_message, slack_get_messages, slack_get_thread, slack_list_channels, slack_add_reaction, slack_search_messages, slack_get_user_info, slack_list_users, slack_update_message, slack_delete_message, slack_get_channel_info, slack_pin_message, slack_get_pins, slack_remove_reaction, slack_get_reactions`);
 
   // Start appropriate transport
   if (transport === 'stdio') {

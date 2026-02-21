@@ -70,6 +70,27 @@ export interface DiscordChannel {
   last_message_id?: string | null;
 }
 
+export interface DiscordGuild {
+  id: string;
+  name: string;
+  icon: string | null;
+  description: string | null;
+  owner_id: string;
+  approximate_member_count?: number;
+  approximate_presence_count?: number;
+  features: string[];
+  [key: string]: unknown;
+}
+
+export interface DiscordGuildMember {
+  user?: DiscordUser;
+  nick: string | null;
+  roles: string[];
+  joined_at: string;
+  deaf: boolean;
+  mute: boolean;
+}
+
 export interface DiscordApiError {
   code: number;
   message: string;

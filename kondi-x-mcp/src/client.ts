@@ -4,6 +4,10 @@ import type {
   TweetsResponse,
   PostTweetResponse,
   DeleteTweetResponse,
+  UserResponse,
+  UsersResponse,
+  LikeResponse,
+  RetweetResponse,
 } from './types.js';
 
 export class XClient {
@@ -128,5 +132,60 @@ export class XClient {
 
   async deleteTweet(tweetId: string): Promise<DeleteTweetResponse> {
     return this.request<DeleteTweetResponse>('DELETE', `/tweets/${tweetId}`);
+  }
+
+  async getUserByUsername(username: string, userFields?: string): Promise<UserResponse> {
+    const fields = userFields || 'id,name,username,description,public_metrics,profile_image_url,verified,created_at';
+    const params = new URLSearchParams({
+      'user.fields': fields,
+    });
+    return this.request<UserResponse>('GET', `/users/by/username/${encodeURIComponent(username)}?${params.toString()}`);
+  }
+
+  async getMe(userFields?: string): Promise<UserResponse> {
+    const fields = userFields || 'id,name,username,description,public_metrics,profile_image_url,created_at';
+    const params = new URLSearchParams({
+      'user.fields': fields,
+    });
+    return this.request<UserResponse>('GET', `/users/me?${params.toString()}`);
+  }
+
+  async getUserMentions(userId: string, maxResults: number = 10, tweetFields?: string): Promise<TweetsResponse> {
+    const fields = tweetFields || 'text,created_at,author_id,public_metrics,conversation_id';
+    const params = new URLSearchParams({
+      'tweet.fields': fields,
+      max_results: String(maxResults),
+    });
+    return this.request<TweetsResponse>('GET', `/users/${userId}/mentions?${params.toString()}`);
+  }
+
+  async likeTweet(userId: string, tweetId: string): Promise<LikeResponse> {
+    return this.request<LikeResponse>('POST', `/users/${userId}/likes`, { tweet_id: tweetId });
+  }
+
+  async unlikeTweet(userId: string, tweetId: string): Promise<LikeResponse> {
+    return this.request<LikeResponse>('DELETE', `/users/${userId}/likes/${tweetId}`);
+  }
+
+  async retweet(userId: string, tweetId: string): Promise<RetweetResponse> {
+    return this.request<RetweetResponse>('POST', `/users/${userId}/retweets`, { tweet_id: tweetId });
+  }
+
+  async getFollowers(userId: string, maxResults: number = 100, userFields?: string): Promise<UsersResponse> {
+    const fields = userFields || 'id,name,username,description,public_metrics';
+    const params = new URLSearchParams({
+      'user.fields': fields,
+      max_results: String(maxResults),
+    });
+    return this.request<UsersResponse>('GET', `/users/${userId}/followers?${params.toString()}`);
+  }
+
+  async getFollowing(userId: string, maxResults: number = 100, userFields?: string): Promise<UsersResponse> {
+    const fields = userFields || 'id,name,username,description,public_metrics';
+    const params = new URLSearchParams({
+      'user.fields': fields,
+      max_results: String(maxResults),
+    });
+    return this.request<UsersResponse>('GET', `/users/${userId}/following?${params.toString()}`);
   }
 }

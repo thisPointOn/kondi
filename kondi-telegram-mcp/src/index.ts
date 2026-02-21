@@ -9,6 +9,16 @@ import { registerGetUpdatesTool } from './tools/get-updates.js';
 import { registerSendPhotoTool } from './tools/send-photo.js';
 import { registerGetChatTool } from './tools/get-chat.js';
 import { registerGetMeTool } from './tools/get-me.js';
+import { registerEditMessageTool } from './tools/edit-message.js';
+import { registerDeleteMessageTool } from './tools/delete-message.js';
+import { registerForwardMessageTool } from './tools/forward-message.js';
+import { registerSendDocumentTool } from './tools/send-document.js';
+import { registerGetChatMemberCountTool } from './tools/get-chat-member-count.js';
+import { registerPinMessageTool } from './tools/pin-message.js';
+import { registerSendPollTool } from './tools/send-poll.js';
+import { registerSendLocationTool } from './tools/send-location.js';
+import { registerGetChatAdministratorsTool } from './tools/get-chat-administrators.js';
+import { registerSetChatDescriptionTool } from './tools/set-chat-description.js';
 
 const VERSION = '1.0.0';
 
@@ -53,11 +63,21 @@ Config File:
   ~/.config/kondi-telegram/config.json
 
 Tools:
-  telegram_send_message  Send a text message to a chat
-  telegram_get_updates   Receive incoming updates
-  telegram_send_photo    Send a photo by URL
-  telegram_get_chat      Get chat information
-  telegram_get_me        Get bot information
+  telegram_send_message          Send a text message to a chat
+  telegram_get_updates           Receive incoming updates
+  telegram_send_photo            Send a photo by URL
+  telegram_get_chat              Get chat information
+  telegram_get_me                Get bot information
+  telegram_edit_message          Edit a previously sent message
+  telegram_delete_message        Delete a message
+  telegram_forward_message       Forward a message between chats
+  telegram_send_document         Send a document/file by URL
+  telegram_get_chat_member_count Get member count of a chat
+  telegram_pin_message           Pin a message in a chat
+  telegram_send_poll             Create a poll in a chat
+  telegram_send_location         Send a map location
+  telegram_get_chat_administrators  Get chat admin list
+  telegram_set_chat_description  Change chat description
 `);
       process.exit(0);
     }
@@ -75,6 +95,16 @@ Tools:
   registerSendPhotoTool(server, config);
   registerGetChatTool(server, config);
   registerGetMeTool(server, config);
+  registerEditMessageTool(server, config);
+  registerDeleteMessageTool(server, config);
+  registerForwardMessageTool(server, config);
+  registerSendDocumentTool(server, config);
+  registerGetChatMemberCountTool(server, config);
+  registerPinMessageTool(server, config);
+  registerSendPollTool(server, config);
+  registerSendLocationTool(server, config);
+  registerGetChatAdministratorsTool(server, config);
+  registerSetChatDescriptionTool(server, config);
 
   // Log startup info to stderr (stdout is reserved for MCP protocol)
   const log = (msg: string) => {
@@ -106,7 +136,7 @@ Tools:
     log(`  Set KONDI_TELEGRAM_BOT_TOKEN or add auth.bot_token to config.`);
   }
 
-  log(`  Tools: telegram_send_message, telegram_get_updates, telegram_send_photo, telegram_get_chat, telegram_get_me`);
+  log(`  Tools: telegram_send_message, telegram_get_updates, telegram_send_photo, telegram_get_chat, telegram_get_me, telegram_edit_message, telegram_delete_message, telegram_forward_message, telegram_send_document, telegram_get_chat_member_count, telegram_pin_message, telegram_send_poll, telegram_send_location, telegram_get_chat_administrators, telegram_set_chat_description`);
 
   // Start appropriate transport
   if (transport === 'stdio') {

@@ -9,6 +9,14 @@ import { registerGetMessagesTool } from './tools/get-messages.js';
 import { registerGetChannelTool } from './tools/get-channel.js';
 import { registerListGuildChannelsTool } from './tools/list-guild-channels.js';
 import { registerCreateReactionTool } from './tools/create-reaction.js';
+import { registerEditMessageTool } from './tools/edit-message.js';
+import { registerDeleteMessageTool } from './tools/delete-message.js';
+import { registerGetGuildTool } from './tools/get-guild.js';
+import { registerPinMessageTool } from './tools/pin-message.js';
+import { registerGetPinnedMessagesTool } from './tools/get-pinned-messages.js';
+import { registerCreateThreadTool } from './tools/create-thread.js';
+import { registerGetGuildMembersTool } from './tools/get-guild-members.js';
+import { registerRemoveReactionTool } from './tools/remove-reaction.js';
 
 const VERSION = '1.0.0';
 
@@ -58,6 +66,14 @@ Tools:
   discord_get_channel         Get channel information
   discord_list_guild_channels List channels in a guild
   discord_create_reaction     Add a reaction to a message
+  discord_edit_message        Edit a previously sent message
+  discord_delete_message      Delete a message from a channel
+  discord_get_guild           Get guild (server) information
+  discord_pin_message         Pin a message in a channel
+  discord_get_pinned_messages Get all pinned messages in a channel
+  discord_create_thread       Create a thread from a message
+  discord_get_guild_members   List members of a guild
+  discord_remove_reaction     Remove bot's reaction from a message
 `);
       process.exit(0);
     }
@@ -75,6 +91,14 @@ Tools:
   registerGetChannelTool(server, config);
   registerListGuildChannelsTool(server, config);
   registerCreateReactionTool(server, config);
+  registerEditMessageTool(server, config);
+  registerDeleteMessageTool(server, config);
+  registerGetGuildTool(server, config);
+  registerPinMessageTool(server, config);
+  registerGetPinnedMessagesTool(server, config);
+  registerCreateThreadTool(server, config);
+  registerGetGuildMembersTool(server, config);
+  registerRemoveReactionTool(server, config);
 
   // Log startup info to stderr (stdout is reserved for MCP protocol)
   const log = (msg: string) => {
@@ -108,7 +132,7 @@ Tools:
     }
   }
 
-  log(`  Tools: discord_send_message, discord_get_messages, discord_get_channel, discord_list_guild_channels, discord_create_reaction`);
+  log(`  Tools: discord_send_message, discord_get_messages, discord_get_channel, discord_list_guild_channels, discord_create_reaction, discord_edit_message, discord_delete_message, discord_get_guild, discord_pin_message, discord_get_pinned_messages, discord_create_thread, discord_get_guild_members, discord_remove_reaction`);
 
   // Start appropriate transport
   if (transport === 'stdio') {
