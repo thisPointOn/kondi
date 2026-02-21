@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, type FC } from 'react';
-import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal, FileText, Search } from 'lucide-react';
+import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal, FileText, Search, Eye, EyeOff } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, OAuthDiscovery } from '../types/mcp';
@@ -1229,6 +1229,8 @@ const ServerCard: FC<{
   const [editClientId, setEditClientId] = useState(server.clientId || '');
   const [editClientSecret, setEditClientSecret] = useState(server.clientSecret || '');
   const [editAutoConnect, setEditAutoConnect] = useState(server.autoConnect ?? false);
+  const [editEnvVars, setEditEnvVars] = useState<Record<string, string>>(() => ({ ...(server.metadata?.manifest?.run?.env || {}) }));
+  const [showEnvValues, setShowEnvValues] = useState<Record<string, boolean>>({});
   const [isReauthenticating, setIsReauthenticating] = useState(false);
   const [reauthError, setReauthError] = useState<string | null>(null);
   const [, forceTick] = useState(0);
@@ -1248,6 +1250,7 @@ const ServerCard: FC<{
     setEditClientId(server.clientId || '');
     setEditClientSecret(server.clientSecret || '');
     setEditAutoConnect(server.autoConnect ?? false);
+    setEditEnvVars({ ...(server.metadata?.manifest?.run?.env || {}) });
   }, [server]);
 
   const handleToolClick = (tool: MCPTool) => {
@@ -1256,7 +1259,7 @@ const ServerCard: FC<{
 
   const handleSaveDetails = () => {
     if (onUpdateServer) {
-      onUpdateServer({
+      const updated: MCPServer = {
         ...server,
         name: editName,
         url: editUrl,
@@ -1265,7 +1268,21 @@ const ServerCard: FC<{
         clientId: editClientId || undefined,
         clientSecret: editClientSecret || undefined,
         autoConnect: editAutoConnect,
-      });
+      };
+      // Persist env var edits for builtin servers
+      if (server.metadata?.builtin && Object.keys(editEnvVars).length > 0) {
+        updated.metadata = {
+          ...updated.metadata,
+          manifest: {
+            ...updated.metadata?.manifest,
+            run: {
+              ...updated.metadata?.manifest?.run,
+              env: { ...editEnvVars },
+            },
+          },
+        };
+      }
+      onUpdateServer(updated);
     }
     setShowDetails(false);
   };
@@ -1401,52 +1418,88 @@ const ServerCard: FC<{
               <span>{reauthError}</span>
             </div>
           )}
-          <input
-            type="text"
-            placeholder="Server name"
-            value={editName}
-            onChange={(e) => setEditName(e.target.value)}
-          />
-          <input
-            type="text"
-            placeholder="http://localhost:3000"
-            value={editUrl}
-            onChange={(e) => setEditUrl(e.target.value)}
-          />
-          <div className="transport-label">Transport</div>
-          <select
-            className="select-field"
-            value={editTransport}
-            onChange={(e) => setEditTransport(e.target.value as MCPServer['transport'])}
-          >
-            <option value="http">HTTP</option>
-            <option value="sse">SSE</option>
-            <option value="stdio">STDIO</option>
-          </select>
-          <div className="auth-section">
-            <div className="auth-label">Access Token <span className="optional-tag">(optional)</span></div>
-            <input
-              type="text"
-              placeholder="Bearer token..."
-              value={editToken}
-              onChange={(e) => setEditToken(e.target.value)}
-            />
-          </div>
-          <div className="oauth-section">
-            <div className="auth-label">OAuth Credentials <span className="optional-tag">(optional)</span></div>
-            <input
-              type="text"
-              placeholder="Client ID"
-              value={editClientId}
-              onChange={(e) => setEditClientId(e.target.value)}
-            />
-            <input
-              type="text"
-              placeholder="Client Secret"
-              value={editClientSecret}
-              onChange={(e) => setEditClientSecret(e.target.value)}
-            />
-          </div>
+          {server.metadata?.builtin ? (
+            <div className="builtin-creds">
+              <div className="auth-label">API Credentials</div>
+              {Object.entries(editEnvVars).map(([key, val]) => {
+                const label = key
+                  .replace(/^KONDI_/, '')
+                  .replace(/_/g, ' ')
+                  .replace(/\b\w/g, c => c.toUpperCase());
+                return (
+                  <div className="builtin-cred-row" key={key}>
+                    <label className="builtin-cred-label">{label}</label>
+                    <div className="builtin-cred-input-wrap">
+                      <input
+                        className="builtin-cred-input"
+                        type={showEnvValues[key] ? 'text' : 'password'}
+                        placeholder={`Enter ${label.toLowerCase()}...`}
+                        value={val}
+                        onChange={(e) => setEditEnvVars(prev => ({ ...prev, [key]: e.target.value }))}
+                      />
+                      <button
+                        type="button"
+                        className="builtin-cred-toggle"
+                        onClick={() => setShowEnvValues(prev => ({ ...prev, [key]: !prev[key] }))}
+                        tabIndex={-1}
+                      >
+                        {showEnvValues[key] ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <>
+              <input
+                type="text"
+                placeholder="Server name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+              />
+              <input
+                type="text"
+                placeholder="http://localhost:3000"
+                value={editUrl}
+                onChange={(e) => setEditUrl(e.target.value)}
+              />
+              <div className="transport-label">Transport</div>
+              <select
+                className="select-field"
+                value={editTransport}
+                onChange={(e) => setEditTransport(e.target.value as MCPServer['transport'])}
+              >
+                <option value="http">HTTP</option>
+                <option value="sse">SSE</option>
+                <option value="stdio">STDIO</option>
+              </select>
+              <div className="auth-section">
+                <div className="auth-label">Access Token <span className="optional-tag">(optional)</span></div>
+                <input
+                  type="text"
+                  placeholder="Bearer token..."
+                  value={editToken}
+                  onChange={(e) => setEditToken(e.target.value)}
+                />
+              </div>
+              <div className="oauth-section">
+                <div className="auth-label">OAuth Credentials <span className="optional-tag">(optional)</span></div>
+                <input
+                  type="text"
+                  placeholder="Client ID"
+                  value={editClientId}
+                  onChange={(e) => setEditClientId(e.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="Client Secret"
+                  value={editClientSecret}
+                  onChange={(e) => setEditClientSecret(e.target.value)}
+                />
+              </div>
+            </>
+          )}
           <div className="auto-connect-section">
             <label className="auto-connect-label">
               <input
