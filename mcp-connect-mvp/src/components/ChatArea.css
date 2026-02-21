@@ -379,6 +379,72 @@
   transform: rotate(180deg);
 }
 
+/* Chat directory indicator */
+.chat-dir-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: #888;
+  font-family: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chat-dir-indicator:hover:not(:disabled) {
+  background: #1a1a1a;
+  border-color: #2a2a2a;
+  color: #ccc;
+}
+
+.chat-dir-indicator:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.chat-dir-path {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-dir-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  color: #666;
+  transition: all 0.15s;
+}
+
+.chat-dir-clear:hover {
+  background: #333;
+  color: #ef4444;
+}
+
+.light-theme .chat-dir-indicator {
+  color: #888;
+}
+
+.light-theme .chat-dir-indicator:hover:not(:disabled) {
+  background: #ededed;
+  border-color: #ddd;
+  color: #444;
+}
+
+.light-theme .chat-dir-clear:hover {
+  background: #ddd;
+  color: #ef4444;
+}
+
 /* Provider/model dropdown */
 .provider-model-dropdown {
   position: absolute;
