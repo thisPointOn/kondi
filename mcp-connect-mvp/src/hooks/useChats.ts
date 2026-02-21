@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 type ChatRecord = Record<string, Message[]>;
 const MAX_CHATS = 20;
 const CHAT_STORAGE_KEY = 'mcp-chats';
+const CHAT_WORKING_DIRS_KEY = 'kondi-chat-working-dirs';
 
 interface UseChatsParams {
   setCurrentView: (view: AppView) => void;
@@ -16,6 +17,7 @@ interface UseChatsParams {
   anthropicKey: string;
   openaiModel: string;
   anthropicModel: string;
+  globalWorkingDirectory?: string;
 }
 
 export function useChats({
@@ -25,6 +27,7 @@ export function useChats({
   anthropicKey,
   openaiModel,
   anthropicModel,
+  globalWorkingDirectory,
 }: UseChatsParams) {
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [chats, setChats] = useState<ChatRecord>({});
@@ -32,9 +35,37 @@ export function useChats({
   const [messageCountToday, setMessageCountToday] = useState(0);
   const [pendingToolInsert, setPendingToolInsert] = useState<string | null>(null);
   const [chatSending, setChatSending] = useState(false);
-  const [chatActiveProvider, setChatActiveProvider] = useState<'claude' | 'chatgpt' | null>(null);
+  const [chatActiveProvider, setChatActiveProvider] = useState<string | null>(null);
+
+  // Per-chat working directories
+  const [chatWorkingDirs, setChatWorkingDirs] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem(CHAT_WORKING_DIRS_KEY);
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
 
   const hasLoadedChatsRef = useRef(false);
+
+  // Persist per-chat working directories
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_WORKING_DIRS_KEY, JSON.stringify(chatWorkingDirs));
+    } catch (e) {
+      console.warn('[useChats] Failed to save chat working dirs:', e);
+    }
+  }, [chatWorkingDirs]);
+
+  const setChatWorkingDir = (chatId: string, dir: string | null) => {
+    setChatWorkingDirs((prev) => {
+      if (dir === null) {
+        const next = { ...prev };
+        delete next[chatId];
+        return next;
+      }
+      return { ...prev, [chatId]: dir };
+    });
+  };
 
   // Load chats on mount - try Tauri first, then localStorage
   useEffect(() => {
@@ -161,6 +192,9 @@ export function useChats({
   const handleNewChat = () => {
     const id = crypto.randomUUID();
     setChats((prev) => ({ ...prev, [id]: [] }));
+    if (globalWorkingDirectory) {
+      setChatWorkingDir(id, globalWorkingDirectory);
+    }
     setCurrentChatId(id);
     setCurrentView('chat');
   };
@@ -184,6 +218,7 @@ export function useChats({
       delete next[chatId];
       return next;
     });
+    setChatWorkingDir(chatId, null);
     if (currentChatId === chatId) {
       const remainingIds = Object.keys(chats).filter((id) => id !== chatId);
       setCurrentChatId(remainingIds[0] || null);
@@ -275,5 +310,7 @@ export function useChats({
     handleChatMessagesChange,
     handleDeleteChat,
     handleGithubCheck,
+    chatWorkingDirs,
+    setChatWorkingDir,
   } as const;
 }

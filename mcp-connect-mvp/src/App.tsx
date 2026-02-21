@@ -42,6 +42,7 @@ function App() {
     anthropicKey: providerConfig.anthropicKey,
     openaiModel: providerConfig.openaiModel,
     anthropicModel: providerConfig.anthropicModel,
+    globalWorkingDirectory: providerConfig.globalWorkingDirectory,
   });
   const council = useCouncilHandlers({
     availableTools: serverHook.availableTools,
@@ -321,9 +322,28 @@ function App() {
             provider={providerConfig.provider}
             openaiModel={providerConfig.openaiModel}
             anthropicModel={providerConfig.anthropicModel}
+            chatModelId={providerConfig.chatModelId}
+            discoveredOllamaModels={providerConfig.ollamaModels.length > 0 ? providerConfig.ollamaModels.map(m => ({
+              id: m.id,
+              name: m.name,
+              provider: 'ollama' as const,
+              contextWindow: 0,
+              capabilities: ['text', 'code'],
+              inputCostPer1K: 0,
+              outputCostPer1K: 0,
+              costDisplay: 'Free (local)',
+              tier: 1 as const,
+            })) : undefined}
             configuredProviders={providerConfig.configuredProviders}
             selectedProviderId={providerConfig.selectedProviderId}
             onProviderModelChange={providerConfig.handleProviderModelChange}
+            globalWorkingDirectory={providerConfig.globalWorkingDirectory}
+            chatWorkingDir={chats.chatWorkingDirs[chats.currentChatId || '']}
+            onChatWorkingDirChange={(dir) => {
+              if (chats.currentChatId) {
+                chats.setChatWorkingDir(chats.currentChatId, dir);
+              }
+            }}
             sending={chats.chatSending}
             onSendingChange={chats.setChatSending}
             activeProviderOverride={chats.chatActiveProvider}

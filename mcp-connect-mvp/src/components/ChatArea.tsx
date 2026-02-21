@@ -2,10 +2,13 @@ import { useEffect, useMemo, useRef, useState, useCallback, type FC } from 'reac
 import type React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Paperclip, X, ChevronDown } from 'lucide-react';
+import { Paperclip, X, ChevronDown, FolderOpen } from 'lucide-react';
+import { open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, Message, ToolCall } from '../types/mcp';
 import { openaiClient } from '../services/openaiClient';
 import { anthropicClient } from '../services/anthropicClient';
+import { deepseekClient, xaiClient, ollamaClient } from '../services/openaiCompatibleClient';
+import { geminiClient } from '../services/geminiClient';
 import { LOCAL_TOOLS, LOCAL_SERVER_ID, localToolsService } from '../services/localTools';
 import {
   ANTHROPIC_CLI_MODELS,
@@ -13,6 +16,9 @@ import {
   OPENAI_CLI_MODELS,
   OPENAI_API_MODELS,
   DEEPSEEK_MODELS,
+  GOOGLE_MODELS,
+  XAI_MODELS,
+  OLLAMA_MODELS,
   type ModelDefinition,
 } from '../config/models';
 import './ChatArea.css';
@@ -97,7 +103,6 @@ interface ProviderMeta {
   label: string;
   shortLabel: string;
   color: string;
-  legacyId: 'claude' | 'chatgpt';
   models: ModelDefinition[];
 }
 
@@ -107,7 +112,6 @@ const PROVIDER_META: ProviderMeta[] = [
     label: 'Claude CLI (Subscription)',
     shortLabel: 'Claude CLI',
     color: '#f97316',
-    legacyId: 'claude',
     models: ANTHROPIC_CLI_MODELS,
   },
   {
@@ -115,7 +119,6 @@ const PROVIDER_META: ProviderMeta[] = [
     label: 'Anthropic API',
     shortLabel: 'Anthropic',
     color: '#f97316',
-    legacyId: 'claude',
     models: ANTHROPIC_API_MODELS,
   },
   {
@@ -123,7 +126,6 @@ const PROVIDER_META: ProviderMeta[] = [
     label: 'ChatGPT CLI (Subscription)',
     shortLabel: 'ChatGPT CLI',
     color: '#3b82f6',
-    legacyId: 'chatgpt',
     models: OPENAI_CLI_MODELS,
   },
   {
@@ -131,7 +133,6 @@ const PROVIDER_META: ProviderMeta[] = [
     label: 'OpenAI API',
     shortLabel: 'OpenAI',
     color: '#3b82f6',
-    legacyId: 'chatgpt',
     models: OPENAI_API_MODELS,
   },
   {
@@ -139,8 +140,28 @@ const PROVIDER_META: ProviderMeta[] = [
     label: 'DeepSeek',
     shortLabel: 'DeepSeek',
     color: '#6366f1',
-    legacyId: 'chatgpt', // Uses OpenAI-compatible API
     models: DEEPSEEK_MODELS,
+  },
+  {
+    id: 'xai',
+    label: 'xAI (Grok)',
+    shortLabel: 'Grok',
+    color: '#ef4444',
+    models: XAI_MODELS,
+  },
+  {
+    id: 'google',
+    label: 'Google Gemini',
+    shortLabel: 'Gemini',
+    color: '#10b981',
+    models: GOOGLE_MODELS,
+  },
+  {
+    id: 'ollama',
+    label: 'Ollama (Local)',
+    shortLabel: 'Ollama',
+    color: '#8b5cf6',
+    models: OLLAMA_MODELS,
   },
 ];
 
@@ -158,6 +179,10 @@ interface ChatAreaProps {
   provider: 'claude' | 'chatgpt';
   anthropicModel?: string;
   openaiModel?: string;
+  /** Resolved model ID for the currently selected provider */
+  chatModelId?: string;
+  /** Discovered Ollama models (overrides static list when available) */
+  discoveredOllamaModels?: ModelDefinition[];
   /** Which providers are configured/available */
   configuredProviders?: {
     'anthropic-cli': boolean;
@@ -165,17 +190,26 @@ interface ChatAreaProps {
     'openai-cli': boolean;
     'openai-api': boolean;
     deepseek: boolean;
+    xai: boolean;
+    google: boolean;
+    ollama: boolean;
   };
   /** Currently selected provider ID (e.g., 'anthropic-cli', 'openai-api') */
   selectedProviderId?: string;
   /** Called when user switches provider/model from the chat header */
-  onProviderModelChange?: (provider: 'claude' | 'chatgpt', providerId: string, modelId: string) => void;
+  onProviderModelChange?: (providerId: string, modelId: string) => void;
   /** Lifted sending state — persists across view changes */
   sending?: boolean;
   onSendingChange?: (sending: boolean) => void;
+  /** Global working directory from Settings (fallback when no per-chat dir set) */
+  globalWorkingDirectory?: string;
+  /** Per-chat working directory (takes priority over global) */
+  chatWorkingDir?: string;
+  /** Called when user changes the per-chat working directory */
+  onChatWorkingDirChange?: (dir: string | null) => void;
   /** Lifted active provider — persists across view changes */
-  activeProviderOverride?: 'claude' | 'chatgpt' | null;
-  onActiveProviderChange?: (provider: 'claude' | 'chatgpt' | null) => void;
+  activeProviderOverride?: string | null;
+  onActiveProviderChange?: (provider: string | null) => void;
 }
 
 const ChatArea: FC<ChatAreaProps> = ({
@@ -190,15 +224,23 @@ const ChatArea: FC<ChatAreaProps> = ({
   provider,
   anthropicModel = 'claude-sonnet-4-20250514',
   openaiModel = 'gpt-5.2-codex',
+  chatModelId,
+  discoveredOllamaModels,
   configuredProviders = {
     'anthropic-cli': true,
     'anthropic-api': true,
     'openai-cli': true,
     'openai-api': true,
     deepseek: false,
+    xai: false,
+    google: false,
+    ollama: false,
   },
   selectedProviderId = 'anthropic-cli',
   onProviderModelChange,
+  globalWorkingDirectory,
+  chatWorkingDir,
+  onChatWorkingDirChange,
   sending: sendingProp,
   onSendingChange,
   activeProviderOverride,
@@ -207,13 +249,13 @@ const ChatArea: FC<ChatAreaProps> = ({
   const [inputValue, setInputValue] = useState('');
   const [showToolAutocomplete, setShowToolAutocomplete] = useState(false);
   const [sendingLocal, setSendingLocal] = useState(false);
-  const [activeProviderLocal, setActiveProviderLocal] = useState<'claude' | 'chatgpt' | null>(null);
+  const [activeProviderLocal, setActiveProviderLocal] = useState<string | null>(null);
 
   // Use lifted state if provided, otherwise fall back to local state
   const sending = sendingProp ?? sendingLocal;
   const setSending = (v: boolean) => { setSendingLocal(v); onSendingChange?.(v); };
   const activeProvider = activeProviderOverride ?? activeProviderLocal;
-  const setActiveProvider = (v: 'claude' | 'chatgpt' | null) => { setActiveProviderLocal(v); onActiveProviderChange?.(v); };
+  const setActiveProvider = (v: string | null) => { setActiveProviderLocal(v); onActiveProviderChange?.(v); };
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   // Chat input history (like bash shell — up/down arrow to cycle through previous entries)
   const inputHistoryRef = useRef<string[]>(
@@ -233,13 +275,21 @@ const ChatArea: FC<ChatAreaProps> = ({
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
+  // Effective provider meta — override Ollama models with discovered ones
+  const effectiveProviderMeta = useMemo(() => {
+    if (!discoveredOllamaModels || discoveredOllamaModels.length === 0) return PROVIDER_META;
+    return PROVIDER_META.map(p =>
+      p.id === 'ollama' ? { ...p, models: discoveredOllamaModels } : p
+    );
+  }, [discoveredOllamaModels]);
+
   // Get current model name for display
-  const currentModel = provider === 'claude' ? anthropicModel : openaiModel;
-  const activeProviderMeta = PROVIDER_META.find((p) => p.id === selectedProviderId);
+  const currentModel = chatModelId || (provider === 'claude' ? anthropicModel : openaiModel);
+  const activeProviderMeta = effectiveProviderMeta.find((p) => p.id === selectedProviderId);
   const activeModelDef = activeProviderMeta?.models.find((m) => m.id === currentModel);
 
   // Available (configured) providers
-  const availableProviders = PROVIDER_META.filter(
+  const availableProviders = effectiveProviderMeta.filter(
     (p) => configuredProviders[p.id as keyof typeof configuredProviders]
   );
 
@@ -407,41 +457,64 @@ const ChatArea: FC<ChatAreaProps> = ({
   };
 
   const callProvider = async (
-    targetProvider: 'claude' | 'chatgpt',
+    provId: string,
     msgs: Message[],
     modePrompt?: string,
     retryCount = 0
   ): Promise<Message> => {
-    setActiveProvider(targetProvider);
+    setActiveProvider(provId);
     const serverSummary = getServerSummary();
 
     let message: Message;
     let toolCalls: any[];
 
     console.log('[ChatArea] callProvider called with:', {
-      targetProvider,
-      openaiAuthMode: openaiClient.getAuthMethod(),
-      anthropicAuthMode: anthropicClient.getAuthMethod(),
+      provId,
+      model: currentModel,
     });
 
-    if (targetProvider === 'chatgpt') {
-      console.log('[ChatArea] Routing to OpenAI client');
-      const result = await openaiClient.chat(msgs, availableTools, openaiModel, modePrompt);
-      message = result.message;
-      toolCalls = result.toolCalls;
-      message.provider = 'chatgpt';
-    } else {
+    const effectiveWorkingDir = chatWorkingDir || localToolsService.getWorkingDirectory() || globalWorkingDirectory || undefined;
+
+    if (provId.startsWith('anthropic')) {
       console.log('[ChatArea] Routing to Anthropic client');
       const result = await anthropicClient.chat(
-        msgs,
-        availableTools,
-        anthropicModel,
-        serverSummary,
-        modePrompt
+        msgs, availableTools, anthropicModel, serverSummary, modePrompt, effectiveWorkingDir
       );
       message = result.message;
       toolCalls = result.toolCalls;
-      message.provider = 'claude';
+      message.provider = provId;
+    } else if (provId.startsWith('openai')) {
+      console.log('[ChatArea] Routing to OpenAI client');
+      const result = await openaiClient.chat(msgs, availableTools, openaiModel, modePrompt, effectiveWorkingDir);
+      message = result.message;
+      toolCalls = result.toolCalls;
+      message.provider = provId;
+    } else if (provId === 'deepseek') {
+      console.log('[ChatArea] Routing to DeepSeek client');
+      const result = await deepseekClient.chat(msgs, availableTools, currentModel, modePrompt, effectiveWorkingDir);
+      message = result.message;
+      toolCalls = result.toolCalls;
+      message.provider = provId;
+    } else if (provId === 'xai') {
+      console.log('[ChatArea] Routing to xAI client');
+      const result = await xaiClient.chat(msgs, availableTools, currentModel, modePrompt, effectiveWorkingDir);
+      message = result.message;
+      toolCalls = result.toolCalls;
+      message.provider = provId;
+    } else if (provId === 'google') {
+      console.log('[ChatArea] Routing to Gemini client');
+      const result = await geminiClient.chat(msgs, availableTools, currentModel, modePrompt, effectiveWorkingDir);
+      message = result.message;
+      toolCalls = result.toolCalls;
+      message.provider = provId;
+    } else if (provId === 'ollama') {
+      console.log('[ChatArea] Routing to Ollama client');
+      const result = await ollamaClient.chat(msgs, availableTools, currentModel, modePrompt, effectiveWorkingDir);
+      message = result.message;
+      toolCalls = result.toolCalls;
+      message.provider = provId;
+    } else {
+      throw new Error(`Unknown provider: ${provId}`);
     }
 
     message.toolCalls = toolCalls;
@@ -453,11 +526,11 @@ const ChatArea: FC<ChatAreaProps> = ({
       message.content.trim().length < 10;
 
     if (isEmptyResponse && retryCount < 2) {
-      console.log(`[ChatArea] Empty response from ${targetProvider}, retrying (attempt ${retryCount + 1})`);
+      console.log(`[ChatArea] Empty response from ${provId}, retrying (attempt ${retryCount + 1})`);
       const insistentPrompt = (modePrompt || '') +
         '\n\nIMPORTANT: You MUST provide a substantive response. Do not end your turn without contributing to the discussion. Share your perspective, even if brief.';
 
-      return callProvider(targetProvider, msgs, insistentPrompt, retryCount + 1);
+      return callProvider(provId, msgs, insistentPrompt, retryCount + 1);
     }
 
     return message;
@@ -467,7 +540,8 @@ const ChatArea: FC<ChatAreaProps> = ({
     if (!inputValue.trim() || sending || !chatId) return;
 
     if (!apiKey) {
-      alert(`Please set your ${provider === 'chatgpt' ? 'OpenAI' : 'Anthropic'} API key or configure CLI auth in settings.`);
+      const providerName = PROVIDER_META.find(p => p.id === selectedProviderId)?.shortLabel || selectedProviderId;
+      alert(`Please configure credentials for ${providerName} in LLM Providers settings.`);
       return;
     }
 
@@ -510,7 +584,7 @@ const ChatArea: FC<ChatAreaProps> = ({
     stopRef.current = false;
 
     try {
-      const message = await callProvider(provider, currentMessages);
+      const message = await callProvider(selectedProviderId, currentMessages);
       onMessagesChange([...currentMessages, message]);
     } catch (error) {
       const errMessage: Message = {
@@ -537,7 +611,7 @@ const ChatArea: FC<ChatAreaProps> = ({
   const handleSelectModel = (providerMeta: ProviderMeta, modelId: string) => {
     setShowModelDropdown(false);
     if (onProviderModelChange) {
-      onProviderModelChange(providerMeta.legacyId, providerMeta.id, modelId);
+      onProviderModelChange(providerMeta.id, modelId);
     }
   };
 
@@ -561,6 +635,48 @@ const ChatArea: FC<ChatAreaProps> = ({
             {activeProviderMeta?.shortLabel || selectedProviderId}
           </span>
           <ChevronDown size={14} className={`model-chevron ${showModelDropdown ? 'open' : ''}`} />
+        </button>
+
+        <button
+          className="chat-dir-indicator"
+          onClick={async () => {
+            try {
+              const selected = await tauriOpen({
+                directory: true,
+                multiple: false,
+                title: 'Select Chat Working Directory',
+                defaultPath: chatWorkingDir || globalWorkingDirectory || undefined,
+              });
+              if (selected && typeof selected === 'string') {
+                onChatWorkingDirChange?.(selected);
+              }
+            } catch (err) {
+              console.error('[ChatArea] Error selecting directory:', err);
+            }
+          }}
+          disabled={sending}
+          title={chatWorkingDir || globalWorkingDirectory || 'Set working directory for this chat'}
+        >
+          <FolderOpen size={14} />
+          <span className="chat-dir-path">
+            {chatWorkingDir
+              ? chatWorkingDir.split('/').slice(-2).join('/')
+              : globalWorkingDirectory
+                ? globalWorkingDirectory.split('/').slice(-2).join('/') + ' (global)'
+                : 'Set directory...'}
+          </span>
+          {chatWorkingDir && (
+            <span
+              className="chat-dir-clear"
+              onClick={(e) => {
+                e.stopPropagation();
+                onChatWorkingDirChange?.(null);
+              }}
+              title="Clear per-chat directory (use global fallback)"
+            >
+              <X size={12} />
+            </span>
+          )}
         </button>
 
         {showModelDropdown && (
@@ -612,7 +728,7 @@ const ChatArea: FC<ChatAreaProps> = ({
         {sending && (
           <div className={`message typing ${activeProvider || ''}`}>
             <div className={`avatar assistant ${activeProvider || ''}`}>
-              {activeProvider === 'claude' ? 'Claude' : activeProvider === 'chatgpt' ? 'ChatGPT' : 'AI'}
+              {PROVIDER_META.find(p => p.id === activeProvider)?.shortLabel || 'AI'}
             </div>
             <div className="message-content">
               <div className="typing-indicator">
@@ -722,9 +838,7 @@ const MessageRow: FC<{ message: Message; servers: MCPServer[] }> = ({ message, s
 
   const getAvatar = () => {
     if (isUser) return 'User';
-    if (provider === 'claude') return 'Claude';
-    if (provider === 'chatgpt') return 'ChatGPT';
-    return 'AI';
+    return PROVIDER_META.find(p => p.id === provider)?.shortLabel || 'AI';
   };
 
   // For user messages with attachments, show only the text part (before file contents)
