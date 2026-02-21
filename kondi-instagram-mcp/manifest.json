@@ -1,0 +1,32 @@
+{
+  "name": "kondi-instagram-mcp",
+  "version": "1.0.0",
+  "description": "MCP server providing Instagram Business Graph API tools",
+  "entrypoint": "dist/index.js",
+  "runtime": "node",
+  "run": {
+    "command": "node",
+    "args": ["dist/index.js"],
+    "env": {
+      "KONDI_INSTAGRAM_ACCESS_TOKEN": "",
+      "KONDI_INSTAGRAM_USER_ID": ""
+    }
+  },
+  "tools": [
+    {
+      "name": "ig_publish_photo",
+      "description": "Publish a photo to Instagram Business account. Two-step process: creates a media container then publishes it."
+    },
+    {
+      "name": "ig_get_media",
+      "description": "Get recent media posts from an Instagram Business account with captions, types, URLs, and timestamps."
+    },
+    {
+      "name": "ig_get_post_insights",
+      "description": "Get insights (impressions, reach, engagement) for a specific Instagram media post."
+    }
+  ],
+  "requirements": {
+    "credentials": ["KONDI_INSTAGRAM_ACCESS_TOKEN", "KONDI_INSTAGRAM_USER_ID"]
+  }
+}

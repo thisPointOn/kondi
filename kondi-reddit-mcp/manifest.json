@@ -1,0 +1,35 @@
+{
+  "name": "kondi-reddit-mcp",
+  "version": "1.0.0",
+  "description": "MCP server providing Reddit API tools for posts, comments, and browsing",
+  "entrypoint": "dist/index.js",
+  "runtime": "node",
+  "run": {
+    "command": "node",
+    "args": ["dist/index.js"],
+    "env": {
+      "KONDI_REDDIT_ACCESS_TOKEN": ""
+    }
+  },
+  "tools": [
+    {
+      "name": "reddit_submit_post",
+      "description": "Submit a new post to a subreddit. Supports self (text) posts and link posts."
+    },
+    {
+      "name": "reddit_get_posts",
+      "description": "Get hot posts from a subreddit. Returns titles, scores, authors, and URLs."
+    },
+    {
+      "name": "reddit_get_comments",
+      "description": "Get comments on a specific Reddit post. Returns comment tree with authors and scores."
+    },
+    {
+      "name": "reddit_submit_comment",
+      "description": "Submit a comment on a post or reply to another comment."
+    }
+  ],
+  "requirements": {
+    "auth": "Reddit OAuth2 access token required"
+  }
+}

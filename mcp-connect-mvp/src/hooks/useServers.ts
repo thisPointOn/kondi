@@ -3,6 +3,7 @@ import { mcpClient } from '../services/mcpClient';
 import { mcpCliSync } from '../services/cli-providers';
 import { localToolsService, LOCAL_SERVER_ID, LOCAL_TOOLS } from '../services/localTools';
 import { initializeSearchService, getSearchServiceStatus } from '../services/searchService';
+import { registerBuiltinServers } from '../services/builtinServers';
 import * as proxyService from '../services/proxyService';
 import type { MCPServer, MCPTool } from '../types/mcp';
 import type { StartupValidationReport } from '../services/startupValidator';
@@ -126,6 +127,9 @@ export function useServers({ hasLoadedKeys, validationReport }: UseServersParams
         console.error('Failed to load saved servers:', e);
       }
     }
+
+    // Register built-in social MCP servers (skips any already restored above)
+    registerBuiltinServers(mcpClient);
 
     // Auto-reconnect previously connected servers
     if (serversToAutoConnect.length > 0) {

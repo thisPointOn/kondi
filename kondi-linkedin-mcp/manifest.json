@@ -1,0 +1,32 @@
+{
+  "name": "kondi-linkedin-mcp",
+  "version": "1.0.0",
+  "description": "MCP server providing LinkedIn API tools for posting, profile, and connections",
+  "entrypoint": "dist/index.js",
+  "runtime": "node",
+  "run": {
+    "command": "node",
+    "args": ["dist/index.js"],
+    "env": {
+      "KONDI_LINKEDIN_ACCESS_TOKEN": "",
+      "KONDI_LINKEDIN_PERSON_ID": ""
+    }
+  },
+  "tools": [
+    {
+      "name": "linkedin_create_post",
+      "description": "Create a new LinkedIn post (UGC Post) on behalf of the authenticated user. Supports text content with configurable visibility."
+    },
+    {
+      "name": "linkedin_get_profile",
+      "description": "Get the current authenticated user's LinkedIn profile information."
+    },
+    {
+      "name": "linkedin_get_connections",
+      "description": "Get the authenticated user's LinkedIn connections list with pagination support."
+    }
+  ],
+  "requirements": {
+    "env": ["KONDI_LINKEDIN_ACCESS_TOKEN", "KONDI_LINKEDIN_PERSON_ID"]
+  }
+}

@@ -543,6 +543,16 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
     [servers],
   );
 
+  // Split servers into built-in (kondi-* prefixed) and user-added
+  const builtinServers = useMemo(
+    () => sortedServers.filter((s) => s.id.startsWith('kondi-')),
+    [sortedServers],
+  );
+  const userServers = useMemo(
+    () => sortedServers.filter((s) => !s.id.startsWith('kondi-')),
+    [sortedServers],
+  );
+
   const resetForm = () => {
     setNewServerName('');
     setNewServerUrl('');
@@ -1152,26 +1162,49 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
       </div>
 
       <div className="servers-list">
-        {/* Local Tools - always available */}
-        <LocalToolsCard onToolClick={onToolClick} />
+        {/* Built-in section */}
+        <div className="servers-section">
+          <div className="servers-section-header">
+            <span className="servers-section-label">Built-in</span>
+          </div>
+          <LocalToolsCard onToolClick={onToolClick} />
+          {builtinServers.map((server) => (
+            <ServerCard
+              key={server.id}
+              server={server}
+              onToolClick={onToolClick}
+              onConnect={() => onServerReconnect(server.id)}
+              onDisconnect={() => onServerDisconnect(server.id)}
+              onUpdateServer={onServerUpdate}
+              onReauthenticate={onServerReauthenticate}
+              connectDeadline={connectDeadlines[server.id]}
+            />
+          ))}
+        </div>
 
-        {/* MCP Servers */}
-        {sortedServers.map((server) => (
-          <ServerCard
-            key={server.id}
-            server={server}
-            onToolClick={onToolClick}
-            onConnect={() => onServerReconnect(server.id)}
-            onDisconnect={() => onServerDisconnect(server.id)}
-            onDelete={() => onServerDelete(server.id)}
-            onUpdateServer={onServerUpdate}
-            onReauthenticate={onServerReauthenticate}
-            connectDeadline={connectDeadlines[server.id]}
-          />
-        ))}
+        {/* User Added section */}
+        <div className="servers-section">
+          <div className="servers-section-header">
+            <span className="servers-section-label">User Added</span>
+          </div>
+          {userServers.map((server) => (
+            <ServerCard
+              key={server.id}
+              server={server}
+              onToolClick={onToolClick}
+              onConnect={() => onServerReconnect(server.id)}
+              onDisconnect={() => onServerDisconnect(server.id)}
+              onDelete={() => onServerDelete(server.id)}
+              onUpdateServer={onServerUpdate}
+              onReauthenticate={onServerReauthenticate}
+              connectDeadline={connectDeadlines[server.id]}
+            />
+          ))}
+          {userServers.length === 0 && (
+            <div className="servers-section-empty">No servers added yet. Click + to add one.</div>
+          )}
+        </div>
       </div>
-
-      {servers.length === 0 && <EmptyState />}
     </aside>
   );
 };
@@ -1181,7 +1214,7 @@ const ServerCard: FC<{
   onToolClick: (toolName: string) => void;
   onConnect: () => void;
   onDisconnect: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
   onUpdateServer?: (server: MCPServer) => void;
   onReauthenticate?: (server: MCPServer) => Promise<void>;
   connectDeadline?: number;
@@ -1338,9 +1371,11 @@ const ServerCard: FC<{
                 <FileText size={12} />
                 {showLogs ? 'Hide Logs' : 'View Logs'}
               </button>
-              <button className="menu-item danger" onClick={onDelete}>
-                Delete
-              </button>
+              {onDelete && (
+                <button className="menu-item danger" onClick={onDelete}>
+                  Delete
+                </button>
+              )}
             </div>
           )}
         </div>

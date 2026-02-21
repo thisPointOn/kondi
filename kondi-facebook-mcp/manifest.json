@@ -1,0 +1,36 @@
+{
+  "name": "kondi-facebook-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Facebook/Meta Graph API — post, read, and delete page content",
+  "entrypoint": "dist/index.js",
+  "runtime": "node",
+  "run": {
+    "command": "node",
+    "args": ["dist/index.js"],
+    "env": {
+      "KONDI_FACEBOOK_PAGE_ACCESS_TOKEN": "",
+      "KONDI_FACEBOOK_PAGE_ID": ""
+    }
+  },
+  "tools": [
+    {
+      "name": "fb_page_post",
+      "description": "Publish a post to a Facebook Page's feed. Supports text messages and optional link attachments."
+    },
+    {
+      "name": "fb_get_page_posts",
+      "description": "Retrieve recent posts from a Facebook Page's feed with configurable limit."
+    },
+    {
+      "name": "fb_get_post",
+      "description": "Get details of a specific Facebook post including message, created time, and like count."
+    },
+    {
+      "name": "fb_delete_post",
+      "description": "Delete a specific Facebook post by its post ID."
+    }
+  ],
+  "requirements": {
+    "facebook_page_access_token": true
+  }
+}
