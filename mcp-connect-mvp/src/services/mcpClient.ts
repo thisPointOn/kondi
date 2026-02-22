@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core';
 import type { MCPServer, MCPTool, OAuthDiscovery, GithubInstallResult, CommandOutput, McpManifest } from '../types/mcp';
 import * as proxyService from './proxyService';
 
+declare const __PROJECT_ROOT__: string;
+
 interface McpResponse {
   body: string;
   session_id: string | null;
@@ -757,7 +759,7 @@ export class MCPClient {
           // Update server with regenerated metadata
           server.metadata = {
             ...server.metadata,
-            serverPath: server.metadata?.serverPath || '/home/erik/Documents/MCP_Connector_App/kondi-search-mcp',
+            serverPath: server.metadata?.serverPath || (import.meta.env.DEV ? `${__PROJECT_ROOT__}/kondi-search-mcp` : '~/.local/share/kondi/mcp-servers/kondi-search-mcp'),
             manifest: searchManifest,
             managed: true,
             autoStart: true,
