@@ -23,3 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 openclaw/
+
+# Personal dev artifacts
+launch-kondi.sh
+neurosity-crown-pipeline.json

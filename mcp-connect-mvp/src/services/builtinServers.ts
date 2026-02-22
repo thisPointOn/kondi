@@ -11,9 +11,11 @@ import type { MCPClient } from './mcpClient';
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
+declare const __PROJECT_ROOT__: string;
+
 function basePath(pkg: string): string {
   if (import.meta.env.DEV) {
-    return `/home/erik/Documents/MCP_Connector_App/${pkg}`;
+    return `${__PROJECT_ROOT__}/${pkg}`;
   }
   return `~/.local/share/kondi/mcp-servers/${pkg}`;
 }

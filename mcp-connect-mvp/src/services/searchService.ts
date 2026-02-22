@@ -332,19 +332,12 @@ export function getSearchServerConfig(): MCPServer {
 /**
  * Get the path to the kondi-search-mcp server
  */
+declare const __PROJECT_ROOT__: string;
+
 function getSearchServerPath(): string {
-  // For development, use the sibling directory (absolute path works better)
-  // For production, this would be in ~/.local/share/kondi/mcp-servers/kondi-search-mcp
-  // or bundled with the app
-
-  // Check environment for development path
   if (import.meta.env.DEV) {
-    // Development: use absolute path to sibling directory
-    // This assumes the dev server is run from mcp-connect-mvp
-    return '/home/erik/Documents/MCP_Connector_App/kondi-search-mcp';
+    return `${__PROJECT_ROOT__}/kondi-search-mcp`;
   }
-
-  // Production: use data directory
   return '~/.local/share/kondi/mcp-servers/kondi-search-mcp';
 }
 

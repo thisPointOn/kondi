@@ -5109,8 +5109,18 @@ engines:
 // Gemini (Google Cloud Code Assist) OAuth + API Proxy
 // ============================================================================
 
-const GEMINI_CLIENT_ID: &str = "REDACTED_CLIENT_ID";
-const GEMINI_CLIENT_SECRET: &str = "REDACTED_CLIENT_SECRET";
+// Gemini OAuth credentials — reads from env vars, falls back to built-in defaults.
+// NOTE: For native/desktop OAuth apps, Google considers client secrets "public"
+// (they ship embedded in every installed binary). These defaults match the Gemini
+// CLI's own registered OAuth client. Override via env if using your own GCP project.
+fn gemini_client_id() -> String {
+    std::env::var("KONDI_GEMINI_CLIENT_ID")
+        .unwrap_or_else(|_| "REDACTED_CLIENT_ID".to_string())
+}
+fn gemini_client_secret() -> String {
+    std::env::var("KONDI_GEMINI_CLIENT_SECRET")
+        .unwrap_or_else(|_| "REDACTED_CLIENT_SECRET".to_string())
+}
 const GEMINI_AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GEMINI_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const GEMINI_CALLBACK_PORT: u16 = 8085;
@@ -5148,10 +5158,13 @@ pub async fn start_gemini_oauth() -> Result<GeminiOAuthResult, String> {
         .map(char::from)
         .collect();
 
+    let client_id = gemini_client_id();
+    let client_secret = gemini_client_secret();
+
     let auth_url = format!(
         "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}&access_type=offline&prompt=consent",
         GEMINI_AUTH_ENDPOINT,
-        GEMINI_CLIENT_ID,
+        client_id,
         urlencoding::encode(&redirect_uri),
         urlencoding::encode(GEMINI_SCOPES),
         code_challenge,
@@ -5185,8 +5198,8 @@ pub async fn start_gemini_oauth() -> Result<GeminiOAuthResult, String> {
         ("grant_type", "authorization_code"),
         ("code", code.as_str()),
         ("redirect_uri", redirect_uri.as_str()),
-        ("client_id", GEMINI_CLIENT_ID),
-        ("client_secret", GEMINI_CLIENT_SECRET),
+        ("client_id", client_id.as_str()),
+        ("client_secret", client_secret.as_str()),
         ("code_verifier", code_verifier.as_str()),
     ];
 
@@ -5313,12 +5326,14 @@ pub async fn start_gemini_oauth() -> Result<GeminiOAuthResult, String> {
 /// Refresh a Gemini OAuth token
 #[tauri::command]
 pub async fn refresh_gemini_token(refresh_token: String) -> Result<OAuthTokens, String> {
+    let client_id = gemini_client_id();
+    let client_secret = gemini_client_secret();
     let client = reqwest::Client::new();
     let params = [
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token.as_str()),
-        ("client_id", GEMINI_CLIENT_ID),
-        ("client_secret", GEMINI_CLIENT_SECRET),
+        ("client_id", client_id.as_str()),
+        ("client_secret", client_secret.as_str()),
     ];
 
     let resp = client
