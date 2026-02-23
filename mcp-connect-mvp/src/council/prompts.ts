@@ -338,13 +338,16 @@ export interface WorkerPermissions {
 }
 
 export function getMinimalWorkerSystemPrompt(permissions?: WorkerPermissions, stepType?: 'planning' | 'coding'): string {
-  if (permissions?.writePermissions && permissions.workingDirectory) {
-    const scopeNote = permissions.directoryConstrained
-      ? `You have WRITE PERMISSIONS to the directory: ${permissions.workingDirectory}
+  if (permissions?.writePermissions) {
+    const scopeNote = permissions.workingDirectory
+      ? (permissions.directoryConstrained
+        ? `You have WRITE PERMISSIONS to the directory: ${permissions.workingDirectory}
 All file operations MUST be within this directory. Do not write outside it.`
-      : `You have WRITE PERMISSIONS to the file system.
+        : `You have WRITE PERMISSIONS to the file system.
 Working directory: ${permissions.workingDirectory}
-You may write to any location on the system.`;
+You may write to any location on the system.`)
+      : `You have WRITE PERMISSIONS to the file system.
+You may read and write files as needed.`;
 
     if (stepType === 'planning') {
       return `You are the Worker agent — a planning specialist. Your job is to produce a DETAILED PLAN DOCUMENT, NOT code.
@@ -848,7 +851,7 @@ Be concise — 3-5 sentences max. Focus on actionable feedback, not style prefer
  * Worker execution - Section 9.7
  */
 export function buildWorkerExecutionPrompt(directive: string, permissions?: WorkerPermissions, stepType?: 'planning' | 'coding'): string {
-  if (permissions?.writePermissions && permissions.workingDirectory) {
+  if (permissions?.writePermissions) {
     if (stepType === 'planning') {
       return `DIRECTIVE:
 ${directive}
@@ -943,7 +946,7 @@ export function buildWorkerRevisionPrompt(
   permissions?: WorkerPermissions,
   stepType?: 'planning' | 'coding',
 ): string {
-  if (permissions?.writePermissions && permissions.workingDirectory) {
+  if (permissions?.writePermissions) {
     if (stepType === 'planning') {
       return `DIRECTIVE:
 ${directive}
@@ -1137,13 +1140,15 @@ export function buildModuleDirectivePrompt(
     ? `\nDependencies: This module depends on: ${module.dependencies.join(', ')}\nImport from the interfaces above — do not reimplement them.\n`
     : '';
 
-  const scopeNote = permissions?.writePermissions && permissions.workingDirectory
+  const scopeNote = permissions?.writePermissions
     ? `\nIMPORTANT: You have WRITE PERMISSIONS. USE YOUR TOOLS to create and edit files on disk.
 Use Bash to install dependencies (npm install, pip install, cargo add, etc.) if needed.
 Do NOT output code blocks in your response — actually write the files.
-${permissions.directoryConstrained
-  ? `All file operations MUST be within: ${permissions.workingDirectory}`
-  : `Working directory: ${permissions.workingDirectory}`}\n`
+${permissions.workingDirectory
+  ? (permissions.directoryConstrained
+    ? `All file operations MUST be within: ${permissions.workingDirectory}`
+    : `Working directory: ${permissions.workingDirectory}`)
+  : 'You may read and write files as needed.'}\n`
     : `\nYou do NOT have write permissions. Output all code in labeled code blocks:\n\`\`\`filename: path/to/file.ts\n// contents\n\`\`\`\n`;
 
   return `## MODULE: ${module.name}
@@ -1260,12 +1265,14 @@ export function buildDebugFixPrompt(
   moduleName?: string,
   moduleFiles?: string[],
 ): string {
-  const scopeNote = permissions?.writePermissions && permissions.workingDirectory
+  const scopeNote = permissions?.writePermissions
     ? `\nIMPORTANT: You have WRITE PERMISSIONS. USE YOUR TOOLS to edit the files on disk.
 Do NOT just describe fixes — actually apply them.
-${permissions.directoryConstrained
-  ? `All file operations MUST be within: ${permissions.workingDirectory}`
-  : `Working directory: ${permissions.workingDirectory}`}\n`
+${permissions.workingDirectory
+  ? (permissions.directoryConstrained
+    ? `All file operations MUST be within: ${permissions.workingDirectory}`
+    : `Working directory: ${permissions.workingDirectory}`)
+  : 'You may read and write files as needed.'}\n`
     : `\nYou do NOT have write permissions. Output all fixes in labeled code blocks.\n`;
 
   const moduleContext = moduleName
@@ -1311,12 +1318,14 @@ export function buildRevisionFromReviewPrompt(
   moduleDirective: string,
   permissions?: WorkerPermissions,
 ): string {
-  const scopeNote = permissions?.writePermissions && permissions.workingDirectory
+  const scopeNote = permissions?.writePermissions
     ? `\nIMPORTANT: You have WRITE PERMISSIONS. USE YOUR TOOLS to edit the files on disk.
 Do NOT just describe changes — actually apply them.
-${permissions.directoryConstrained
-  ? `All file operations MUST be within: ${permissions.workingDirectory}`
-  : `Working directory: ${permissions.workingDirectory}`}\n`
+${permissions.workingDirectory
+  ? (permissions.directoryConstrained
+    ? `All file operations MUST be within: ${permissions.workingDirectory}`
+    : `Working directory: ${permissions.workingDirectory}`)
+  : 'You may read and write files as needed.'}\n`
     : `\nYou do NOT have write permissions. Output all revised code in labeled code blocks.\n`;
 
   return `## ORIGINAL DIRECTIVE
