@@ -7,12 +7,14 @@ const DEFAULT_CONFIG: Config = {
   api: {
     base_url: 'https://oauth.reddit.com',
     timeout_ms: 10000,
-    user_agent: 'kondi-reddit-mcp/1.0.0',
+    user_agent: 'nodejs:kondi-reddit-mcp:1.0.0 (by /u/kondi-user)',
   },
   auth: {
     access_token: '',
     client_id: '',
     client_secret: '',
+    username: '',
+    password: '',
   },
   server: {
     transport: 'stdio',
@@ -53,6 +55,12 @@ function applyEnvOverrides(config: Config): Config {
   }
   if (env.KONDI_REDDIT_CLIENT_SECRET) {
     config.auth.client_secret = env.KONDI_REDDIT_CLIENT_SECRET;
+  }
+  if (env.KONDI_REDDIT_USERNAME) {
+    config.auth.username = env.KONDI_REDDIT_USERNAME;
+  }
+  if (env.KONDI_REDDIT_PASSWORD) {
+    config.auth.password = env.KONDI_REDDIT_PASSWORD;
   }
 
   // API

@@ -1,5 +1,8 @@
+import OAuth from 'oauth-1.0a';
+import crypto from 'crypto';
 import type {
   Config,
+  AuthConfig,
   TweetResponse,
   TweetsResponse,
   PostTweetResponse,
@@ -14,11 +17,44 @@ export class XClient {
   private baseUrl: string;
   private timeout: number;
   private bearerToken: string;
+  private authConfig: AuthConfig;
+  private oauth: OAuth | null = null;
 
   constructor(config: Config) {
     this.baseUrl = config.api.base_url.replace(/\/$/, '');
     this.timeout = config.api.timeout_ms;
     this.bearerToken = config.auth.bearer_token;
+    this.authConfig = config.auth;
+
+    if (config.auth.consumer_key && config.auth.consumer_secret) {
+      this.oauth = new OAuth({
+        consumer: {
+          key: config.auth.consumer_key,
+          secret: config.auth.consumer_secret,
+        },
+        signature_method: 'HMAC-SHA1',
+        hash_function(base_string: string, key: string) {
+          return crypto.createHmac('sha1', key).update(base_string).digest('base64');
+        },
+      });
+    }
+  }
+
+  private getAuthHeader(method: string, url: string): string {
+    if (
+      method !== 'GET' &&
+      this.oauth &&
+      this.authConfig.access_token &&
+      this.authConfig.access_token_secret
+    ) {
+      const token = {
+        key: this.authConfig.access_token,
+        secret: this.authConfig.access_token_secret,
+      };
+      const authData = this.oauth.authorize({ url, method, data: {} }, token);
+      return this.oauth.toHeader(authData).Authorization;
+    }
+    return `Bearer ${this.bearerToken}`;
   }
 
   private async request<T>(
@@ -26,9 +62,19 @@ export class XClient {
     path: string,
     body?: Record<string, unknown>
   ): Promise<T> {
-    if (!this.bearerToken) {
+    const isWriteOp = method !== 'GET';
+    const hasOAuth = this.oauth && this.authConfig.access_token && this.authConfig.access_token_secret;
+
+    if (isWriteOp && !hasOAuth) {
+      if (!this.bearerToken) {
+        throw new Error(
+          'No authentication configured. Set KONDI_X_BEARER_TOKEN for read operations, or set KONDI_X_CONSUMER_KEY, KONDI_X_CONSUMER_SECRET, KONDI_X_ACCESS_TOKEN, and KONDI_X_ACCESS_TOKEN_SECRET for write operations.'
+        );
+      }
+      // Fall through to use Bearer token (will likely fail for write ops, but let the API return the error)
+    } else if (!isWriteOp && !this.bearerToken && !hasOAuth) {
       throw new Error(
-        'Bearer token not configured. Set KONDI_X_BEARER_TOKEN environment variable or configure in ~/.config/kondi-x/config.json'
+        'No authentication configured. Set KONDI_X_BEARER_TOKEN environment variable or configure in ~/.config/kondi-x/config.json'
       );
     }
 
@@ -39,7 +85,7 @@ export class XClient {
 
     try {
       const headers: Record<string, string> = {
-        Authorization: `Bearer ${this.bearerToken}`,
+        Authorization: this.getAuthHeader(method, url),
         'Content-Type': 'application/json',
       };
 

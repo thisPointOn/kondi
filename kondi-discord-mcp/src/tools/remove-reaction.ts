@@ -9,7 +9,7 @@ const removeReactionSchema = {
   emoji: z
     .string()
     .describe(
-      "The emoji to remove. Should be URL-encoded (e.g. '%F0%9F%91%8D' for thumbs up, or 'custom_emoji:id' for custom emoji)."
+      'The emoji to remove. Use Unicode emoji (e.g., "\u{1F44D}") or custom emoji format "name:id".'
     ),
 };
 
@@ -18,7 +18,7 @@ export function registerRemoveReactionTool(server: McpServer, config: Config): v
 
   server.tool(
     'discord_remove_reaction',
-    "Remove your bot's reaction from a message. The emoji should be URL-encoded (e.g. '%F0%9F%91%8D' for thumbs up, or 'custom_emoji:id' for custom emoji).",
+    "Remove your bot's reaction from a message. Use Unicode emoji (e.g. thumbs up) or custom emoji format 'name:id'.",
     removeReactionSchema,
     async ({ channel_id, message_id, emoji }) => {
       if (!client.hasToken()) {

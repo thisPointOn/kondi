@@ -45,6 +45,22 @@ function applyEnvOverrides(config: Config): Config {
     config.auth.bearer_token = env.KONDI_X_BEARER_TOKEN;
   }
 
+  if (env.KONDI_X_CONSUMER_KEY) {
+    config.auth.consumer_key = env.KONDI_X_CONSUMER_KEY;
+  }
+
+  if (env.KONDI_X_CONSUMER_SECRET) {
+    config.auth.consumer_secret = env.KONDI_X_CONSUMER_SECRET;
+  }
+
+  if (env.KONDI_X_ACCESS_TOKEN) {
+    config.auth.access_token = env.KONDI_X_ACCESS_TOKEN;
+  }
+
+  if (env.KONDI_X_ACCESS_TOKEN_SECRET) {
+    config.auth.access_token_secret = env.KONDI_X_ACCESS_TOKEN_SECRET;
+  }
+
   if (env.KONDI_X_BASE_URL) {
     config.api.base_url = env.KONDI_X_BASE_URL;
   }

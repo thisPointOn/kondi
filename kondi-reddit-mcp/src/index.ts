@@ -50,12 +50,14 @@ Options:
   --help, -h          Show this help message
 
 Environment Variables:
-  KONDI_REDDIT_ACCESS_TOKEN    Reddit OAuth2 access token (required)
-  KONDI_REDDIT_CLIENT_ID       Reddit app client ID
-  KONDI_REDDIT_CLIENT_SECRET   Reddit app client secret
+  KONDI_REDDIT_CLIENT_ID       Reddit app client ID (for auto token acquisition)
+  KONDI_REDDIT_CLIENT_SECRET   Reddit app client secret (for auto token acquisition)
+  KONDI_REDDIT_USERNAME        Reddit username (for auto token acquisition)
+  KONDI_REDDIT_PASSWORD        Reddit password (for auto token acquisition)
+  KONDI_REDDIT_ACCESS_TOKEN    Reddit OAuth2 access token (alternative to above)
   KONDI_REDDIT_BASE_URL        Reddit API base URL (default: https://oauth.reddit.com)
   KONDI_REDDIT_TIMEOUT_MS      Request timeout in ms (default: 10000)
-  KONDI_REDDIT_USER_AGENT      User-Agent header (default: kondi-reddit-mcp/1.0.0)
+  KONDI_REDDIT_USER_AGENT      User-Agent header
   KONDI_REDDIT_TRANSPORT       Transport mode
   KONDI_REDDIT_PORT            SSE port
   KONDI_REDDIT_LOG_LEVEL       Log level: debug, info, warn, error
@@ -116,7 +118,14 @@ Tools:
 
   log(`Starting kondi-reddit-mcp v${VERSION}`);
   log(`  Transport: ${transport}`);
-  log(`  Auth: ${config.auth.access_token ? 'configured' : 'NOT configured (set KONDI_REDDIT_ACCESS_TOKEN)'}`);
+  const hasPasswordGrant = !!(config.auth.client_id && config.auth.client_secret && config.auth.username && config.auth.password);
+  const hasManualToken = !!config.auth.access_token;
+  const authStatus = hasPasswordGrant
+    ? 'configured (auto token via password grant)'
+    : hasManualToken
+      ? 'configured (manual access token)'
+      : 'NOT configured (set KONDI_REDDIT_CLIENT_ID + CLIENT_SECRET + USERNAME + PASSWORD, or set KONDI_REDDIT_ACCESS_TOKEN)';
+  log(`  Auth: ${authStatus}`);
   log(`  Tools: reddit_submit_post, reddit_get_posts, reddit_get_comments, reddit_submit_comment, reddit_search, reddit_get_subreddit_info, reddit_get_me, reddit_vote, reddit_get_user, reddit_get_post_detail, reddit_save, reddit_get_saved, reddit_get_subreddit_rules, reddit_delete`);
 
   // Start appropriate transport
@@ -146,11 +155,13 @@ Tools:
 
       // Health endpoint
       if (req.url === '/health') {
+        const healthHasPasswordGrant = !!(config.auth.client_id && config.auth.client_secret && config.auth.username && config.auth.password);
+        const healthHasManualToken = !!config.auth.access_token;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
             status: 'healthy',
-            auth: config.auth.access_token ? 'configured' : 'missing',
+            auth: healthHasPasswordGrant ? 'password_grant' : healthHasManualToken ? 'manual_token' : 'missing',
             version: VERSION,
           })
         );

@@ -14,6 +14,7 @@ export class LinkedInClient {
   private getHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
     return {
       'Authorization': `Bearer ${this.accessToken}`,
+      'LinkedIn-Version': '202401',
       'X-Restli-Protocol-Version': '2.0.0',
       'Content-Type': 'application/json',
       ...extraHeaders,

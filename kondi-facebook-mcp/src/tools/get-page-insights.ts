@@ -25,7 +25,7 @@ export function registerGetPageInsightsTool(server: McpServer, config: Config): 
 
   server.tool(
     'fb_get_page_insights',
-    'Get Facebook page analytics including impressions, engaged users, total fans, and page views. Data is broken down by the selected time period.',
+    'Get Facebook page analytics including unique impressions, engaged users, page follows, and page views. Data is broken down by the selected time period.',
     getPageInsightsSchema,
     async ({ page_id, period = 'day', date_preset = 'last_7d' }) => {
       const pageId = page_id || client.getDefaultPageId();

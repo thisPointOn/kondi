@@ -1,7 +1,7 @@
 {
   "name": "kondi",
   "private": true,
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "version": "0.0.0",
   "type": "module",
   "scripts": {
@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.3",
-"@tauri-apps/api": "^2.9.1",
+    "@tauri-apps/api": "^2.9.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",

@@ -27,7 +27,8 @@ interface BuiltinDef {
   name: string;
   pkg: string;
   description: string;
-  envKey: string;
+  /** Credential / config env vars the server needs (key → default value). */
+  env: Record<string, string>;
   icon: string;
 }
 
@@ -37,7 +38,13 @@ const BUILTIN_DEFS: BuiltinDef[] = [
     name: 'X / Twitter',
     pkg: 'kondi-x-mcp',
     description: 'Post tweets, search, and manage your X account',
-    envKey: 'KONDI_X_BEARER_TOKEN',
+    env: {
+      KONDI_X_BEARER_TOKEN: '',
+      KONDI_X_CONSUMER_KEY: '',
+      KONDI_X_CONSUMER_SECRET: '',
+      KONDI_X_ACCESS_TOKEN: '',
+      KONDI_X_ACCESS_TOKEN_SECRET: '',
+    },
     icon: '🐦',
   },
   {
@@ -45,7 +52,7 @@ const BUILTIN_DEFS: BuiltinDef[] = [
     name: 'Discord',
     pkg: 'kondi-discord-mcp',
     description: 'Send messages, read channels, and manage reactions',
-    envKey: 'KONDI_DISCORD_BOT_TOKEN',
+    env: { KONDI_DISCORD_BOT_TOKEN: '' },
     icon: '💬',
   },
   {
@@ -53,7 +60,10 @@ const BUILTIN_DEFS: BuiltinDef[] = [
     name: 'LinkedIn',
     pkg: 'kondi-linkedin-mcp',
     description: 'Create posts and view your professional profile',
-    envKey: 'KONDI_LINKEDIN_ACCESS_TOKEN',
+    env: {
+      KONDI_LINKEDIN_ACCESS_TOKEN: '',
+      KONDI_LINKEDIN_PERSON_ID: '',
+    },
     icon: '💼',
   },
   {
@@ -61,7 +71,10 @@ const BUILTIN_DEFS: BuiltinDef[] = [
     name: 'Facebook',
     pkg: 'kondi-facebook-mcp',
     description: 'Manage page posts and content',
-    envKey: 'KONDI_FACEBOOK_PAGE_ACCESS_TOKEN',
+    env: {
+      KONDI_FACEBOOK_PAGE_ACCESS_TOKEN: '',
+      KONDI_FACEBOOK_PAGE_ID: '',
+    },
     icon: '📘',
   },
   {
@@ -69,7 +82,10 @@ const BUILTIN_DEFS: BuiltinDef[] = [
     name: 'Instagram',
     pkg: 'kondi-instagram-mcp',
     description: 'Publish photos and view post insights',
-    envKey: 'KONDI_INSTAGRAM_ACCESS_TOKEN',
+    env: {
+      KONDI_INSTAGRAM_ACCESS_TOKEN: '',
+      KONDI_INSTAGRAM_USER_ID: '',
+    },
     icon: '📷',
   },
   {
@@ -77,7 +93,12 @@ const BUILTIN_DEFS: BuiltinDef[] = [
     name: 'Reddit',
     pkg: 'kondi-reddit-mcp',
     description: 'Submit posts, read subreddits, and comment',
-    envKey: 'KONDI_REDDIT_ACCESS_TOKEN',
+    env: {
+      KONDI_REDDIT_CLIENT_ID: '',
+      KONDI_REDDIT_CLIENT_SECRET: '',
+      KONDI_REDDIT_USERNAME: '',
+      KONDI_REDDIT_PASSWORD: '',
+    },
     icon: '🤖',
   },
   {
@@ -85,7 +106,7 @@ const BUILTIN_DEFS: BuiltinDef[] = [
     name: 'Telegram',
     pkg: 'kondi-telegram-mcp',
     description: 'Send messages, photos, and manage chats',
-    envKey: 'KONDI_TELEGRAM_BOT_TOKEN',
+    env: { KONDI_TELEGRAM_BOT_TOKEN: '' },
     icon: '✈️',
   },
   {
@@ -93,7 +114,7 @@ const BUILTIN_DEFS: BuiltinDef[] = [
     name: 'Slack',
     pkg: 'kondi-slack-mcp',
     description: 'Post messages, list channels, and add reactions',
-    envKey: 'KONDI_SLACK_BOT_TOKEN',
+    env: { KONDI_SLACK_BOT_TOKEN: '' },
     icon: '📨',
   },
   {
@@ -101,7 +122,7 @@ const BUILTIN_DEFS: BuiltinDef[] = [
     name: 'Git',
     pkg: 'kondi-git-mcp',
     description: 'View status, log, diff, commit, push, branch, and more',
-    envKey: 'KONDI_GIT_WORKING_DIR',
+    env: { KONDI_GIT_WORKING_DIR: '' },
     icon: '🔀',
   },
 ];
@@ -131,7 +152,7 @@ function toServerConfig(def: BuiltinDef): MCPServer {
         run: {
           command: 'node',
           args: ['dist/index.js'],
-          env: { [def.envKey]: '' },
+          env: { ...def.env },
         },
       },
     },
@@ -140,16 +161,43 @@ function toServerConfig(def: BuiltinDef): MCPServer {
 
 /**
  * Register all built-in social MCP servers with the client.
- * Skips any that are already registered (e.g. restored from localStorage).
+ * For already-registered servers, merges any new env var keys from the
+ * current definition (preserving user-entered values) so that credential
+ * fields added in later versions always appear in the UI.
  */
 export function registerBuiltinServers(mcpClient: MCPClient): void {
-  const existing = new Set(mcpClient.getAllServers().map(s => s.id));
+  const existingMap = new Map(mcpClient.getAllServers().map(s => [s.id, s]));
 
   for (const def of BUILTIN_DEFS) {
-    if (existing.has(def.id)) {
-      console.log(`[builtinServers] ${def.id} already registered, skipping`);
+    const existing = existingMap.get(def.id);
+
+    if (existing) {
+      const existingEnv: Record<string, string> = existing.metadata?.manifest?.run?.env || {};
+      const hasNewKeys = Object.keys(def.env).some(k => !(k in existingEnv));
+
+      if (hasNewKeys) {
+        // Merge: new keys from def (empty string) + existing values take precedence
+        const mergedEnv = { ...def.env, ...existingEnv };
+        mcpClient.updateServer({
+          ...existing,
+          metadata: {
+            ...existing.metadata,
+            manifest: {
+              ...existing.metadata?.manifest,
+              run: {
+                ...existing.metadata?.manifest?.run,
+                env: mergedEnv,
+              },
+            },
+          },
+        });
+        console.log(`[builtinServers] Merged new env vars into ${def.id}`);
+      } else {
+        console.log(`[builtinServers] ${def.id} already registered, skipping`);
+      }
       continue;
     }
+
     const config = toServerConfig(def);
     mcpClient.addServer(config);
     console.log(`[builtinServers] Registered ${def.id}`);

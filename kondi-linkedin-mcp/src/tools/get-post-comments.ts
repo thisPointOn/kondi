@@ -57,7 +57,7 @@ export function registerGetPostCommentsTool(server: McpServer, config: Config): 
 
       try {
         const response = await client.get<LinkedInCommentsResponse>(
-          `/socialActions/${encodedUrn}/comments`,
+          `/rest/socialActions/${encodedUrn}/comments`,
           {
             start: '0',
             count: String(sanitizedCount),

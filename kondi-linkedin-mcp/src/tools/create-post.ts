@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { LinkedInClient } from '../client.js';
-import type { Config, UgcPostBody, UgcPostResponse } from '../types.js';
+import type { Config } from '../types.js';
 
 const createPostSchema = {
   text: z
@@ -23,7 +23,7 @@ export function registerCreatePostTool(server: McpServer, config: Config): void 
 
   server.tool(
     'linkedin_create_post',
-    'Create a new LinkedIn post (UGC Post) on behalf of the authenticated user. Requires text content and optionally a visibility setting. The post will appear on the user\'s LinkedIn feed.',
+    'Create a new LinkedIn post on behalf of the authenticated user. Requires text content and optionally a visibility setting. The post will appear on the user\'s LinkedIn feed.',
     createPostSchema,
     async ({ text, visibility = 'PUBLIC' }) => {
       // Check for access token
@@ -71,24 +71,20 @@ export function registerCreatePostTool(server: McpServer, config: Config): void 
         };
       }
 
-      const body: UgcPostBody = {
+      const body = {
         author: `urn:li:person:${config.auth.person_id}`,
+        commentary: text.trim(),
+        visibility: visibility,
+        distribution: {
+          feedDistribution: 'MAIN_FEED',
+          targetEntities: [] as unknown[],
+          thirdPartyDistributionChannels: [] as unknown[],
+        },
         lifecycleState: 'PUBLISHED',
-        specificContent: {
-          'com.linkedin.ugc.ShareContent': {
-            shareCommentary: {
-              text: text.trim(),
-            },
-            shareMediaCategory: 'NONE',
-          },
-        },
-        visibility: {
-          'com.linkedin.ugc.MemberNetworkVisibility': visibility,
-        },
       };
 
       try {
-        const response = await client.post<UgcPostResponse>('/ugcPosts', body);
+        const response = await client.post<{ id?: string; status?: number }>('/rest/posts', body);
 
         return {
           content: [

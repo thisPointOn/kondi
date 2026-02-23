@@ -1,13 +1,13 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { LinkedInClient } from '../client.js';
-import type { Config, LinkedInProfile } from '../types.js';
+import type { Config, LinkedInUserInfo } from '../types.js';
 
 export function registerGetProfileTool(server: McpServer, config: Config): void {
   const client = new LinkedInClient(config.api, config.auth);
 
   server.tool(
     'linkedin_get_profile',
-    'Get the current authenticated user\'s LinkedIn profile information including name, ID, and profile picture URL.',
+    'Get the current authenticated user\'s LinkedIn profile information including name, email, and profile picture URL. Uses the OpenID Connect userinfo endpoint.',
     {},
     async () => {
       // Check for access token
@@ -27,31 +27,17 @@ export function registerGetProfileTool(server: McpServer, config: Config): void 
       }
 
       try {
-        const profile = await client.get<LinkedInProfile>('/me');
-
-        // Extract localized name fields if available
-        let firstName = profile.localizedFirstName || '';
-        let lastName = profile.localizedLastName || '';
-
-        if (!firstName && profile.firstName?.localized) {
-          const locale = profile.firstName.preferredLocale;
-          const key = `${locale.language}_${locale.country}`;
-          firstName = profile.firstName.localized[key] || Object.values(profile.firstName.localized)[0] || '';
-        }
-
-        if (!lastName && profile.lastName?.localized) {
-          const locale = profile.lastName.preferredLocale;
-          const key = `${locale.language}_${locale.country}`;
-          lastName = profile.lastName.localized[key] || Object.values(profile.lastName.localized)[0] || '';
-        }
+        const profile = await client.get<LinkedInUserInfo>('/v2/userinfo');
 
         const result = {
-          id: profile.id,
-          first_name: firstName,
-          last_name: lastName,
-          full_name: [firstName, lastName].filter(Boolean).join(' '),
-          vanity_name: profile.vanityName || null,
-          profile_picture: profile.profilePicture?.displayImage || null,
+          sub: profile.sub,
+          name: profile.name || null,
+          given_name: profile.given_name || null,
+          family_name: profile.family_name || null,
+          email: profile.email || null,
+          email_verified: profile.email_verified ?? null,
+          picture: profile.picture || null,
+          locale: profile.locale || null,
           fetched_at: new Date().toISOString(),
         };
 
@@ -75,7 +61,7 @@ export function registerGetProfileTool(server: McpServer, config: Config): void 
                 hint: message.includes('401')
                   ? 'Access token may be expired or invalid. Generate a new token.'
                   : message.includes('403')
-                    ? 'Insufficient permissions. Ensure the token has r_liteprofile or r_basicprofile scope.'
+                    ? 'Insufficient permissions. Ensure the token has openid and profile scopes.'
                     : undefined,
               }),
             },

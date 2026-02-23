@@ -57,7 +57,7 @@ export function registerGetPostLikesTool(server: McpServer, config: Config): voi
 
       try {
         const response = await client.get<LinkedInLikesResponse>(
-          `/socialActions/${encodedUrn}/likes`,
+          `/rest/reactions/${encodedUrn}`,
           {
             start: '0',
             count: String(sanitizedCount),

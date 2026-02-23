@@ -65,16 +65,15 @@ export function registerLikePostTool(server: McpServer, config: Config): void {
         };
       }
 
-      const encodedUrn = encodeURIComponent(post_urn.trim());
-
       const body = {
+        root: post_urn.trim(),
+        reactionType: 'LIKE',
         actor: `urn:li:person:${personId}`,
-        object: post_urn.trim(),
       };
 
       try {
         await client.post<{ id?: string; status?: number }>(
-          `/socialActions/${encodedUrn}/likes`,
+          '/rest/reactions',
           body
         );
 

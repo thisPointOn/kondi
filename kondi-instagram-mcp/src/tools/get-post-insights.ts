@@ -16,7 +16,7 @@ export function registerGetPostInsightsTool(server: McpServer, config: Config): 
 
   server.tool(
     'ig_get_post_insights',
-    'Get insights for a specific Instagram media post. Returns impressions, reach, and engagement metrics. Only available for posts on Business or Creator accounts.',
+    'Get insights for a specific Instagram media post. Returns impressions, reach, saved, likes, comments, and shares metrics. Only available for posts on Business or Creator accounts.',
     getPostInsightsSchema,
     async ({ media_id }) => {
       if (!media_id || media_id.trim().length === 0) {

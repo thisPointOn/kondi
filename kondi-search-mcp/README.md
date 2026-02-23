@@ -186,4 +186,4 @@ npm run build
 
 ## License
 
-MIT
+AGPL-3.0-only

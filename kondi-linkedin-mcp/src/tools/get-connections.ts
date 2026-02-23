@@ -46,7 +46,7 @@ export function registerGetConnectionsTool(server: McpServer, config: Config): v
       const sanitizedCount = Math.min(Math.max(1, count), 100);
 
       try {
-        const response = await client.get<LinkedInConnectionsResponse>('/connections', {
+        const response = await client.get<LinkedInConnectionsResponse>('/rest/connections', {
           q: 'viewer',
           start: start.toString(),
           count: sanitizedCount.toString(),

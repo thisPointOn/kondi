@@ -26,7 +26,7 @@ const searchMessagesSchema = {
 export function registerSearchMessagesTool(server: McpServer, client: SlackClient): void {
   server.tool(
     'slack_search_messages',
-    "Search for messages across the workspace. Supports Slack search operators like 'from:@user', 'in:#channel', 'has:reaction', 'has:link', 'before:date', 'after:date'. Returns matching messages with channel context.",
+    "Search for messages across the workspace. Supports Slack search operators like 'from:@user', 'in:#channel', 'has:reaction', 'has:link', 'before:date', 'after:date'. Returns matching messages with channel context. NOTE: This method requires a user token (xoxp-), not a bot token (xoxb-). It will fail with 'not_allowed_token_type' if called with a bot token.",
     searchMessagesSchema,
     async ({ query, count = 20, sort = 'score' }) => {
       if (!query || query.trim().length === 0) {
@@ -79,6 +79,17 @@ export function registerSearchMessagesTool(server: McpServer, client: SlackClien
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
 
+        let hint: string | undefined;
+        if (message.includes('not_allowed_token_type')) {
+          hint =
+            'The search.messages API requires a user token (xoxp-), not a bot token (xoxb-). ' +
+            'Install the Slack app with user token scopes (search:read) and configure the user token instead.';
+        } else if (message.includes('missing_scope')) {
+          hint = 'The bot token needs the search:read scope. Check your Slack app permissions.';
+        } else if (message.includes('token')) {
+          hint = 'Check your KONDI_SLACK_BOT_TOKEN configuration.';
+        }
+
         return {
           content: [
             {
@@ -86,11 +97,7 @@ export function registerSearchMessagesTool(server: McpServer, client: SlackClien
               text: JSON.stringify({
                 error: message,
                 query,
-                hint: message.includes('missing_scope')
-                  ? 'The bot token needs the search:read scope. Check your Slack app permissions.'
-                  : message.includes('token')
-                    ? 'Check your KONDI_SLACK_BOT_TOKEN configuration.'
-                    : undefined,
+                hint,
               }),
             },
           ],

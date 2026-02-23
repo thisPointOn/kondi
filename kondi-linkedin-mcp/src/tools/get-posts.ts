@@ -59,7 +59,7 @@ export function registerGetPostsTool(server: McpServer, config: Config): void {
       const sanitizedCount = Math.min(Math.max(1, count), 100);
 
       try {
-        const response = await client.get<LinkedInPostsResponse>('/posts', {
+        const response = await client.get<LinkedInPostsResponse>('/rest/posts', {
           q: 'author',
           author: `urn:li:person:${personId}`,
           count: String(sanitizedCount),

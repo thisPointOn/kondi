@@ -176,7 +176,7 @@ export class FacebookClient {
     const token = this.getAccessToken();
     const url = new URL(`${this.baseUrl}/${pageId}/insights`);
     url.searchParams.set('access_token', token);
-    url.searchParams.set('metric', 'page_impressions,page_engaged_users,page_fans,page_views_total');
+    url.searchParams.set('metric', 'page_impressions_unique,page_engaged_users,page_follows,page_views_total');
     url.searchParams.set('period', period);
     url.searchParams.set('date_preset', datePreset);
 
@@ -217,7 +217,7 @@ export class FacebookClient {
     const token = this.getAccessToken();
     const url = new URL(`${this.baseUrl}/${postId}/insights`);
     url.searchParams.set('access_token', token);
-    url.searchParams.set('metric', 'post_impressions,post_engaged_users,post_clicks,post_reactions_by_type_total');
+    url.searchParams.set('metric', 'post_impressions_unique,post_clicks,post_reactions_by_type_total');
 
     const response = await this.request(url.toString(), { method: 'GET' });
     return response as FacebookInsightList;
