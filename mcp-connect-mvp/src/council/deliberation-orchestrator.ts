@@ -1157,7 +1157,7 @@ export class DeliberationOrchestrator {
     // Check if the worker has write permissions (informs the directive to emphasize implementation)
     const worker = this.getWorker(council);
     const workerAssignment = getRoleAssignment(council, worker.id);
-    const hasWritePermissions = !!(workerAssignment?.writePermissions && council.deliberation?.workingDirectory);
+    const hasWritePermissions = !!(workerAssignment?.writePermissions);
     const stepType = council.deliberation?.stepType;
 
     // Build prompts per Section 9.6
@@ -1327,7 +1327,7 @@ export class DeliberationOrchestrator {
     // Check if worker had write permissions (affects review criteria)
     const worker = this.getWorker(council);
     const workerAssignment = getRoleAssignment(council, worker.id);
-    const hasWritePermissions = !!(workerAssignment?.writePermissions && council.deliberation?.workingDirectory);
+    const hasWritePermissions = !!(workerAssignment?.writePermissions);
     const stepType = council.deliberation?.stepType;
 
     // Build prompts per Section 9.8

@@ -4,6 +4,7 @@
   flex-direction: column;
   background: #0a0a0a;
   min-height: 0; /* Required for flex child overflow scrolling */
+  min-width: 0; /* Prevent flex child from overflowing parent */
   overflow: hidden;
 }
 
@@ -29,7 +30,6 @@
   display: flex;
   gap: 16px;
   max-width: 800px;
-  margin: 0 auto;
   width: 100%;
 }
 
@@ -205,14 +205,12 @@
   padding: 20px 32px 32px;
   border-top: 1px solid #2a2a2a;
   box-sizing: border-box;
-  width: 100%;
   overflow-x: hidden;
 }
 
 .input-container {
   max-width: 800px;
   width: 100%;
-  margin: 0 auto;
   position: relative;
   box-sizing: border-box;
 }
@@ -692,7 +690,7 @@
   flex-wrap: wrap;
   gap: 8px;
   max-width: 800px;
-  margin: 0 auto 12px;
+  margin: 0 0 12px;
   padding: 0 48px;
 }
 

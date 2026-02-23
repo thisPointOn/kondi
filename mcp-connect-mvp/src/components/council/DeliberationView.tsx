@@ -1073,8 +1073,13 @@ export default function DeliberationView({
                       });
                     }
                     if (trimmedProblem) setTaskSaved(true);
-                    // Close setup panel after saving
-                    setActivePanel(null);
+                    // After saving, check if ready to start — go to deliberation panel if so
+                    const savedAssignments = councilStore.get(councilId)?.deliberation?.roleAssignments || [];
+                    const ready = trimmedProblem
+                      && savedAssignments.some((r: { role: string }) => r.role === 'manager')
+                      && savedAssignments.some((r: { role: string }) => r.role === 'consultant')
+                      && savedAssignments.some((r: { role: string }) => r.role === 'worker');
+                    setActivePanel(ready ? 'deliberation' : null);
                   }}
                   inline
                   onAddPersona={() => setIsAddingPersona(true)}
@@ -1110,7 +1115,19 @@ export default function DeliberationView({
               </ol>
               {canStart && council.deliberation?.savedProblem && (
                 <div className="ready-to-start">
-                  <p>Ready to start! Click <strong>Deliberation</strong> above to begin.</p>
+                  <p>Ready to start!</p>
+                  <div className="deliberation-actions">
+                    <button
+                      className="deliberation-start-btn"
+                      onClick={() => {
+                        setActivePanel('deliberation');
+                        handleFrameProblem();
+                      }}
+                      disabled={!problemInput.trim() || isGenerating}
+                    >
+                      {isGenerating ? 'Starting...' : 'Start Deliberation'}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

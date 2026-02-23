@@ -260,9 +260,9 @@ export default function RoleAssignment({
         setAssignments((prev) =>
           prev.map((a) =>
             a.personaId === existing.personaId
-              ? { ...a, role: 'consultant', suppressPersona: undefined }
+              ? { ...a, role: 'consultant', suppressPersona: undefined, writePermissions: undefined }
               : a.personaId === personaId
-              ? { ...a, role, suppressPersona: true } // Always suppress manager and worker
+              ? { ...a, role, suppressPersona: true, writePermissions: role === 'worker' ? true : undefined }
               : a
           )
         );
@@ -273,14 +273,16 @@ export default function RoleAssignment({
 
     // Set suppressPersona for manager/worker, clear it for consultant
     const suppressPersona = (role === 'manager' || role === 'worker') ? true : undefined;
+    // Workers always get write permissions by default
+    const writePermissions = role === 'worker' ? true : undefined;
 
     setAssignments((prev) => {
       const exists = prev.some((a) => a.personaId === personaId);
       if (exists) {
-        return prev.map((a) => (a.personaId === personaId ? { ...a, role, suppressPersona } : a));
+        return prev.map((a) => (a.personaId === personaId ? { ...a, role, suppressPersona, writePermissions } : a));
       }
       // Persona not yet in assignments (just added) — append it
-      return [...prev, { personaId, role, suppressPersona }];
+      return [...prev, { personaId, role, suppressPersona, writePermissions }];
     });
     setSaved(false);
   };
