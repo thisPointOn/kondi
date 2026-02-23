@@ -204,12 +204,17 @@
 .input-area {
   padding: 20px 32px 32px;
   border-top: 1px solid #2a2a2a;
+  box-sizing: border-box;
+  width: 100%;
+  overflow-x: hidden;
 }
 
 .input-container {
   max-width: 800px;
+  width: 100%;
   margin: 0 auto;
   position: relative;
+  box-sizing: border-box;
 }
 
 .chat-input {
@@ -228,6 +233,7 @@
   min-height: 40px;
   max-height: 120px;
   overflow-y: auto;
+  box-sizing: border-box;
 }
 
 .send-btn {
