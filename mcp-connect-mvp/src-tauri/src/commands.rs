@@ -5169,17 +5169,41 @@ engines:
 // Gemini (Google Cloud Code Assist) OAuth + API Proxy
 // ============================================================================
 
-// Gemini OAuth credentials — reads from env vars, falls back to built-in defaults.
-// NOTE: For native/desktop OAuth apps, Google considers client secrets "public"
-// (they ship embedded in every installed binary). These defaults match the Gemini
-// CLI's own registered OAuth client. Override via env if using your own GCP project.
+// Gemini OAuth credentials — reads from env vars, then falls back to
+// ~/.local/share/kondi/gemini_oauth.json (written on first setup).
+// No secrets are compiled into the binary.
+fn load_gemini_oauth_config() -> Option<(String, String)> {
+    if let Some(path) = data_dir_file("gemini_oauth.json") {
+        if let Ok(contents) = fs::read_to_string(&path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&contents) {
+                let id = json.get("client_id").and_then(|v| v.as_str()).map(String::from);
+                let secret = json.get("client_secret").and_then(|v| v.as_str()).map(String::from);
+                if let (Some(id), Some(secret)) = (id, secret) {
+                    return Some((id, secret));
+                }
+            }
+        }
+    }
+    None
+}
+
 fn gemini_client_id() -> String {
-    std::env::var("KONDI_GEMINI_CLIENT_ID")
-        .unwrap_or_else(|_| "REDACTED_CLIENT_ID".to_string())
+    if let Ok(val) = std::env::var("KONDI_GEMINI_CLIENT_ID") {
+        return val;
+    }
+    if let Some((id, _)) = load_gemini_oauth_config() {
+        return id;
+    }
+    String::new()
 }
 fn gemini_client_secret() -> String {
-    std::env::var("KONDI_GEMINI_CLIENT_SECRET")
-        .unwrap_or_else(|_| "REDACTED_CLIENT_SECRET".to_string())
+    if let Ok(val) = std::env::var("KONDI_GEMINI_CLIENT_SECRET") {
+        return val;
+    }
+    if let Some((_, secret)) = load_gemini_oauth_config() {
+        return secret;
+    }
+    String::new()
 }
 const GEMINI_AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GEMINI_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
