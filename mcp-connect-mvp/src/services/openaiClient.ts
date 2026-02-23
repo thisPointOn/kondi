@@ -3,10 +3,9 @@ import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 import { LOCAL_SERVER_ID, localToolsService } from './localTools';
 import {
-  resolveApiKey,
-  resolveApiKeySync,
   reportSuccess,
   reportFailure,
+  listProfiles,
 } from './auth-profiles';
 
 const BASE_SYSTEM_PROMPT = `You are ChatGPT, a helpful general-purpose AI assistant made by OpenAI. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
@@ -32,29 +31,21 @@ When using tools:
 
 export class OpenAIClient {
   private client: OpenAI | null = null;
-  private clientKey: string | null = null;  // Track what key the client was created with
-  getAuthMethod(): 'oauth' | 'api_key' | 'none' {
-    const resolved = resolveApiKeySync('openai');
-    if (resolved) {
-      return resolved.credential.type === 'api_key' ? 'api_key' : 'oauth';
-    }
-    return 'none';
-  }
+  private clientKey: string | null = null;
 
   /**
-   * Ensure the OpenAI client is initialized with a valid key from auth profiles
+   * Ensure the OpenAI SDK client is initialized with an API key.
    */
   private async ensureClientInitialized(): Promise<void> {
-    const resolved = await resolveApiKey('openai');
-    if (!resolved) {
-      throw new Error('No OpenAI authentication configured. Please set up credentials in Settings.');
+    const apiKeyProfile = listProfiles('openai').find(p => p.credential.type === 'api_key');
+    if (!apiKeyProfile || apiKeyProfile.credential.type !== 'api_key') {
+      throw new Error('No OpenAI API key configured. Please add an API key in Settings.');
     }
 
-    const key = resolved.apiKey;
+    const key = apiKeyProfile.credential.key;
 
-    // Recreate client if key has changed or client doesn't exist
     if (!this.client || this.clientKey !== key) {
-      console.log('[OpenAI] Initializing client with', resolved.credential.type);
+      console.log('[OpenAI] Initializing SDK client with API key');
       this.client = new OpenAI({
         apiKey: key,
         dangerouslyAllowBrowser: true,
@@ -116,7 +107,6 @@ export class OpenAIClient {
         },
       });
       if (!res.ok) {
-        // Any auth error (401/403) likely means restricted scopes — return defaults
         if (res.status === 401 || res.status === 403) {
           console.log(`[OpenAI] /v1/models returned ${res.status} (restricted key scopes), using defaults`);
           return OpenAIClient.DEFAULT_MODELS;
@@ -135,7 +125,6 @@ export class OpenAIClient {
 
   async validateKey(key: string): Promise<{ ok: boolean; error?: string }> {
     try {
-      // Validate via a minimal chat completions call instead of /v1/models.
       const res = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -162,26 +151,18 @@ export class OpenAIClient {
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
     model = 'gpt-4o',
     additionalSystemPrompt?: string,
-    workingDirectory?: string
+    workingDirectory?: string,
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
-    const authMethod = this.getAuthMethod();
-    console.log('[OpenAI] chat() called', { authMethod, model });
+    console.log('[OpenAI] chat() called', { model });
 
-    if (authMethod === 'none') {
-      throw new Error('No OpenAI authentication configured. Please set up credentials in Settings.');
-    }
-
-    // Initialize the client with the best available key
     await this.ensureClientInitialized();
 
-    // Resolve profile ID for reporting success/failure
-    const resolved = await resolveApiKey('openai');
-    const profileId = resolved?.profileId || null;
+    const apiKeyProfile = listProfiles('openai').find(p => p.credential.type === 'api_key');
+    const profileId = apiKeyProfile?.id || null;
 
     const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [];
     const toolMap = new Map<string, { serverId: string; tool: MCPTool }>();
 
-    // Use short numeric prefixes to stay under OpenAI's 64-char limit
     const serverIds = Array.from(availableTools.keys());
     const serverIndexMap = new Map(serverIds.map((id, i) => [id, `s${i}`]));
 
@@ -243,7 +224,6 @@ export class OpenAIClient {
         const response = completion.choices[0].message;
         console.log(`[OpenAI] Turn ${turnCount} response:`, JSON.stringify(response, null, 2));
 
-        // No tool calls — we're done
         if (!response.tool_calls || response.tool_calls.length === 0) {
           finalContent = typeof response.content === 'string'
             ? response.content
@@ -251,7 +231,6 @@ export class OpenAIClient {
           break;
         }
 
-        // Execute all tool calls for this turn
         console.log(`[OpenAI] Turn ${turnCount}: ${response.tool_calls.length} tool calls`);
         const toolResults: OpenAI.Chat.Completions.ChatCompletionToolMessageParam[] = [];
 
@@ -317,7 +296,6 @@ export class OpenAIClient {
           toolCalls.push(toolCall);
         }
 
-        // Append assistant response + tool results and loop for next turn
         currentMessages = [
           ...currentMessages,
           {
@@ -329,10 +307,8 @@ export class OpenAIClient {
         ];
       }
 
-      // Report success
       if (profileId) reportSuccess(profileId);
     } catch (err) {
-      // Report failure for rotation
       if (profileId) {
         const errMsg = err instanceof Error ? err.message : String(err);
         const statusMatch = errMsg.match(/(\d{3})/);
