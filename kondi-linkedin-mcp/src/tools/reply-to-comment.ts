@@ -101,7 +101,7 @@ export function registerReplyToCommentTool(server: McpServer, config: Config): v
 
       try {
         const response = await client.post<{ id?: string; status?: number }>(
-          `/socialActions/${encodedUrn}/comments`,
+          `/rest/socialActions/${encodedUrn}/comments`,
           body
         );
 

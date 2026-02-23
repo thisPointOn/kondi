@@ -48,7 +48,7 @@ Options:
 Environment Variables:
   KONDI_LINKEDIN_ACCESS_TOKEN   LinkedIn OAuth2 access token (required)
   KONDI_LINKEDIN_PERSON_ID      LinkedIn person ID for the authenticated user (required)
-  KONDI_LINKEDIN_BASE_URL       API base URL (default: https://api.linkedin.com/v2)
+  KONDI_LINKEDIN_BASE_URL       API base URL (default: https://api.linkedin.com)
   KONDI_LINKEDIN_TIMEOUT_MS     Request timeout in milliseconds (default: 10000)
   KONDI_LINKEDIN_TRANSPORT      Transport mode
   KONDI_LINKEDIN_PORT           SSE port

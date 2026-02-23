@@ -47,7 +47,7 @@ export function registerGetOrganizationTool(server: McpServer, config: Config): 
 
       try {
         const org = await client.get<LinkedInOrganization>(
-          `/organizations/${organization_id.trim()}`
+          `/rest/organizations/${organization_id.trim()}`
         );
 
         const result = {

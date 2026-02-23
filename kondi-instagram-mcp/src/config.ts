@@ -5,7 +5,7 @@ import type { Config } from './types.js';
 
 const DEFAULT_CONFIG: Config = {
   api: {
-    base_url: 'https://graph.facebook.com/v19.0',
+    base_url: 'https://graph.facebook.com/v21.0',
     timeout_ms: 15000,
   },
   auth: {

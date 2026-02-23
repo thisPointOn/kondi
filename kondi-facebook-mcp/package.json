@@ -1,7 +1,7 @@
 {
   "name": "kondi-facebook-mcp",
   "version": "1.0.0",
-  "description": "MCP server for Facebook/Meta Graph API — post, read, and delete page content",
+  "description": "MCP server for Facebook/Meta Graph API \u2014 post, read, and delete page content",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -19,7 +19,7 @@
     "social-media"
   ],
   "author": "",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.23.0"

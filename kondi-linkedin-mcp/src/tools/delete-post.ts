@@ -48,7 +48,7 @@ export function registerDeletePostTool(server: McpServer, config: Config): void 
       const encodedUrn = encodeURIComponent(post_urn.trim());
 
       try {
-        await client.delete(`/posts/${encodedUrn}`);
+        await client.delete(`/rest/posts/${encodedUrn}`);
 
         return {
           content: [

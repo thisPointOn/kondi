@@ -8,6 +8,8 @@ export interface AuthConfig {
   access_token: string;
   client_id: string;
   client_secret: string;
+  username: string;
+  password: string;
 }
 
 export interface ServerConfig {

@@ -64,7 +64,7 @@ export function registerSendPollTool(server: McpServer, config: Config): void {
         const response = await client.call<TelegramMessage>('sendPoll', {
           chat_id,
           question,
-          options: JSON.stringify(options),
+          options: JSON.stringify(options.map((o: string) => ({ text: o }))),
           is_anonymous,
           type,
         });

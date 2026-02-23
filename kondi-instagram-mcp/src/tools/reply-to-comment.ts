@@ -4,10 +4,10 @@ import { InstagramClient } from '../client.js';
 import type { Config, CommentPostResponse } from '../types.js';
 
 const replyToCommentSchema = {
-  media_id: z
+  comment_id: z
     .string()
     .describe(
-      'The ID of the media post (not the comment ID). Instagram API requires posting replies at the media level.'
+      'The ID of the comment to reply to. Obtain this from ig_get_comments.'
     ),
   message: z
     .string()
@@ -21,15 +21,15 @@ export function registerReplyToCommentTool(server: McpServer, config: Config): v
 
   server.tool(
     'ig_reply_to_comment',
-    'Reply to a comment on one of your Instagram posts. The reply is posted as a new comment on the media. Include @username in your message to notify the original commenter.',
+    'Reply to a specific comment on one of your Instagram posts. The reply is posted as a threaded reply under the target comment.',
     replyToCommentSchema,
-    async ({ media_id, message }) => {
-      if (!media_id || media_id.trim().length === 0) {
+    async ({ comment_id, message }) => {
+      if (!comment_id || comment_id.trim().length === 0) {
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({ error: 'media_id is required and cannot be empty' }),
+              text: JSON.stringify({ error: 'comment_id is required and cannot be empty' }),
             },
           ],
           isError: true,
@@ -50,14 +50,14 @@ export function registerReplyToCommentTool(server: McpServer, config: Config): v
 
       try {
         const response = await client.post<CommentPostResponse>(
-          `${media_id.trim()}/comments`,
+          `${comment_id.trim()}/replies`,
           { message: message.trim() }
         );
 
         const result = {
           success: true,
-          comment_id: response.id,
-          media_id: media_id.trim(),
+          reply_id: response.id,
+          comment_id: comment_id.trim(),
           message: message.trim(),
         };
 
@@ -78,7 +78,7 @@ export function registerReplyToCommentTool(server: McpServer, config: Config): v
               type: 'text' as const,
               text: JSON.stringify({
                 error: message_,
-                media_id: media_id.trim(),
+                comment_id: comment_id.trim(),
                 hint: message_.includes('OAuthException')
                   ? 'Check that your access token has instagram_manage_comments permission.'
                   : undefined,

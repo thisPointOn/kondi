@@ -23,7 +23,7 @@
     },
     {
       "name": "ig_get_post_insights",
-      "description": "Get insights (impressions, reach, engagement) for a specific Instagram media post."
+      "description": "Get insights (impressions, reach, saved, likes, comments, shares) for a specific Instagram media post."
     }
   ],
   "requirements": {

@@ -197,7 +197,7 @@ export class InstagramClient {
   /** Get insights for a specific media post. */
   async getPostInsights(mediaId: string): Promise<InsightsResponse> {
     return this.get<InsightsResponse>(`${mediaId}/insights`, {
-      metric: 'impressions,reach,engagement',
+      metric: 'impressions,reach,saved,likes,comments,shares',
     });
   }
 

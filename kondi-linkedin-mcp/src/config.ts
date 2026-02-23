@@ -5,7 +5,7 @@ import type { Config } from './types.js';
 
 const DEFAULT_CONFIG: Config = {
   api: {
-    base_url: 'https://api.linkedin.com/v2',
+    base_url: 'https://api.linkedin.com',
     timeout_ms: 10000,
   },
   auth: {

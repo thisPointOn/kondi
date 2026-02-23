@@ -25,6 +25,7 @@ export class DiscordClient {
       const headers: Record<string, string> = {
         Authorization: `Bot ${this.botToken}`,
         'Content-Type': 'application/json',
+        'User-Agent': 'DiscordBot (https://github.com/thisPointOn/kondi, 1.0.0)',
       };
 
       const options: RequestInit = {
