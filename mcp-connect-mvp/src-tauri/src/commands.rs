@@ -2877,6 +2877,66 @@ pub async fn refresh_openai_token(refresh_token: String) -> Result<OAuthTokens, 
     })
 }
 
+/// Proxy a request to the ChatGPT backend codex/responses endpoint.
+/// Needed because chatgpt.com doesn't send CORS headers, so browser fetch() is blocked.
+/// The codex endpoint requires stream=true, so this command handles SSE parsing
+/// and returns the final response.completed event data as JSON.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn codex_request(
+    body: String,
+    bearerToken: String,
+) -> Result<String, String> {
+    // Inject stream: true into the request body (codex endpoint requires it)
+    let mut body_json: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("Invalid JSON body: {}", e))?;
+    body_json["stream"] = serde_json::Value::Bool(true);
+    let body_str = serde_json::to_string(&body_json).map_err(|e| e.to_string())?;
+
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post("https://chatgpt.com/backend-api/codex/responses")
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", bearerToken))
+        .body(body_str)
+        .send()
+        .await
+        .map_err(|e| format!("Codex request failed: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    // Read the SSE stream and find the response.completed event
+    let full_text = resp.text().await.unwrap_or_default();
+    let mut completed_data: Option<String> = None;
+
+    for line in full_text.lines() {
+        if let Some(data) = line.strip_prefix("data: ") {
+            // Try to parse and check for response.completed
+            if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
+                if event.get("type").and_then(|t| t.as_str()) == Some("response.completed") {
+                    // The response object is nested under "response"
+                    if let Some(response) = event.get("response") {
+                        completed_data = Some(response.to_string());
+                    } else {
+                        // Fallback: return the whole event data
+                        completed_data = Some(data.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    completed_data.ok_or_else(|| {
+        format!("No response.completed event found in SSE stream. Raw: {}",
+            full_text.chars().take(500).collect::<String>())
+    })
+}
+
 /// Login to Codex CLI by running OAuth flow and writing tokens to ~/.codex/auth.json
 #[tauri::command]
 pub async fn login_codex_cli() -> Result<String, String> {

@@ -8,6 +8,7 @@ import type { LLMProvider } from './orchestrator';
 import type { MCPTool } from '../types/mcp';
 import { anthropicClient } from '../services/anthropicClient';
 import { openaiClient } from '../services/openaiClient';
+import { codexClient } from '../services/codexClient';
 import { deepseekClient, xaiClient, ollamaClient } from '../services/openaiCompatibleClient';
 import { geminiClient } from '../services/geminiClient';
 
@@ -73,6 +74,8 @@ export class LLMAdapter implements LLMProvider {
         return await this.completeWithCompatible(ollamaClient, params, startTime);
       } else if (isGoogle) {
         return await this.completeWithGemini(params, startTime);
+      } else if (params.provider === 'openai-cli') {
+        return await this.completeWithCodex(params, startTime);
       } else if (isOpenAI) {
         return await this.completeWithOpenAI(params, startTime);
       } else {
@@ -144,7 +147,7 @@ export class LLMAdapter implements LLMProvider {
       availableTools,
       params.model || 'gpt-4o',
       params.systemPrompt,
-      params.workingDirectory
+      params.workingDirectory,
     );
 
     const latencyMs = Date.now() - startTime;
@@ -157,6 +160,40 @@ export class LLMAdapter implements LLMProvider {
       latencyMs,
     };
   }
+  private async completeWithCodex(
+    params: CompletionParams,
+    startTime: number
+  ): Promise<CompletionResult> {
+    const messages = [
+      {
+        id: crypto.randomUUID(),
+        role: 'user' as const,
+        content: params.userMessage,
+        timestamp: new Date(),
+      },
+    ];
+
+    const availableTools = params.availableTools || new Map();
+
+    const result = await codexClient.chat(
+      messages,
+      availableTools,
+      params.model || 'gpt-5.2-codex',
+      params.systemPrompt,
+      params.workingDirectory,
+    );
+
+    const latencyMs = Date.now() - startTime;
+    const inputTokens = Math.ceil((params.systemPrompt.length + params.userMessage.length) / 4);
+    const outputTokens = Math.ceil(result.message.content.length / 4);
+
+    return {
+      content: result.message.content,
+      tokensUsed: inputTokens + outputTokens,
+      latencyMs,
+    };
+  }
+
   private async completeWithCompatible(
     client: import('../services/openaiCompatibleClient').OpenAICompatibleClient,
     params: CompletionParams,

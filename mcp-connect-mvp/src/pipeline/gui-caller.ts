@@ -8,6 +8,7 @@
 import { isOpenAIModel } from './output-parsers';
 import { anthropicClient } from '../services/anthropicClient';
 import { openaiClient } from '../services/openaiClient';
+import { codexClient } from '../services/codexClient';
 import { deepseekClient, xaiClient, ollamaClient } from '../services/openaiCompatibleClient';
 import { geminiClient } from '../services/geminiClient';
 import type { MCPTool } from '../types/mcp';
@@ -114,6 +115,43 @@ async function callOpenAiApi(opts: CallLLMOptions): Promise<CallerResult> {
 }
 
 /**
+ * Call Codex API (ChatGPT subscription via OAuth).
+ * Used for openai-cli provider.
+ */
+async function callCodexApi(opts: CallLLMOptions): Promise<CallerResult> {
+  const start = Date.now();
+
+  const messages = [
+    {
+      id: crypto.randomUUID(),
+      role: 'user' as const,
+      content: opts.userMessage,
+      timestamp: new Date(),
+    },
+  ];
+
+  const tools = opts.skipTools ? new Map() : (opts.availableTools || new Map());
+
+  const result = await codexClient.chat(
+    messages,
+    tools,
+    opts.model || 'gpt-5.2-codex',
+    opts.systemPrompt,
+    opts.workingDirectory,
+  );
+
+  const latencyMs = Date.now() - start;
+  const inputTokens = Math.ceil((opts.systemPrompt.length + opts.userMessage.length) / 4);
+  const outputTokens = Math.ceil(result.message.content.length / 4);
+
+  return {
+    content: result.message.content,
+    tokensUsed: inputTokens + outputTokens,
+    latencyMs,
+  };
+}
+
+/**
  * Call an OpenAI-compatible provider (DeepSeek, xAI, Ollama).
  */
 async function callCompatibleApi(
@@ -164,7 +202,7 @@ async function callGeminiApi(opts: CallLLMOptions): Promise<CallerResult> {
  * Routes based on provider:
  *   - anthropic-cli  → Direct Anthropic API (OAuth tokens)
  *   - anthropic-api  → Direct Anthropic API (API key)
- *   - openai-cli     → Direct OpenAI API (OAuth tokens)
+ *   - openai-cli     → Codex API (ChatGPT subscription OAuth)
  *   - openai-api     → Direct OpenAI API (API key)
  *   - deepseek       → Direct DeepSeek API (OpenAI-compatible)
  *
@@ -178,8 +216,13 @@ export function callLLM(opts: CallLLMOptions): Promise<CallerResult> {
     return callAnthropicApi(opts);
   }
 
-  // All OpenAI providers → direct API
-  if (provider === 'openai-cli' || provider === 'openai-api' || provider === 'openai') {
+  // OpenAI CLI (ChatGPT subscription) → Codex API
+  if (provider === 'openai-cli') {
+    return callCodexApi(opts);
+  }
+
+  // OpenAI API key providers → direct API
+  if (provider === 'openai-api' || provider === 'openai') {
     return callOpenAiApi(opts);
   }
 

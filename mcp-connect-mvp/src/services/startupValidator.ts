@@ -5,6 +5,7 @@
 
 import { anthropicClient } from './anthropicClient';
 import { openaiClient } from './openaiClient';
+import { codexClient } from './codexClient';
 import { deepseekClient, xaiClient, ollamaClient } from './openaiCompatibleClient';
 import { geminiClient } from './geminiClient';
 import { mcpClient } from './mcpClient';
@@ -333,23 +334,14 @@ class StartupValidator {
   private async testOpenAIAuth(label: string): Promise<ValidationResult> {
     try {
       console.log(`[StartupValidator] Testing ${label} auth...`);
-      const resolved = await resolveApiKey('openai');
-      if (!resolved) {
-        return {
-          provider: label,
-          status: 'error',
-          message: 'No usable credentials',
-          action: 'Connect via OAuth or enter API key',
-        };
-      }
 
-      const result = await openaiClient.validateKey(resolved.apiKey);
+      // Use codexClient.validate() which checks OAuth token via the Codex endpoint
+      const result = await codexClient.validate();
       if (result.ok) {
         return {
           provider: label,
           status: 'ok',
           message: 'Connected and verified',
-          details: `Profile: ${resolved.profileId}`,
         };
       }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { openaiClient } from '../services/openaiClient';
+import { codexClient } from '../services/codexClient';
 import { anthropicClient } from '../services/anthropicClient';
 import { ollamaClient } from '../services/openaiCompatibleClient';
 import { oauthService } from '../services/oauthService';
@@ -14,7 +15,6 @@ import {
   deleteProfile,
   importCliCredentials,
   PROFILE_IDS,
-  resolveApiKeySync,
 } from '../services/auth-profiles';
 
 export type ConfiguredProviders = {
@@ -386,6 +386,11 @@ export function useProviderConfig() {
       const result = await anthropicClient.validateKey(anthropicKey);
       ok = result.ok;
       providerLabel = 'Anthropic API';
+    } else if (providerId === 'openai-cli') {
+      // OAuth/codex provider — validate via codexClient
+      const result = await codexClient.validate();
+      ok = result.ok;
+      providerLabel = 'OpenAI CLI';
     } else if (providerId.startsWith('openai')) {
       const result = await openaiClient.validateKey(openaiKey);
       ok = result.ok;

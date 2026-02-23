@@ -6,6 +6,7 @@ import { Paperclip, X, ChevronDown, FolderOpen } from 'lucide-react';
 import { open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, Message, ToolCall } from '../types/mcp';
 import { openaiClient } from '../services/openaiClient';
+import { codexClient } from '../services/codexClient';
 import { anthropicClient } from '../services/anthropicClient';
 import { deepseekClient, xaiClient, ollamaClient } from '../services/openaiCompatibleClient';
 import { geminiClient } from '../services/geminiClient';
@@ -530,7 +531,13 @@ const ChatArea: FC<ChatAreaProps> = ({
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;
-    } else if (provId.startsWith('openai')) {
+    } else if (provId === 'openai-cli') {
+      console.log('[ChatArea] Routing to Codex client (OpenAI CLI)');
+      const result = await codexClient.chat(msgs, availableTools, openaiModel, modePrompt, effectiveWorkingDir);
+      message = result.message;
+      toolCalls = result.toolCalls;
+      message.provider = provId;
+    } else if (provId === 'openai-api' || provId.startsWith('openai')) {
       console.log('[ChatArea] Routing to OpenAI client');
       const result = await openaiClient.chat(msgs, availableTools, openaiModel, modePrompt, effectiveWorkingDir);
       message = result.message;

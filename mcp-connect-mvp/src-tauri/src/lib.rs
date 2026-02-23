@@ -52,6 +52,7 @@ pub fn run() {
             commands::refresh_anthropic_token,
             commands::start_openai_oauth,
             commands::refresh_openai_token,
+            commands::codex_request,
             // Gemini (Google Cloud Code Assist)
             commands::start_gemini_oauth,
             commands::refresh_gemini_token,
