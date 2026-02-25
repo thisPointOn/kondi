@@ -143,17 +143,56 @@
   font-size: 13px;
 }
 
+.chat-code-wrapper {
+  position: relative;
+  margin: 12px 0;
+}
+
 .message-content pre {
   background: #1a1a1a;
   padding: 12px;
   border-radius: 8px;
+  border: 1px solid #2a2a2a;
   overflow-x: auto;
-  margin: 12px 0;
+  margin: 0;
 }
 
 .message-content pre code {
   padding: 0;
   background: none;
+}
+
+/* Copy button for chat code blocks */
+.chat-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: #252525;
+  border: 1px solid #3a3a3a;
+  color: #888;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  line-height: 1;
+  opacity: 0;
+  transition: all 0.15s ease;
+  z-index: 2;
+}
+
+.chat-code-wrapper:hover .chat-copy-btn {
+  opacity: 1;
+}
+
+.chat-copy-btn:hover {
+  color: #e5e5e5;
+  background: #333;
+  border-color: #555;
+}
+
+.chat-copy-btn.copied {
+  color: #4ade80;
+  opacity: 1;
 }
 
 .tool-call-badge {
@@ -479,6 +518,186 @@
 .light-theme .chat-dir-clear-btn:hover {
   background: #ddd;
   color: #ef4444;
+}
+
+/* Bar divider */
+.chat-bar-divider {
+  width: 1px;
+  height: 16px;
+  background: #2a2a2a;
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+.light-theme .chat-bar-divider {
+  background: #ddd;
+}
+
+/* Per-chat model pin */
+.chat-pin-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.chat-pin-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: #555;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.chat-pin-btn:hover:not(:disabled) {
+  background: #1a1a1a;
+  border-color: #2a2a2a;
+  color: #bbb;
+}
+
+.chat-pin-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.chat-pin-btn.pinned {
+  color: #bbb;
+}
+
+.chat-pin-btn .pin-active {
+  color: #3b82f6;
+}
+
+.chat-pin-label {
+  color: #555;
+}
+
+.chat-pin-model {
+  font-weight: 500;
+  color: #ccc;
+}
+
+.chat-pin-provider {
+  font-size: 10px;
+  padding: 1px 5px;
+  background: #1a1a1a;
+  border-radius: 3px;
+}
+
+/* Pin dropdown */
+.chat-pin-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  min-width: 240px;
+  max-height: 400px;
+  overflow-y: auto;
+  z-index: 200;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.pin-provider-group {
+  margin-bottom: 2px;
+}
+
+.pin-provider-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pin-provider-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.pin-provider-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pin-model-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 10px 6px 22px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #ccc;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.pin-model-btn:hover {
+  background: #252525;
+}
+
+.pin-model-btn.current {
+  background: #252525;
+  color: #fff;
+}
+
+.pin-model-name {
+  flex: 1;
+}
+
+.light-theme .chat-pin-btn {
+  color: #999;
+}
+
+.light-theme .chat-pin-btn:hover:not(:disabled) {
+  background: #e8e8e8;
+  border-color: #ddd;
+  color: #444;
+}
+
+.light-theme .chat-pin-provider {
+  background: #e0e0e0;
+  color: #666;
+}
+
+.light-theme .chat-pin-dropdown {
+  background: #fff;
+  border-color: #ddd;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.light-theme .pin-model-btn {
+  color: #333;
+}
+
+.light-theme .pin-model-btn:hover {
+  background: #f0f0f0;
+}
+
+.light-theme .pin-model-btn.current {
+  background: #e8e8e8;
+  color: #111;
 }
 
 /* Provider/model dropdown */

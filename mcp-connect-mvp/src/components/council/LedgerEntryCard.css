@@ -170,6 +170,80 @@
   margin: 0.25rem 0;
 }
 
+/* Copy Button */
+.copy-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-tertiary, #666);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 4px;
+  line-height: 1;
+  transition: all 0.15s ease;
+  opacity: 0;
+}
+
+.ledger-entry-card:hover .entry-copy-btn,
+.entry-code-block:hover .code-copy-btn {
+  opacity: 1;
+}
+
+.copy-btn:hover {
+  color: var(--text-primary, #e5e5e5);
+  background: var(--bg-secondary, #1a1a1a);
+  border-color: var(--border-color, #333);
+}
+
+.copy-btn.copied {
+  color: #4ade80;
+  opacity: 1;
+}
+
+/* Code Blocks */
+.entry-code-block {
+  margin: 0.75rem 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-color, #333);
+  background: #1a1a1a;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.375rem 0.75rem;
+  background: #161616;
+  border-bottom: 1px solid var(--border-color, #333);
+  min-height: 28px;
+}
+
+.code-block-lang {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary, #666);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+
+.code-copy-btn {
+  margin-left: auto;
+}
+
+.entry-code-block pre {
+  margin: 0;
+  padding: 0.75rem;
+  overflow-x: auto;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.entry-code-block code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace;
+  color: #d4d4d4;
+}
+
 /* Artifacts */
 .entry-artifacts {
   display: flex;

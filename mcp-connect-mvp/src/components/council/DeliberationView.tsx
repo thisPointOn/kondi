@@ -135,6 +135,8 @@ export default function DeliberationView({
   });
   const [isAddingPersona, setIsAddingPersona] = useState(false);
   const [editingPersona, setEditingPersona] = useState<Persona | null>(null);
+  const [stagedComment, setStagedComment] = useState('');
+  const [stagedCommentInput, setStagedCommentInput] = useState('');
   const ledgerEndRef = useRef<HTMLDivElement>(null);
 
   // Clean JSON from display strings (for manager evaluation reasoning, etc.)
@@ -244,6 +246,23 @@ export default function DeliberationView({
   useEffect(() => {
     ledgerEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [entries.length]);
+
+  // Send staged comment when agents finish responding
+  const prevThinkingRef = useRef(thinkingPersonas.length);
+  useEffect(() => {
+    const wasThinking = prevThinkingRef.current > 0;
+    const nowIdle = thinkingPersonas.length === 0;
+    prevThinkingRef.current = thinkingPersonas.length;
+
+    if (wasThinking && nowIdle && stagedComment && council && onUserMessage) {
+      const lastResp = getLastResponder();
+      if (lastResp) {
+        const comment = stagedComment;
+        setStagedComment('');
+        onUserMessage(council, comment, lastResp.id);
+      }
+    }
+  }, [thinkingPersonas.length, stagedComment]);
 
   // Auto-save on completion and generate summary
   useEffect(() => {
@@ -1249,6 +1268,63 @@ export default function DeliberationView({
               {isGenerating ? 'Sending...' : 'Send'}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Staged Comment Input — visible while agents are generating */}
+      {!isPaused && thinkingPersonas.length > 0 && (
+        <div className="staged-comment-input">
+          <div className="staged-input-header">
+            <span className="staged-label">Agents responding</span>
+            {stagedComment && (
+              <span className="staged-badge">
+                Comment staged — will be sent when agents finish
+              </span>
+            )}
+          </div>
+          <div className="staged-input-row">
+            <input
+              type="text"
+              className="staged-input-field"
+              placeholder={stagedComment ? 'Replace staged comment...' : 'Type a comment to send after agents respond...'}
+              value={stagedCommentInput}
+              onChange={(e) => setStagedCommentInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && stagedCommentInput.trim()) {
+                  e.preventDefault();
+                  setStagedComment(stagedCommentInput.trim());
+                  setStagedCommentInput('');
+                }
+              }}
+            />
+            <button
+              className="staged-send-btn"
+              onClick={() => {
+                if (stagedCommentInput.trim()) {
+                  setStagedComment(stagedCommentInput.trim());
+                  setStagedCommentInput('');
+                }
+              }}
+              disabled={!stagedCommentInput.trim()}
+            >
+              Stage
+            </button>
+            {stagedComment && (
+              <button
+                className="staged-cancel-btn"
+                onClick={() => setStagedComment('')}
+                title="Cancel staged comment"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          {stagedComment && (
+            <div className="staged-preview">
+              <span className="staged-preview-label">Staged:</span>
+              <span className="staged-preview-text">{stagedComment}</span>
+            </div>
+          )}
         </div>
       )}
 

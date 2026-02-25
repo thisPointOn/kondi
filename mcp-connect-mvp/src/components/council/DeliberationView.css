@@ -612,6 +612,126 @@
   cursor: not-allowed;
 }
 
+/* Staged Comment Input (while agents are generating) */
+.staged-comment-input {
+  padding: 0.75rem 1.5rem;
+  background: var(--bg-secondary, #1a1a1a);
+  border-top: 1px solid var(--border-color, #333);
+}
+
+.staged-input-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.staged-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #3b82f6;
+  padding: 0.2rem 0.5rem;
+  background: #3b82f620;
+  border-radius: 4px;
+}
+
+.staged-badge {
+  font-size: 0.75rem;
+  color: #4ade80;
+  padding: 0.2rem 0.5rem;
+  background: #16a34a20;
+  border-radius: 4px;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.staged-input-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.staged-input-field {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-tertiary, #252525);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  color: var(--text-primary, #e5e5e5);
+  font-size: 0.8125rem;
+}
+
+.staged-input-field:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.staged-input-field::placeholder {
+  color: var(--text-tertiary, #666);
+}
+
+.staged-send-btn {
+  padding: 0.5rem 1rem;
+  background: #3b82f6;
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.staged-send-btn:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.staged-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.staged-cancel-btn {
+  background: transparent;
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-secondary, #999);
+  border-radius: 6px;
+  padding: 0.5rem 0.625rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.staged-cancel-btn:hover {
+  color: #f87171;
+  border-color: #f8717140;
+}
+
+.staged-preview {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: #16a34a10;
+  border: 1px solid #16a34a30;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.staged-preview-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #4ade80;
+  flex-shrink: 0;
+}
+
+.staged-preview-text {
+  color: var(--text-primary, #e5e5e5);
+  line-height: 1.4;
+}
+
 /* Setup Panel */
 .inline-setup-panel {
   display: flex;

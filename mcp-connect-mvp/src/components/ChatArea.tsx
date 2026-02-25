@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState, useCallback, type FC } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, type FC, type ReactNode } from 'react';
 import type React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Paperclip, X, ChevronDown, FolderOpen } from 'lucide-react';
+import type { Components } from 'react-markdown';
+import { Paperclip, X, ChevronDown, FolderOpen, Pin } from 'lucide-react';
+import type { ChatModelPin } from '../hooks/useChats';
 import { open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, Message, ToolCall } from '../types/mcp';
 import { openaiClient } from '../services/openaiClient';
@@ -208,6 +210,10 @@ interface ChatAreaProps {
   chatWorkingDir?: string;
   /** Called when user changes the per-chat working directory */
   onChatWorkingDirChange?: (dir: string | null) => void;
+  /** Per-chat model pin (overrides global provider/model when set) */
+  chatModelPin?: ChatModelPin | null;
+  /** Called when user pins/unpins a model to this chat */
+  onChatModelPinChange?: (pin: ChatModelPin | null) => void;
   /** Lifted active provider — persists across view changes */
   activeProviderOverride?: string | null;
   onActiveProviderChange?: (provider: string | null) => void;
@@ -242,6 +248,8 @@ const ChatArea: FC<ChatAreaProps> = ({
   globalWorkingDirectory,
   chatWorkingDir,
   onChatWorkingDirChange,
+  chatModelPin,
+  onChatModelPinChange,
   sending: sendingProp,
   onSendingChange,
   activeProviderOverride,
@@ -270,6 +278,8 @@ const ChatArea: FC<ChatAreaProps> = ({
   const historyIndexRef = useRef(-1);
   const savedInputRef = useRef('');
   const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [showPinDropdown, setShowPinDropdown] = useState(false);
+  const pinDropdownRef = useRef<HTMLDivElement | null>(null);
   const stopRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -288,6 +298,12 @@ const ChatArea: FC<ChatAreaProps> = ({
   const currentModel = chatModelId || (provider === 'claude' ? anthropicModel : openaiModel);
   const activeProviderMeta = effectiveProviderMeta.find((p) => p.id === selectedProviderId);
   const activeModelDef = activeProviderMeta?.models.find((m) => m.id === currentModel);
+
+  // Effective provider/model — per-chat pin overrides global selection
+  const effectiveProviderId = chatModelPin?.providerId || selectedProviderId;
+  const effectiveModelId = chatModelPin?.modelId || currentModel;
+  const pinnedProviderMeta = chatModelPin ? effectiveProviderMeta.find((p) => p.id === chatModelPin.providerId) : null;
+  const pinnedModelDef = pinnedProviderMeta?.models.find((m) => m.id === chatModelPin?.modelId);
 
   // Available (configured) providers
   const availableProviders = effectiveProviderMeta.filter(
@@ -361,17 +377,20 @@ const ChatArea: FC<ChatAreaProps> = ({
     prevDirRef.current = chatWorkingDir || globalWorkingDirectory || '';
   }, [chatWorkingDir, globalWorkingDirectory]);
 
-  // Close dropdown when clicking outside
+  // Close dropdowns when clicking outside
   useEffect(() => {
-    if (!showModelDropdown) return;
+    if (!showModelDropdown && !showPinDropdown) return;
     const handleClick = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      if (showModelDropdown && dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setShowModelDropdown(false);
+      }
+      if (showPinDropdown && pinDropdownRef.current && !pinDropdownRef.current.contains(e.target as Node)) {
+        setShowPinDropdown(false);
       }
     };
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
-  }, [showModelDropdown]);
+  }, [showModelDropdown, showPinDropdown]);
 
   // Tools computed for autocomplete are handled in ToolAutocomplete component
   const _allTools = useMemo(
@@ -522,48 +541,50 @@ const ChatArea: FC<ChatAreaProps> = ({
     });
 
     const effectiveWorkingDir = chatWorkingDir || localToolsService.getWorkingDirectory() || globalWorkingDirectory || undefined;
+    // Use pinned model if set, otherwise fall back to global
+    const modelForCall = effectiveModelId;
 
     if (provId.startsWith('anthropic')) {
       console.log('[ChatArea] Routing to Anthropic client');
       const result = await anthropicClient.chat(
-        msgs, availableTools, anthropicModel, serverSummary, modePrompt, effectiveWorkingDir
+        msgs, availableTools, modelForCall, serverSummary, modePrompt, effectiveWorkingDir
       );
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;
     } else if (provId === 'openai-cli') {
       console.log('[ChatArea] Routing to Codex client (OpenAI CLI)');
-      const result = await codexClient.chat(msgs, availableTools, openaiModel, modePrompt, effectiveWorkingDir);
+      const result = await codexClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir);
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;
     } else if (provId === 'openai-api' || provId.startsWith('openai')) {
       console.log('[ChatArea] Routing to OpenAI client');
-      const result = await openaiClient.chat(msgs, availableTools, openaiModel, modePrompt, effectiveWorkingDir);
+      const result = await openaiClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir);
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;
     } else if (provId === 'deepseek') {
       console.log('[ChatArea] Routing to DeepSeek client');
-      const result = await deepseekClient.chat(msgs, availableTools, currentModel, modePrompt, effectiveWorkingDir);
+      const result = await deepseekClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir);
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;
     } else if (provId === 'xai') {
       console.log('[ChatArea] Routing to xAI client');
-      const result = await xaiClient.chat(msgs, availableTools, currentModel, modePrompt, effectiveWorkingDir);
+      const result = await xaiClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir);
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;
     } else if (provId === 'google') {
       console.log('[ChatArea] Routing to Gemini client');
-      const result = await geminiClient.chat(msgs, availableTools, currentModel, modePrompt, effectiveWorkingDir);
+      const result = await geminiClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir);
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;
     } else if (provId === 'ollama') {
       console.log('[ChatArea] Routing to Ollama client');
-      const result = await ollamaClient.chat(msgs, availableTools, currentModel, modePrompt, effectiveWorkingDir);
+      const result = await ollamaClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir);
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;
@@ -638,7 +659,7 @@ const ChatArea: FC<ChatAreaProps> = ({
     stopRef.current = false;
 
     try {
-      const message = await callProvider(selectedProviderId, currentMessages);
+      const message = await callProvider(effectiveProviderId, currentMessages);
       onMessagesChange([...currentMessages, message]);
     } catch (error) {
       const errMessage: Message = {
@@ -732,7 +753,7 @@ const ChatArea: FC<ChatAreaProps> = ({
         )}
       </div>
 
-      {/* Working directory bar */}
+      {/* Working directory & model pin bar */}
       <div className="chat-dir-bar">
         <button
           className="chat-dir-indicator"
@@ -771,6 +792,75 @@ const ChatArea: FC<ChatAreaProps> = ({
             <X size={12} />
           </button>
         )}
+
+        <span className="chat-bar-divider" />
+
+        {/* Per-chat model pin */}
+        <div className="chat-pin-wrapper" ref={pinDropdownRef}>
+          <button
+            className={`chat-pin-btn ${chatModelPin ? 'pinned' : ''}`}
+            onClick={() => setShowPinDropdown(!showPinDropdown)}
+            disabled={sending}
+            title={chatModelPin
+              ? `Pinned: ${pinnedModelDef?.name || chatModelPin.modelId} (${pinnedProviderMeta?.shortLabel || chatModelPin.providerId})`
+              : 'Pin a model to this chat'}
+          >
+            <Pin size={12} className={chatModelPin ? 'pin-active' : ''} />
+            {chatModelPin ? (
+              <>
+                <span className="chat-pin-model">
+                  {pinnedModelDef?.name || chatModelPin.modelId}
+                </span>
+                <span
+                  className="chat-pin-provider"
+                  style={{ color: pinnedProviderMeta?.color }}
+                >
+                  {pinnedProviderMeta?.shortLabel || chatModelPin.providerId}
+                </span>
+              </>
+            ) : (
+              <span className="chat-pin-label">Pin model</span>
+            )}
+          </button>
+          {chatModelPin && (
+            <button
+              className="chat-dir-clear-btn"
+              onClick={() => onChatModelPinChange?.(null)}
+              title="Unpin model (use global default)"
+            >
+              <X size={12} />
+            </button>
+          )}
+
+          {showPinDropdown && (
+            <div className="chat-pin-dropdown">
+              {availableProviders.map((pm) => (
+                <div key={pm.id} className="pin-provider-group">
+                  <div className="pin-provider-header">
+                    <span className="pin-provider-dot" style={{ backgroundColor: pm.color }} />
+                    <span className="pin-provider-name">{pm.label}</span>
+                  </div>
+                  {pm.models.map((model) => {
+                    const isPinned = chatModelPin?.providerId === pm.id && chatModelPin?.modelId === model.id;
+                    return (
+                      <button
+                        key={model.id}
+                        className={`pin-model-btn ${isPinned ? 'current' : ''}`}
+                        onClick={() => {
+                          onChatModelPinChange?.({ providerId: pm.id, modelId: model.id });
+                          setShowPinDropdown(false);
+                        }}
+                      >
+                        <span className="pin-model-name">{model.name}</span>
+                        {isPinned && <span className="model-check">&#10003;</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="messages-container">
@@ -878,6 +968,51 @@ const ChatArea: FC<ChatAreaProps> = ({
   );
 };
 
+/** Copy-to-clipboard button */
+const CopyBtn: FC<{ text: string; className?: string }> = ({ text, className = '' }) => {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className={`chat-copy-btn ${copied ? 'copied' : ''} ${className}`}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch { /* clipboard not available */ }
+      }}
+      title={copied ? 'Copied!' : 'Copy'}
+    >
+      {copied ? '✓' : '⧉'}
+    </button>
+  );
+};
+
+/** Extract raw text from ReactMarkdown children */
+function extractText(children: ReactNode): string {
+  if (typeof children === 'string') return children;
+  if (Array.isArray(children)) return children.map(extractText).join('');
+  if (children && typeof children === 'object' && 'props' in children) {
+    return extractText((children as any).props?.children ?? '');
+  }
+  return String(children ?? '');
+}
+
+/** Custom components for ReactMarkdown to add copy buttons to code blocks */
+const markdownComponents: Components = {
+  pre({ children, ...props }) {
+    // Extract the code text from the nested <code> element
+    const codeText = extractText(children);
+    return (
+      <div className="chat-code-wrapper">
+        <CopyBtn text={codeText} className="chat-code-copy" />
+        <pre {...props}>{children}</pre>
+      </div>
+    );
+  },
+};
+
 const MessageRow: FC<{ message: Message; servers: MCPServer[] }> = ({ message, servers }) => {
   const isUser = message.role === 'user';
   const provider = message.provider;
@@ -928,7 +1063,7 @@ const MessageRow: FC<{ message: Message; servers: MCPServer[] }> = ({ message, s
             )}
           </>
         ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{message.content}</ReactMarkdown>
         )}
 
         {message.toolCalls?.map((toolCall) => (

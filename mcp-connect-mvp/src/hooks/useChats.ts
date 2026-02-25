@@ -9,6 +9,12 @@ type ChatRecord = Record<string, Message[]>;
 const MAX_CHATS = 20;
 const CHAT_STORAGE_KEY = 'mcp-chats';
 const CHAT_WORKING_DIRS_KEY = 'kondi-chat-working-dirs';
+const CHAT_MODEL_PINS_KEY = 'kondi-chat-model-pins';
+
+export interface ChatModelPin {
+  providerId: string;
+  modelId: string;
+}
 
 interface UseChatsParams {
   setCurrentView: (view: AppView) => void;
@@ -45,6 +51,14 @@ export function useChats({
     } catch { return {}; }
   });
 
+  // Per-chat model pins
+  const [chatModelPins, setChatModelPins] = useState<Record<string, ChatModelPin>>(() => {
+    try {
+      const saved = localStorage.getItem(CHAT_MODEL_PINS_KEY);
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
+
   const hasLoadedChatsRef = useRef(false);
 
   // Persist per-chat working directories
@@ -56,6 +70,15 @@ export function useChats({
     }
   }, [chatWorkingDirs]);
 
+  // Persist per-chat model pins
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_MODEL_PINS_KEY, JSON.stringify(chatModelPins));
+    } catch (e) {
+      console.warn('[useChats] Failed to save chat model pins:', e);
+    }
+  }, [chatModelPins]);
+
   const setChatWorkingDir = (chatId: string, dir: string | null) => {
     setChatWorkingDirs((prev) => {
       if (dir === null) {
@@ -64,6 +87,17 @@ export function useChats({
         return next;
       }
       return { ...prev, [chatId]: dir };
+    });
+  };
+
+  const setChatModelPin = (chatId: string, pin: ChatModelPin | null) => {
+    setChatModelPins((prev) => {
+      if (pin === null) {
+        const next = { ...prev };
+        delete next[chatId];
+        return next;
+      }
+      return { ...prev, [chatId]: pin };
     });
   };
 
@@ -230,6 +264,7 @@ export function useChats({
       return next;
     });
     setChatWorkingDir(chatId, null);
+    setChatModelPin(chatId, null);
     if (currentChatId === chatId) {
       const remainingIds = Object.keys(chats).filter((id) => id !== chatId);
       setCurrentChatId(remainingIds[0] || null);
@@ -326,5 +361,7 @@ export function useChats({
     handleGithubCheck,
     chatWorkingDirs,
     setChatWorkingDir,
+    chatModelPins,
+    setChatModelPin,
   } as const;
 }

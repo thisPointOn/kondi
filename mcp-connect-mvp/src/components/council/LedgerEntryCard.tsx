@@ -3,7 +3,7 @@
  * Supports collapsible view with auto-generated summary
  */
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import type { LedgerEntry, LedgerEntryType, DeliberationRole, Persona } from '../../council/types';
 import './LedgerEntryCard.css';
 
@@ -172,6 +172,30 @@ function generateSummary(content: string, _entryType: LedgerEntryType): string {
   return summary;
 }
 
+/** Small copy-to-clipboard button used for entry cards and code blocks */
+function CopyButton({ text, className = '' }: { text: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard not available */ }
+  }, [text]);
+
+  return (
+    <button
+      type="button"
+      className={`copy-btn ${copied ? 'copied' : ''} ${className}`}
+      onClick={handleCopy}
+      title={copied ? 'Copied!' : 'Copy'}
+    >
+      {copied ? '✓' : '⧉'}
+    </button>
+  );
+}
+
 export default function LedgerEntryCard({
   entry,
   persona,
@@ -185,6 +209,7 @@ export default function LedgerEntryCard({
   const summary = generateSummary(entry.content, entry.entryType);
   const providerColor = getProviderColor(persona?.provider);
   const borderColor = providerColor || (persona ? persona.color : undefined);
+  const cleanedEntryContent = cleanJsonContent(entry.content);
 
   const formatTimestamp = (timestamp: string) => {
     const date = new Date(timestamp);
@@ -203,34 +228,67 @@ export default function LedgerEntryCard({
     // Safety net: clean JSON from content that wasn't caught at the orchestrator level
     const cleanedContent = cleanJsonContent(content);
 
-    // Split into paragraphs
-    const paragraphs = cleanedContent.split(/\n\n+/);
+    // Split content into segments: alternating text and fenced code blocks
+    const segments: { type: 'text' | 'code'; content: string; lang?: string }[] = [];
+    const codeBlockRe = /```(\w*)\n?([\s\S]*?)```/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
 
-    return paragraphs.map((p, i) => {
-      // Check for section headers (e.g., "CONTEXT:", "DECISION:")
-      if (/^[A-Z][A-Z\s]+:/.test(p)) {
-        const [header, ...rest] = p.split(':');
+    while ((match = codeBlockRe.exec(cleanedContent)) !== null) {
+      if (match.index > lastIndex) {
+        segments.push({ type: 'text', content: cleanedContent.slice(lastIndex, match.index) });
+      }
+      segments.push({ type: 'code', content: match[2].replace(/\n$/, ''), lang: match[1] || undefined });
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < cleanedContent.length) {
+      segments.push({ type: 'text', content: cleanedContent.slice(lastIndex) });
+    }
+
+    return segments.map((seg, segIdx) => {
+      if (seg.type === 'code') {
         return (
-          <div key={i} className="entry-section">
-            <strong className="entry-section-header">{header}:</strong>
-            <span>{rest.join(':')}</span>
+          <div key={segIdx} className="entry-code-block">
+            <div className="code-block-header">
+              {seg.lang && <span className="code-block-lang">{seg.lang}</span>}
+              <CopyButton text={seg.content} className="code-copy-btn" />
+            </div>
+            <pre><code>{seg.content}</code></pre>
           </div>
         );
       }
 
-      // Check for bullet lists
-      if (p.includes('\n- ') || p.startsWith('- ')) {
-        const items = p.split('\n- ').filter(Boolean);
-        return (
-          <ul key={i} className="entry-list">
-            {items.map((item, j) => (
-              <li key={j}>{item.replace(/^- /, '')}</li>
-            ))}
-          </ul>
-        );
-      }
+      // Render text segments as before: paragraphs, headers, bullet lists
+      const paragraphs = seg.content.split(/\n\n+/);
+      return paragraphs.map((p, i) => {
+        const key = `${segIdx}-${i}`;
+        if (!p.trim()) return null;
 
-      return <p key={i}>{p}</p>;
+        // Check for section headers (e.g., "CONTEXT:", "DECISION:")
+        if (/^[A-Z][A-Z\s]+:/.test(p)) {
+          const [header, ...rest] = p.split(':');
+          return (
+            <div key={key} className="entry-section">
+              <strong className="entry-section-header">{header}:</strong>
+              <span>{rest.join(':')}</span>
+            </div>
+          );
+        }
+
+        // Check for bullet lists
+        if (p.includes('\n- ') || p.startsWith('- ')) {
+          const items = p.split('\n- ').filter(Boolean);
+          return (
+            <ul key={key} className="entry-list">
+              {items.map((item, j) => (
+                <li key={j}>{item.replace(/^- /, '')}</li>
+              ))}
+            </ul>
+          );
+        }
+
+        return <p key={key}>{p}</p>;
+      });
     });
   };
 
@@ -255,6 +313,7 @@ export default function LedgerEntryCard({
           {entry.roundNumber !== undefined && (
             <span className="entry-round">Round {entry.roundNumber}</span>
           )}
+          <CopyButton text={cleanedEntryContent} className="entry-copy-btn" />
         </div>
         <div className="entry-author">
           {persona && (

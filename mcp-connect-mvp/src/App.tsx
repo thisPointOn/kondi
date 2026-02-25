@@ -345,6 +345,12 @@ function App() {
                 chats.setChatWorkingDir(chats.currentChatId, dir);
               }
             }}
+            chatModelPin={chats.chatModelPins[chats.currentChatId || ''] || null}
+            onChatModelPinChange={(pin) => {
+              if (chats.currentChatId) {
+                chats.setChatModelPin(chats.currentChatId, pin);
+              }
+            }}
             sending={chats.chatSending}
             onSendingChange={chats.setChatSending}
             activeProviderOverride={chats.chatActiveProvider}
