@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, type FC } from 'react';
+import { useMemo, useState, useEffect, useRef, type FC } from 'react';
 import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal, FileText, Search, Eye, EyeOff, PanelRightClose, PanelRight } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -1337,10 +1337,22 @@ const ServerCard: FC<{
     : null;
   const authHint = server.authHint;
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setMenuOpen(false);
   }, [server.id]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpen]);
 
   return (
     <div className={`server-card ${hasError ? 'has-error' : ''}`}>
@@ -1378,6 +1390,7 @@ const ServerCard: FC<{
           )}
         </div>
         <div
+          ref={menuRef}
           className="status-menu-wrapper"
           onClick={(e) => {
             e.stopPropagation();
