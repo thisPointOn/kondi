@@ -276,8 +276,19 @@ const ChatArea: FC<ChatAreaProps> = ({
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [stagedComment, setStagedComment] = useState<string | null>(null);
   const stagedCommentRef = useRef<string | null>(null);
-  // Keep ref in sync with state so async handlers can read the latest value
-  stagedCommentRef.current = stagedComment;
+  // Wrapper that keeps the ref in sync immediately (not waiting for re-render)
+  const updateStagedComment = (updater: string | null | ((prev: string | null) => string | null)) => {
+    if (typeof updater === 'function') {
+      setStagedComment((prev) => {
+        const next = updater(prev);
+        stagedCommentRef.current = next;
+        return next;
+      });
+    } else {
+      stagedCommentRef.current = updater;
+      setStagedComment(updater);
+    }
+  };
   // Chat input history (like bash shell — up/down arrow to cycle through previous entries)
   const inputHistoryRef = useRef<string[]>(
     (() => {
@@ -485,7 +496,7 @@ const ChatArea: FC<ChatAreaProps> = ({
       e.preventDefault();
       if (sending && inputValue.trim()) {
         // Append to staged comments while LLM is responding
-        setStagedComment((prev) => prev ? prev + '\n' + inputValue.trim() : inputValue.trim());
+        updateStagedComment((prev) => prev ? prev + '\n' + inputValue.trim() : inputValue.trim());
         setInputValue('');
         return;
       }
@@ -716,7 +727,7 @@ const ChatArea: FC<ChatAreaProps> = ({
           timestamp: new Date(),
         };
         updatedMessages.push(followUp);
-        setStagedComment(null);
+        updateStagedComment(null);
         updateTarget(updatedMessages);
 
         // Chain a second LLM call with the staged comment included
@@ -752,7 +763,7 @@ const ChatArea: FC<ChatAreaProps> = ({
       };
       updateTarget([...currentMessages, errMessage]);
       // Clear staged comment on error too
-      setStagedComment(null);
+      updateStagedComment(null);
     } finally {
       setSendingTarget(false);
       setActiveProviderTarget(null);
@@ -983,7 +994,7 @@ const ChatArea: FC<ChatAreaProps> = ({
             </span>
             <button
               className="staged-comment-dismiss"
-              onClick={() => setStagedComment(null)}
+              onClick={() => updateStagedComment(null)}
               title="Discard all staged comments"
             >
               &times;
@@ -1059,7 +1070,7 @@ const ChatArea: FC<ChatAreaProps> = ({
             className={`send-btn ${sending && inputValue.trim() ? 'stage-mode' : ''}`}
             onClick={() => {
               if (sending && inputValue.trim()) {
-                setStagedComment((prev) => prev ? prev + '\n' + inputValue.trim() : inputValue.trim());
+                updateStagedComment((prev) => prev ? prev + '\n' + inputValue.trim() : inputValue.trim());
                 setInputValue('');
               } else {
                 handleSendMessage();
