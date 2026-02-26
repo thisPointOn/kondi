@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { PipelineExecutor, type PlatformAdapter } from '../pipeline';
 import { callLLM } from '../pipeline/gui-caller';
 import { filterToolsByServerIds } from '../utils/filterTools';
 import { saveDeliberationOutput } from '../services/deliberationSaveService';
 import { pipelineStore } from '../pipeline/store';
+import { startScheduler } from '../pipeline/scheduler';
 import type { MCPTool } from '../types/mcp';
 import type { Persona } from '../council/types';
 import { invoke } from '@tauri-apps/api/core';
@@ -21,6 +22,9 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
   const [activePipelineCouncilId, setActivePipelineCouncilId] = useState<string | null>(null);
   const [pipelineSelectedCouncilId, setPipelineSelectedCouncilId] = useState<string | null>(null);
   const [pipelineSelectedStepId, setPipelineSelectedStepId] = useState<string | null>(null);
+
+  // Keep a stable ref to the scheduled-run handler so the scheduler always calls the latest version
+  const scheduledRunRef = useRef<(id: string, outputDir: string) => void>(() => {});
 
   const handlePipelineSelect = (id: string) => {
     setCurrentPipelineId(id);
@@ -139,6 +143,75 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
     const { executor } = createExecutor();
     runExecutor(executor, id);
   };
+
+  /**
+   * Scheduled run: resets execution, overrides working directory to the
+   * dated output subfolder, then runs the pipeline.
+   */
+  const handleScheduledRun = (id: string, outputDir: string) => {
+    const pipeline = pipelineStore.get(id);
+    if (!pipeline) return;
+
+    const baseDir = pipeline.settings.workingDirectory;
+    if (!baseDir) {
+      console.warn(`[Scheduler] Pipeline "${pipeline.name}" has no working directory — skipping scheduled run`);
+      return;
+    }
+
+    // Build full output path
+    const sep = baseDir.includes('\\') ? '\\' : '/';
+    const outputPath = `${baseDir}${sep}${outputDir}`;
+
+    // Create the output directory via Tauri
+    invoke('run_command', { command: `mkdir -p "${outputPath}"`, workingDir: baseDir })
+      .then(() => {
+        // Temporarily override the working directory to the output folder
+        pipelineStore.update(id, {
+          settings: {
+            ...pipeline.settings,
+            workingDirectory: outputPath,
+          },
+        });
+
+        // Reset and run
+        pipelineStore.resetExecution(id);
+        pipelineStore.setPipelineStatus(id, 'ready');
+        const { executor } = createExecutor();
+
+        setPipelineExecutor(executor);
+        // Don't switch to execution view for scheduled runs — run in background
+
+        executor.run(id).then(() => {
+          console.log(`[Scheduler] Pipeline "${pipeline.name}" completed`);
+          // Restore the original working directory
+          pipelineStore.update(id, {
+            settings: { ...pipelineStore.get(id)!.settings, workingDirectory: baseDir },
+          });
+          setThinkingPersonas([]);
+        }).catch((err) => {
+          console.error(`[Scheduler] Pipeline "${pipeline.name}" failed:`, err);
+          // Restore the original working directory
+          pipelineStore.update(id, {
+            settings: { ...pipelineStore.get(id)!.settings, workingDirectory: baseDir },
+          });
+          setThinkingPersonas([]);
+        });
+      })
+      .catch((err) => {
+        console.error(`[Scheduler] Failed to create output directory:`, err);
+      });
+  };
+
+  // Keep the ref current so the scheduler interval always calls the latest version
+  scheduledRunRef.current = handleScheduledRun;
+
+  // Start the scheduler once on mount
+  useEffect(() => {
+    const cleanup = startScheduler((pipelineId, outputDir) => {
+      scheduledRunRef.current(pipelineId, outputDir);
+    });
+    return cleanup;
+  }, []);
 
   /**
    * Retry from a specific step: reset that step and everything after it,

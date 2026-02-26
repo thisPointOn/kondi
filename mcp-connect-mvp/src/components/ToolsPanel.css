@@ -25,6 +25,43 @@
   justify-content: space-between;
 }
 
+.tools-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.collapse-panel-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  color: #999;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.collapse-panel-btn:hover {
+  background: #1a1a1a;
+  color: #e8e8e8;
+  border-color: #4a4a4a;
+}
+
+.light-theme .collapse-panel-btn {
+  border-color: #e0e0e0;
+  color: #666;
+}
+
+.light-theme .collapse-panel-btn:hover {
+  background: #f0f0f0;
+  color: #222;
+  border-color: #cfcfcf;
+}
+
 .tools-header h2 {
   font-size: 16px;
   font-weight: 600;

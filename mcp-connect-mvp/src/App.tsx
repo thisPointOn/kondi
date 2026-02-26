@@ -65,7 +65,9 @@ function App() {
         onChatSelect={chats.setCurrentChatId}
         onNewChat={chats.requestNewChat}
         onChatDelete={chats.handleDeleteChat}
+        onChatRename={chats.setChatName}
         chats={chats.sidebarChats}
+        chatsSending={chats.chatsSending}
         showToolsPanel={serverHook.showToolsPanel}
         onToggleToolsPanel={() => serverHook.setShowToolsPanel((p) => !p)}
         providerErrorCount={providerConfig.validationReport?.llmProviders.filter(r => r.status === 'error').length || 0}
@@ -313,6 +315,7 @@ function App() {
             chatId={chats.currentChatId}
             messages={chats.chatMessages}
             onMessagesChange={(msgs) => chats.currentChatId && chats.handleChatMessagesChange(chats.currentChatId, msgs)}
+            onChatUpdate={chats.handleChatMessagesChange}
             servers={serverHook.servers}
             availableTools={serverHook.availableTools}
             pendingToolInsert={chats.pendingToolInsert}
@@ -351,10 +354,12 @@ function App() {
                 chats.setChatModelPin(chats.currentChatId, pin);
               }
             }}
-            sending={chats.chatSending}
-            onSendingChange={chats.setChatSending}
-            activeProviderOverride={chats.chatActiveProvider}
-            onActiveProviderChange={chats.setChatActiveProvider}
+            sending={!!chats.chatsSending[chats.currentChatId || '']}
+            onSendingChange={(v) => chats.currentChatId && chats.setChatSendingFor(chats.currentChatId, v)}
+            activeProviderOverride={chats.chatsActiveProvider[chats.currentChatId || ''] ?? null}
+            onActiveProviderChange={(v) => chats.currentChatId && chats.setChatActiveProviderFor(chats.currentChatId, v)}
+            onChatSendingChange={chats.setChatSendingFor}
+            onChatActiveProviderChange={chats.setChatActiveProviderFor}
           />
         )}
       </div>
@@ -370,6 +375,7 @@ function App() {
       {serverHook.showToolsPanel && (
         <ToolsPanel
           className="tools-drawer"
+          onClose={() => serverHook.setShowToolsPanel(false)}
           servers={serverHook.servers}
           onServerConnect={serverHook.handleConnectServer}
           onServerReconnect={serverHook.handleReconnectServer}

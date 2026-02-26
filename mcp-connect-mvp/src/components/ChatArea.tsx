@@ -204,6 +204,11 @@ interface ChatAreaProps {
   /** Lifted sending state — persists across view changes */
   sending?: boolean;
   onSendingChange?: (sending: boolean) => void;
+  /** Per-chat update — writes messages to a specific chatId (survives chat switches) */
+  onChatUpdate?: (chatId: string, messages: Message[]) => void;
+  /** Per-chat sending state callbacks (pinned to chatId, survives chat switches) */
+  onChatSendingChange?: (chatId: string, sending: boolean) => void;
+  onChatActiveProviderChange?: (chatId: string, provider: string | null) => void;
   /** Global working directory from Settings (fallback when no per-chat dir set) */
   globalWorkingDirectory?: string;
   /** Per-chat working directory (takes priority over global) */
@@ -252,6 +257,9 @@ const ChatArea: FC<ChatAreaProps> = ({
   onChatModelPinChange,
   sending: sendingProp,
   onSendingChange,
+  onChatUpdate,
+  onChatSendingChange,
+  onChatActiveProviderChange,
   activeProviderOverride,
   onActiveProviderChange,
 }) => {
@@ -266,6 +274,10 @@ const ChatArea: FC<ChatAreaProps> = ({
   const activeProvider = activeProviderOverride ?? activeProviderLocal;
   const setActiveProvider = (v: string | null) => { setActiveProviderLocal(v); onActiveProviderChange?.(v); };
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [stagedComment, setStagedComment] = useState<string | null>(null);
+  const stagedCommentRef = useRef<string | null>(null);
+  // Keep ref in sync with state so async handlers can read the latest value
+  stagedCommentRef.current = stagedComment;
   // Chat input history (like bash shell — up/down arrow to cycle through previous entries)
   const inputHistoryRef = useRef<string[]>(
     (() => {
@@ -471,6 +483,12 @@ const ChatArea: FC<ChatAreaProps> = ({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      if (sending && inputValue.trim()) {
+        // Append to staged comments while LLM is responding
+        setStagedComment((prev) => prev ? prev + '\n' + inputValue.trim() : inputValue.trim());
+        setInputValue('');
+        return;
+      }
       handleSendMessage();
       return;
     }
@@ -620,6 +638,32 @@ const ChatArea: FC<ChatAreaProps> = ({
       return;
     }
 
+    // Capture chatId at send time — all async updates target THIS chat
+    // even if the user switches to a different chat during the LLM call
+    const targetChatId = chatId;
+
+    // Helper: write messages to the pinned chat (survives chat switches)
+    const updateTarget = (msgs: Message[]) => {
+      if (onChatUpdate) {
+        onChatUpdate(targetChatId, msgs);
+      } else {
+        onMessagesChange(msgs);
+      }
+    };
+    const setSendingTarget = (v: boolean) => {
+      if (onChatSendingChange) {
+        onChatSendingChange(targetChatId, v);
+      }
+      // Also update local/lifted state for the currently displayed chat
+      setSending(v);
+    };
+    const setActiveProviderTarget = (v: string | null) => {
+      if (onChatActiveProviderChange) {
+        onChatActiveProviderChange(targetChatId, v);
+      }
+      setActiveProvider(v);
+    };
+
     // Push to input history (like bash shell)
     const trimmed = inputValue.trim();
     if (trimmed && (inputHistoryRef.current.length === 0 || inputHistoryRef.current[inputHistoryRef.current.length - 1] !== trimmed)) {
@@ -651,16 +695,47 @@ const ChatArea: FC<ChatAreaProps> = ({
     };
 
     const currentMessages = [...messages, userMessage];
-    onMessagesChange(currentMessages);
+    updateTarget(currentMessages);
     setInputValue('');
     setAttachedFiles([]);
     setShowToolAutocomplete(false);
-    setSending(true);
+    setSendingTarget(true);
     stopRef.current = false;
 
     try {
       const message = await callProvider(effectiveProviderId, currentMessages);
-      onMessagesChange([...currentMessages, message]);
+      let updatedMessages = [...currentMessages, message];
+
+      // If there's a staged comment, append it and send a follow-up LLM call
+      const pending = stagedCommentRef.current;
+      if (pending) {
+        const followUp: Message = {
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: pending,
+          timestamp: new Date(),
+        };
+        updatedMessages.push(followUp);
+        setStagedComment(null);
+        updateTarget(updatedMessages);
+
+        // Chain a second LLM call with the staged comment included
+        try {
+          const followUpReply = await callProvider(effectiveProviderId, updatedMessages);
+          updatedMessages = [...updatedMessages, followUpReply];
+        } catch (followUpError) {
+          const errMsg: Message = {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: 'Error: ' + (followUpError instanceof Error ? followUpError.message : String(followUpError)),
+            timestamp: new Date(),
+            provider: activeProvider || undefined,
+          };
+          updatedMessages = [...updatedMessages, errMsg];
+        }
+      }
+
+      updateTarget(updatedMessages);
     } catch (error) {
       const errMessage: Message = {
         id: crypto.randomUUID(),
@@ -675,10 +750,12 @@ const ChatArea: FC<ChatAreaProps> = ({
         timestamp: new Date(),
         provider: activeProvider || undefined,
       };
-      onMessagesChange([...currentMessages, errMessage]);
+      updateTarget([...currentMessages, errMessage]);
+      // Clear staged comment on error too
+      setStagedComment(null);
     } finally {
-      setSending(false);
-      setActiveProvider(null);
+      setSendingTarget(false);
+      setActiveProviderTarget(null);
     }
   };
 
@@ -892,6 +969,29 @@ const ChatArea: FC<ChatAreaProps> = ({
         <div ref={bottomRef} />
       </div>
 
+      {stagedComment && (() => {
+        const parts = stagedComment.split('\n');
+        const count = parts.length;
+        const preview = parts.map((p) => p.length > 60 ? p.slice(0, 60) + '...' : p).join(' | ');
+        return (
+          <div className="staged-comment-bar">
+            <span className="staged-comment-label">
+              Staged{count > 1 ? ` (${count})` : ''}:
+            </span>
+            <span className="staged-comment-text">
+              {preview.length > 120 ? preview.slice(0, 120) + '...' : preview}
+            </span>
+            <button
+              className="staged-comment-dismiss"
+              onClick={() => setStagedComment(null)}
+              title="Discard all staged comments"
+            >
+              &times;
+            </button>
+          </div>
+        );
+      })()}
+
       <div className="input-area">
         {/* Attached files preview */}
         {attachedFiles.length > 0 && (
@@ -938,7 +1038,7 @@ const ChatArea: FC<ChatAreaProps> = ({
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder="Type @ to mention tools..."
+            placeholder={sending ? 'Type a follow-up and press Enter to stage it...' : 'Type @ to mention tools...'}
             className="chat-input"
             rows={1}
           />
@@ -956,11 +1056,18 @@ const ChatArea: FC<ChatAreaProps> = ({
           )}
 
           <button
-            className="send-btn"
-            onClick={handleSendMessage}
-            disabled={(!inputValue.trim() && attachedFiles.length === 0) || sending}
+            className={`send-btn ${sending && inputValue.trim() ? 'stage-mode' : ''}`}
+            onClick={() => {
+              if (sending && inputValue.trim()) {
+                setStagedComment((prev) => prev ? prev + '\n' + inputValue.trim() : inputValue.trim());
+                setInputValue('');
+              } else {
+                handleSendMessage();
+              }
+            }}
+            disabled={!inputValue.trim() && (attachedFiles.length === 0 || sending)}
           >
-            &#8593;
+            {sending && inputValue.trim() ? '⏎' : '↑'}
           </button>
         </div>
       </div>

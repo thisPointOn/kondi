@@ -1,7 +1,8 @@
 import type { MCPTool } from '../types/mcp';
+import { LOCAL_SERVER_ID } from '../services/localTools';
 
 /** Server IDs for built-in/local services that are always available regardless of restrictions. */
-export const BUILTIN_SERVER_IDS = ['kondi-search'];
+export const BUILTIN_SERVER_IDS = [LOCAL_SERVER_ID, 'kondi-search'];
 
 /**
  * Filter MCP tools map based on allowed server IDs.

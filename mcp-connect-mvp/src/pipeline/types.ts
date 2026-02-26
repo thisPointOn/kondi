@@ -209,6 +209,24 @@ export interface PipelineStage {
 // Pipeline
 // ============================================================================
 
+// ============================================================================
+// Schedule Config
+// ============================================================================
+
+export interface PipelineSchedule {
+  enabled: boolean;
+  /** Time of day in HH:MM (24-hour) format */
+  time: string;
+  /** Recurrence mode */
+  mode: 'once' | 'daily' | 'weekly';
+  /** For 'once' mode: ISO date string (YYYY-MM-DD) */
+  date?: string;
+  /** For 'weekly' mode: 0 = Sunday, 1 = Monday, ... 6 = Saturday */
+  dayOfWeek?: number;
+  /** ISO timestamp of the last scheduled run (to avoid double-fires) */
+  lastRunAt?: string;
+}
+
 export interface Pipeline {
   id: string;
   name: string;
@@ -219,6 +237,7 @@ export interface Pipeline {
     workingDirectory?: string;
     directoryConstrained?: boolean;
     failurePolicy: 'stop' | 'skip_step';
+    schedule?: PipelineSchedule;
   };
   status: PipelineStatus;
   currentStageIndex: number;

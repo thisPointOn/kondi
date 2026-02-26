@@ -10,6 +10,7 @@ const MAX_CHATS = 20;
 const CHAT_STORAGE_KEY = 'mcp-chats';
 const CHAT_WORKING_DIRS_KEY = 'kondi-chat-working-dirs';
 const CHAT_MODEL_PINS_KEY = 'kondi-chat-model-pins';
+const CHAT_NAMES_KEY = 'kondi-chat-names';
 
 export interface ChatModelPin {
   providerId: string;
@@ -40,8 +41,32 @@ export function useChats({
   const [hasLoadedChats, setHasLoadedChats] = useState(false);
   const [messageCountToday, setMessageCountToday] = useState(0);
   const [pendingToolInsert, setPendingToolInsert] = useState<string | null>(null);
-  const [chatSending, setChatSending] = useState(false);
-  const [chatActiveProvider, setChatActiveProvider] = useState<string | null>(null);
+
+  // Per-chat sending state — allows concurrent LLM calls across different chats
+  const [chatsSending, setChatsSending] = useState<Record<string, boolean>>({});
+  const [chatsActiveProvider, setChatsActiveProvider] = useState<Record<string, string | null>>({});
+
+  const setChatSendingFor = (chatId: string, sending: boolean) => {
+    setChatsSending((prev) => {
+      if (!sending) {
+        const next = { ...prev };
+        delete next[chatId];
+        return next;
+      }
+      return { ...prev, [chatId]: true };
+    });
+  };
+
+  const setChatActiveProviderFor = (chatId: string, provider: string | null) => {
+    setChatsActiveProvider((prev) => {
+      if (provider === null) {
+        const next = { ...prev };
+        delete next[chatId];
+        return next;
+      }
+      return { ...prev, [chatId]: provider };
+    });
+  };
 
   // Per-chat working directories
   const [chatWorkingDirs, setChatWorkingDirs] = useState<Record<string, string>>(() => {
@@ -55,6 +80,14 @@ export function useChats({
   const [chatModelPins, setChatModelPins] = useState<Record<string, ChatModelPin>>(() => {
     try {
       const saved = localStorage.getItem(CHAT_MODEL_PINS_KEY);
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
+
+  // Per-chat custom names
+  const [chatNames, setChatNames] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem(CHAT_NAMES_KEY);
       return saved ? JSON.parse(saved) : {};
     } catch { return {}; }
   });
@@ -79,6 +112,15 @@ export function useChats({
     }
   }, [chatModelPins]);
 
+  // Persist per-chat custom names
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_NAMES_KEY, JSON.stringify(chatNames));
+    } catch (e) {
+      console.warn('[useChats] Failed to save chat names:', e);
+    }
+  }, [chatNames]);
+
   const setChatWorkingDir = (chatId: string, dir: string | null) => {
     setChatWorkingDirs((prev) => {
       if (dir === null) {
@@ -98,6 +140,17 @@ export function useChats({
         return next;
       }
       return { ...prev, [chatId]: pin };
+    });
+  };
+
+  const setChatName = (chatId: string, name: string | null) => {
+    setChatNames((prev) => {
+      if (name === null || name.trim() === '') {
+        const next = { ...prev };
+        delete next[chatId];
+        return next;
+      }
+      return { ...prev, [chatId]: name.trim() };
     });
   };
 
@@ -265,6 +318,7 @@ export function useChats({
     });
     setChatWorkingDir(chatId, null);
     setChatModelPin(chatId, null);
+    setChatName(chatId, null);
     if (currentChatId === chatId) {
       const remainingIds = Object.keys(chats).filter((id) => id !== chatId);
       setCurrentChatId(remainingIds[0] || null);
@@ -324,7 +378,7 @@ export function useChats({
       Object.entries(chats)
         .map(([id, messages]) => ({
           id,
-          title: messages[0]?.content?.slice(0, 28) || 'New Chat',
+          title: chatNames[id] || messages[0]?.content?.slice(0, 28) || 'New Chat',
           timestamp: messages[0]?.timestamp
             ? new Date(messages[0].timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : '',
@@ -335,7 +389,7 @@ export function useChats({
         }))
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(0, MAX_CHATS),
-    [chats],
+    [chats, chatNames],
   );
 
   return {
@@ -346,10 +400,10 @@ export function useChats({
     messageCountToday,
     pendingToolInsert,
     setPendingToolInsert,
-    chatSending,
-    setChatSending,
-    chatActiveProvider,
-    setChatActiveProvider,
+    chatsSending,
+    setChatSendingFor,
+    chatsActiveProvider,
+    setChatActiveProviderFor,
     chatMessages,
     sidebarChats,
     showNewChatDialog,
@@ -363,5 +417,7 @@ export function useChats({
     setChatWorkingDir,
     chatModelPins,
     setChatModelPin,
+    chatNames,
+    setChatName,
   } as const;
 }

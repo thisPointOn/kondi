@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, type FC } from 'react';
-import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal, FileText, Search, Eye, EyeOff } from 'lucide-react';
+import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal, FileText, Search, Eye, EyeOff, PanelRightClose } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, OAuthDiscovery } from '../types/mcp';
@@ -28,6 +28,7 @@ interface ToolsPanelProps {
   onGithubCheck?: (params: { repoUrl: string; manifestRaw: string; readmeText: string }) => Promise<void>;
   onToolClick: (toolName: string) => void;
   connectDeadlines: Record<string, number>;
+  onClose?: () => void;
   className?: string;
 }
 
@@ -515,6 +516,7 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
   onGithubCheck,
   onToolClick,
   connectDeadlines,
+  onClose,
   className,
 }) => {
   const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI_IPC__);
@@ -712,11 +714,18 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
       <div className="tools-header">
         <div className="tools-header-row">
           <h2>MCP Servers</h2>
-          {addMode === null && (
-            <button className="add-btn" onClick={handlePlusClick}>
-              <Plus size={18} />
-            </button>
-          )}
+          <div className="tools-header-actions">
+            {addMode === null && (
+              <button className="add-btn" onClick={handlePlusClick}>
+                <Plus size={18} />
+              </button>
+            )}
+            {onClose && (
+              <button className="collapse-panel-btn" onClick={onClose} title="Close panel">
+                <PanelRightClose size={18} />
+              </button>
+            )}
+          </div>
         </div>
 
         {addMode === 'options' && (

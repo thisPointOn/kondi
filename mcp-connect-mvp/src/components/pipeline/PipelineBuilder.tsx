@@ -4,8 +4,9 @@
 
 import { useState, useEffect } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { Pipeline, PipelineStep, StepConfig } from '../../pipeline/types';
+import type { Pipeline, PipelineStep, StepConfig, PipelineSchedule } from '../../pipeline/types';
 import { pipelineStore } from '../../pipeline/store';
+import { buildScheduledOutputDir } from '../../pipeline/scheduler';
 import StageRow from './StageRow';
 import StepConfigPanel from './StepConfigPanel';
 import './PipelineBuilder.css';
@@ -287,6 +288,9 @@ export default function PipelineBuilder({
                 : 'Steps inherit this directory by default but can override it. Agents can access files outside it.'}
             </span>
           </div>
+
+          {/* Scheduler */}
+          <SchedulerSection pipeline={pipeline} pipelineId={pipelineId} />
         </div>
 
         {/* Stages */}
@@ -333,6 +337,154 @@ export default function PipelineBuilder({
           onDelete={handleRemoveStep}
           onClose={() => setSelectedStepId(null)}
         />
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// Scheduler Section
+// ============================================================================
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function SchedulerSection({ pipeline, pipelineId }: { pipeline: Pipeline; pipelineId: string }) {
+  const schedule = pipeline.settings.schedule;
+  const enabled = schedule?.enabled ?? false;
+
+  const updateSchedule = (partial: Partial<PipelineSchedule>) => {
+    const current: PipelineSchedule = schedule || {
+      enabled: false,
+      time: '09:00',
+      mode: 'daily',
+    };
+    pipelineStore.update(pipelineId, {
+      settings: {
+        ...pipeline.settings,
+        schedule: { ...current, ...partial },
+      },
+    });
+  };
+
+  // Compute what the output folder name would look like
+  const previewDir = pipeline.settings.workingDirectory
+    ? buildScheduledOutputDir(pipeline.name, new Date())
+    : null;
+
+  // Format next-run description
+  const getNextRunDesc = (): string | null => {
+    if (!enabled || !schedule) return null;
+    const timeStr = schedule.time || '09:00';
+    switch (schedule.mode) {
+      case 'daily':
+        return `Runs daily at ${timeStr}`;
+      case 'weekly':
+        return `Runs every ${DAY_NAMES[schedule.dayOfWeek ?? 0]} at ${timeStr}`;
+      case 'once': {
+        if (!schedule.date) return 'Select a date';
+        return `Runs once on ${schedule.date} at ${timeStr}`;
+      }
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="meta-field">
+      <label>Schedule</label>
+      <div className="scheduler-toggle">
+        <input
+          type="checkbox"
+          id="pipeline-schedule-enabled"
+          checked={enabled}
+          onChange={(e) => updateSchedule({ enabled: e.target.checked })}
+        />
+        <label htmlFor="pipeline-schedule-enabled" className="scheduler-toggle-label">
+          {enabled ? 'Scheduled' : 'No schedule'}
+        </label>
+      </div>
+
+      {enabled && (
+        <div className="scheduler-config">
+          {/* Time picker */}
+          <div className="scheduler-row">
+            <label className="scheduler-label">Time</label>
+            <input
+              type="time"
+              className="scheduler-time-input"
+              value={schedule?.time || '09:00'}
+              onChange={(e) => updateSchedule({ time: e.target.value })}
+            />
+          </div>
+
+          {/* Recurrence mode */}
+          <div className="scheduler-row">
+            <label className="scheduler-label">Repeat</label>
+            <div className="scheduler-mode-selector">
+              {(['once', 'daily', 'weekly'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`scheduler-mode-btn ${(schedule?.mode || 'daily') === mode ? 'active' : ''}`}
+                  onClick={() => updateSchedule({ mode })}
+                >
+                  {mode === 'once' ? 'Once' : mode === 'daily' ? 'Daily' : 'Weekly'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Date picker for 'once' mode */}
+          {schedule?.mode === 'once' && (
+            <div className="scheduler-row">
+              <label className="scheduler-label">Date</label>
+              <input
+                type="date"
+                className="scheduler-date-input"
+                value={schedule?.date || ''}
+                min={new Date().toISOString().split('T')[0]}
+                onChange={(e) => updateSchedule({ date: e.target.value })}
+              />
+            </div>
+          )}
+
+          {/* Day of week for 'weekly' mode */}
+          {schedule?.mode === 'weekly' && (
+            <div className="scheduler-row">
+              <label className="scheduler-label">Day</label>
+              <select
+                className="scheduler-day-select"
+                value={schedule?.dayOfWeek ?? 1}
+                onChange={(e) => updateSchedule({ dayOfWeek: parseInt(e.target.value) })}
+              >
+                {DAY_NAMES.map((name, i) => (
+                  <option key={i} value={i}>{name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Next run summary */}
+          {getNextRunDesc() && (
+            <div className="scheduler-summary">
+              {getNextRunDesc()}
+            </div>
+          )}
+
+          {/* Output directory info */}
+          {pipeline.settings.workingDirectory ? (
+            <div className="scheduler-output-info">
+              Output will be saved to:
+              <code className="scheduler-output-path">
+                {pipeline.settings.workingDirectory}/{previewDir}
+              </code>
+            </div>
+          ) : (
+            <div className="scheduler-output-warning">
+              Set a working directory above to enable scheduled output saving.
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

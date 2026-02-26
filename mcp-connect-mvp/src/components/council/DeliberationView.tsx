@@ -139,6 +139,19 @@ export default function DeliberationView({
   const [stagedCommentInput, setStagedCommentInput] = useState('');
   const ledgerEndRef = useRef<HTMLDivElement>(null);
 
+  // Detect if any deferred-save fields differ from what's persisted in the council store
+  // These fields are only written to the store when RoleAssignment's "Save" button is clicked
+  const hasExternalChanges = (() => {
+    const d = council?.deliberation;
+    if (!d) return false;
+    if ((workingDirectory || undefined) !== (d.workingDirectory || undefined)) return true;
+    if (directoryConstrained !== (d.directoryConstrained ?? true)) return true;
+    if (bootstrapContext !== (d.bootstrapContext ?? true)) return true;
+    if ((problemInput.trim() || undefined) !== (d.savedProblem || undefined)) return true;
+    if ((expectedOutput.trim() || undefined) !== (d.expectedOutput || undefined)) return true;
+    return false;
+  })();
+
   // Clean JSON from display strings (for manager evaluation reasoning, etc.)
   const cleanJsonForDisplay = (text: string): string => {
     if (!text || typeof text !== 'string') return text;
@@ -1055,6 +1068,7 @@ export default function DeliberationView({
                 <RoleAssignment
                   council={council}
                   configuredProviders={configuredProviders}
+                  hasExternalChanges={hasExternalChanges}
                   onClose={() => setActivePanel(null)}
                   onSave={(assignments, personaUpdates, _saveOptions) => {
                     // Step 1: Save role assignments

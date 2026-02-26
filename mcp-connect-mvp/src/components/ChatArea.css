@@ -240,6 +240,57 @@
   font-size: 12px;
 }
 
+/* Staged comment bar — shown between messages and input while LLM is responding */
+.staged-comment-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 32px;
+  background: #1a1a2e;
+  border-top: 1px solid #2a2a3a;
+  font-size: 13px;
+  color: #c4b5fd;
+}
+.staged-comment-label {
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #7c3aed;
+  flex-shrink: 0;
+}
+.staged-comment-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.staged-comment-dismiss {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+.staged-comment-dismiss:hover {
+  color: #ef4444;
+}
+
+.light-theme .staged-comment-bar {
+  background: #f0ecff;
+  border-top-color: #ddd6fe;
+  color: #5b21b6;
+}
+.light-theme .staged-comment-label {
+  color: #6d28d9;
+}
+.light-theme .staged-comment-dismiss:hover {
+  color: #dc2626;
+}
+
 .input-area {
   padding: 20px 32px 32px;
   border-top: 1px solid #2a2a2a;
@@ -299,6 +350,13 @@
 .send-btn:disabled {
   background: #2a2a2a;
   cursor: not-allowed;
+}
+
+.send-btn.stage-mode {
+  background: #7c3aed;
+}
+.send-btn.stage-mode:hover {
+  background: #6d28d9;
 }
 
 .tool-autocomplete {

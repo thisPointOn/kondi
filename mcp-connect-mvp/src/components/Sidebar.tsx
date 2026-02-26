@@ -17,7 +17,10 @@ interface SidebarProps {
   onChatSelect: (id: string) => void;
   onNewChat: () => void;
   onChatDelete: (id: string) => void;
+  onChatRename: (id: string, name: string | null) => void;
   chats: SidebarChat[];
+  /** Chat IDs that currently have in-flight LLM calls */
+  chatsSending?: Record<string, boolean>;
   showToolsPanel: boolean;
   onToggleToolsPanel: () => void;
   className?: string;
@@ -32,7 +35,9 @@ const Sidebar: FC<SidebarProps> = ({
   onChatSelect,
   onNewChat,
   onChatDelete,
+  onChatRename,
   chats,
+  chatsSending = {},
   showToolsPanel,
   onToggleToolsPanel,
   className,
@@ -42,6 +47,8 @@ const Sidebar: FC<SidebarProps> = ({
   const [chatsExpanded, setChatsExpanded] = useState(false);
   const [showChatsPopover, setShowChatsPopover] = useState(false);
   const [chatMenu, setChatMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   useEffect(() => {
     const handleGlobalClick = () => setChatMenu(null);
@@ -141,6 +148,7 @@ const Sidebar: FC<SidebarProps> = ({
                   key={chat.id}
                   chat={chat}
                   active={chat.id === currentChatId && currentView === 'chat'}
+                  isSending={!!chatsSending[chat.id]}
                   onClick={() => {
                     onChatSelect(chat.id);
                     onViewChange('chat');
@@ -149,6 +157,16 @@ const Sidebar: FC<SidebarProps> = ({
                     e.preventDefault();
                     setChatMenu({ id: chat.id, x: e.clientX, y: e.clientY });
                   }}
+                  renaming={renamingChatId === chat.id}
+                  renameValue={renameValue}
+                  onRenameChange={setRenameValue}
+                  onRenameCommit={() => {
+                    if (renamingChatId) {
+                      onChatRename(renamingChatId, renameValue || null);
+                    }
+                    setRenamingChatId(null);
+                  }}
+                  onRenameCancel={() => setRenamingChatId(null)}
                 />
               ))}
               {chats.length === 0 && (
@@ -227,6 +245,17 @@ const Sidebar: FC<SidebarProps> = ({
           onClick={(e) => e.stopPropagation()}
         >
           <button
+            className="chat-menu-item"
+            onClick={() => {
+              const chat = chats.find((c) => c.id === chatMenu.id);
+              setRenamingChatId(chatMenu.id);
+              setRenameValue(chat?.title || '');
+              setChatMenu(null);
+            }}
+          >
+            Rename chat
+          </button>
+          <button
             className="chat-menu-item danger"
             onClick={() => {
               onChatDelete(chatMenu.id);
@@ -241,21 +270,56 @@ const Sidebar: FC<SidebarProps> = ({
   );
 };
 
-const ChatItem: FC<{ chat: SidebarChat; active?: boolean; onClick: () => void; onDelete: (e: React.MouseEvent) => void }> = ({
+const ChatItem: FC<{
+  chat: SidebarChat;
+  active?: boolean;
+  isSending?: boolean;
+  onClick: () => void;
+  onDelete: (e: React.MouseEvent) => void;
+  renaming?: boolean;
+  renameValue?: string;
+  onRenameChange?: (value: string) => void;
+  onRenameCommit?: () => void;
+  onRenameCancel?: () => void;
+}> = ({
   chat,
   active,
+  isSending,
   onClick,
   onDelete,
+  renaming,
+  renameValue,
+  onRenameChange,
+  onRenameCommit,
+  onRenameCancel,
 }) => (
   <div
-    className={`chat-item ${active ? 'active' : ''}`}
-    onClick={onClick}
+    className={`chat-item ${active ? 'active' : ''} ${isSending ? 'sending' : ''}`}
+    onClick={renaming ? undefined : onClick}
     onContextMenu={(e) => {
-      onDelete(e);
+      if (!renaming) onDelete(e);
     }}
   >
-    <span className="chat-title">{chat.title}</span>
-    <span className="chat-time">{chat.timestamp}</span>
+    {renaming ? (
+      <input
+        className="chat-rename-input"
+        value={renameValue || ''}
+        onChange={(e) => onRenameChange?.(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') onRenameCommit?.();
+          if (e.key === 'Escape') onRenameCancel?.();
+        }}
+        onBlur={() => onRenameCommit?.()}
+        autoFocus
+        onClick={(e) => e.stopPropagation()}
+      />
+    ) : (
+      <>
+        {isSending && <span className="chat-sending-dot" />}
+        <span className="chat-title">{chat.title}</span>
+        <span className="chat-time">{chat.timestamp}</span>
+      </>
+    )}
   </div>
 );
 

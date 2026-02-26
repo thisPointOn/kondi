@@ -354,12 +354,12 @@ You may read and write files as needed.`;
 
 ${scopeNote}
 
-You have tools available to create and edit files on disk. USE THEM to save your plan as a document file (e.g., plan.md or PLAN.md) in the working directory.
+You have a write_file tool — USE IT to save your plan as a document file (e.g., plan.md or PLAN.md) in the working directory.
 
 CRITICAL RULES:
 - Produce a PLAN, not code. Do NOT write source code files, implementation files, or any executable code.
 - Your output is a structured, actionable plan document that a separate coding step will later implement.
-- Save the plan document to disk using your file-writing tools.
+- Save the plan document to disk by calling write_file.
 - The plan should include: phases, steps, dependencies, architecture decisions, file structure, interfaces, and acceptance criteria.
 - Follow the directive exactly as written
 - If anything is unclear, flag it explicitly — do not guess
@@ -371,21 +371,23 @@ CRITICAL RULES:
 ${scopeNote}
 
 CRITICAL — BEFORE YOU START CODING:
-1. Use Glob to survey the project structure (find key directories and files)
-2. Use Read to examine files you'll be modifying (understand existing patterns)
-3. Use Grep to find related code (imports, function calls, type definitions)
+1. Use list_directory to survey the project structure (find key directories and files)
+2. Use read_file to examine files you'll be modifying (understand existing patterns)
+3. Use run_command with grep/find to locate related code (imports, function calls, type definitions)
 Your changes MUST integrate with the existing codebase. Do not rewrite files
 from scratch unless the directive explicitly asks you to create new files.
 
-You have tools available to create, read, and edit files on disk. USE THEM.
-You also have Bash — use it to install dependencies (npm install, pip install, cargo add, etc.)
-if the project needs packages that aren't yet installed.
-Do NOT just output code blocks in your response — actually write the files using your tools.
+You have these tools available — USE THEM:
+- write_file: Create or overwrite files on disk (takes path + content)
+- read_file: Read file contents (takes path)
+- list_directory: List files in a directory (takes path)
+- run_command: Execute shell commands like npm install, pip install, mkdir, etc.
+Do NOT just output code blocks in your response — call write_file to actually save each file to disk.
 
 CRITICAL RULES:
 - IMPLEMENT the code. Write real files to disk. Do not describe or summarize what to build.
 - Follow the directive exactly as written
-- If the directive says to create files, CREATE THEM using your file-writing tools
+- If the directive says to create files, CREATE THEM by calling write_file
 - If anything is unclear, flag it explicitly — do not guess
 - If something seems incorrect or impossible, say so — do not silently deviate
 - Do not add features, optimizations, or changes not specified in the directive
@@ -423,10 +425,10 @@ export function buildManagerFramingPrompt(rawProblem: string): string {
   return `You are framing a problem for a team of consultants who will analyze it
 from different perspectives, then debate approaches.
 
-You have Read, Glob, Grep, and Bash tools available. USE THEM to examine the
+You have read_file, list_directory, and run_command tools available. USE THEM to examine the
 project structure and existing code before framing the problem. Understanding
 what already exists is critical for framing an accurate problem statement.
-DO NOT modify any files. Use Bash only for read-only commands (ls, find, cat) or
+DO NOT modify any files. Use run_command only for read-only commands (ls, find, cat) or
 package installation (npm install, pip install) if prerequisites are needed.
 
 Write a structured problem statement that includes:
@@ -605,9 +607,9 @@ The worker should create every file, write every line of code, and produce a wor
 
   return `Based on your decision, write a concrete work directive.
 
-You have Read, Glob, Grep, and Bash tools available. Use them to:
+You have read_file, list_directory, and run_command tools available. Use them to:
 - Read existing files to understand what the worker needs to modify
-- Install any needed packages (npm install, pip install, etc.)
+- Install any needed packages (run_command with npm install, pip install, etc.)
 - Examine the project structure to give the worker accurate file paths
 DO NOT write or edit code files yourself — that's the worker's job.
 
@@ -650,8 +652,10 @@ export function buildManagerReviewPrompt(
 NOT code or implementation. Evaluate whether the plan is thorough, actionable, and covers all requirements.\n`
     : hasWritePermissions
     ? `\nNOTE: The worker had file-writing tools and was expected to ACTUALLY CREATE FILES on disk.
-If the worker only described or outlined what to build without actually writing the files,
-that is NOT acceptable — use REVISE and instruct them to actually implement the code.\n`
+The worker creates files by using tool calls (Bash, Write, etc.) — these tool calls appear in
+the output as tool_use blocks. If the worker's text describes creating files and includes tool
+calls that wrote those files, that IS valid implementation — do NOT treat it as "just describing".
+Only use REVISE if the worker truly did not invoke any file-writing tools.\n`
     : '';
 
   const consultantSection = consultantReviews
@@ -682,9 +686,15 @@ use REVISE with specific instructions to correct it, or RE-DELIBERATE if the app
 needs to be reconsidered by the consultants.
 
 IMPORTANT: Your reasoning and verdict MUST be included in your JSON response below.
-You have file-reading tools available — USE THEM to verify the worker's claims.
-Read key files to confirm they exist and contain correct implementations.
+You have read_file, list_directory, and run_command tools available — USE THEM to verify the worker's claims.
+Call read_file on key files to confirm they exist and contain correct implementations.
 Do NOT modify any files.
+
+CRITICAL VERIFICATION RULE: BEFORE issuing a REVISE verdict, you MUST first use your
+tools (read_file, list_directory, run_command) to check whether the expected files actually
+exist on disk. If the files exist and contain the correct content, ACCEPT the work — do NOT
+demand that the worker show you verification output. The worker's job is to create the files,
+not to prove they exist. YOUR job is to verify.
 
 Decide:
 - ACCEPT: Output meets the directive, acceptance criteria, AND expected output.
@@ -839,7 +849,7 @@ As ${persona.name}, evaluate from your ${focusArea} perspective:
 2. Any issues in your domain? (e.g., security flaws, performance problems, missing edge cases)
 3. Specific improvements needed (if any)
 
-If you have file-reading tools available, READ the actual files to verify claims.
+If you have read_file available, call it on the actual files to verify claims.
 Be concise — 3-5 sentences max. Focus on actionable feedback, not style preferences.`;
 }
 
@@ -860,7 +870,7 @@ ${directive}
 IMPORTANT: You are a planning agent with write access to the file system.
 Your job is to produce a DETAILED PLAN DOCUMENT — NOT code.
 
-USE YOUR TOOLS to save the plan as a document file (e.g., plan.md or PLAN.md) in the working directory.
+Call write_file to save the plan as a document file (e.g., plan.md or PLAN.md) in the working directory.
 Do NOT write source code, implementation files, or any executable code.
 
 The plan should be thorough and actionable, covering:
@@ -889,16 +899,17 @@ ${directive}
 
 ---
 STEP 1 — UNDERSTAND THE CODEBASE:
-Before writing any code, use your tools to read existing files in the working directory.
+Before writing any code, call list_directory and read_file to examine existing files in the working directory.
 Understand the project structure, existing patterns, and conventions.
 Your implementation must integrate with what already exists.
 
 STEP 2 — IMPLEMENT:
 You are an implementation agent with write access to the file system.
 DO NOT just describe what needs to be done or output code blocks in your response.
-USE YOUR TOOLS to actually create and write the files to disk.
+Call write_file for each file you need to create or modify.
+Use run_command for shell commands (npm install, mkdir, etc.).
 
-Write each file using your file-writing tools.
+You MUST call the write_file tool to save each file — do not just show code in your response.
 
 MANDATORY — When you are DONE implementing, you MUST end your response with a completion summary
 in EXACTLY this format:
@@ -960,7 +971,7 @@ ${feedback}
 Revise your plan document to address the feedback. Follow the original directive.
 Only change what the feedback asks you to change.
 
-IMPORTANT: USE YOUR TOOLS to edit or rewrite the plan document on disk. Do not just describe the changes.
+IMPORTANT: Call write_file to edit or rewrite the plan document on disk. Do not just describe the changes.
 Actually modify the plan file. Do NOT write source code or implementation files.
 
 MANDATORY — When you are DONE with revisions, you MUST end your response with a completion summary
@@ -991,8 +1002,8 @@ ${feedback}
 Revise your implementation to address the feedback. Follow the original directive.
 Only change what the feedback asks you to change.
 
-IMPORTANT: USE YOUR TOOLS to edit or rewrite the files on disk. Do not just describe the changes.
-Actually modify the files.
+IMPORTANT: Call write_file to edit or rewrite the files on disk. Do not just describe the changes.
+Use read_file to check existing content first, then write_file to save your changes.
 
 MANDATORY — When you are DONE with revisions, you MUST end your response with a completion summary
 in EXACTLY this format:
@@ -1048,9 +1059,9 @@ This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT s
  */
 export function buildDecompositionPrompt(spec: string, workerCount: number): string {
   const toolPreamble = `BEFORE DECOMPOSING — USE YOUR TOOLS:
-You have Read, Glob, and Grep tools available. Use them to:
-1. Examine the existing project structure (Glob for key files)
-2. Understand what code already exists
+You have read_file, list_directory, and run_command tools available. Use them to:
+1. Examine the existing project structure (list_directory for key directories)
+2. Understand what code already exists (read_file on key files)
 3. Identify files that need to be modified vs. created from scratch
 4. Note existing patterns, frameworks, and conventions
 
@@ -1141,9 +1152,9 @@ export function buildModuleDirectivePrompt(
     : '';
 
   const scopeNote = permissions?.writePermissions
-    ? `\nIMPORTANT: You have WRITE PERMISSIONS. USE YOUR TOOLS to create and edit files on disk.
-Use Bash to install dependencies (npm install, pip install, cargo add, etc.) if needed.
-Do NOT output code blocks in your response — actually write the files.
+    ? `\nIMPORTANT: You have WRITE PERMISSIONS. Call write_file to create and edit files on disk.
+Use run_command to install dependencies (npm install, pip install, cargo add, etc.) if needed.
+Do NOT output code blocks in your response — call write_file to actually save each file.
 ${permissions.workingDirectory
   ? (permissions.directoryConstrained
     ? `All file operations MUST be within: ${permissions.workingDirectory}`
@@ -1196,14 +1207,14 @@ ${expectedSection}
 ## WORKER IMPLEMENTATIONS
 ${outputsSection}
 
-You have Read, Grep, and Glob tools available. If the workers wrote files to disk,
-USE YOUR TOOLS to read the actual files and verify the implementation. Do not rely
+You have read_file, list_directory, and run_command tools available. If the workers wrote files to disk,
+call read_file on the actual files to verify the implementation. Do not rely
 solely on the worker output text above — check the actual files on disk.
 
 ---
 
 STEP 1 — INVESTIGATE:
-Use your tools to read the actual files. Check that they exist, contain the expected
+Call read_file and list_directory to check the actual files. Verify they exist, contain the expected
 code, and match the specification. Note any discrepancies.
 
 STEP 2 — ASSESS:

@@ -39,6 +39,8 @@ interface RoleAssignmentProps {
   onRemovePersona?: (personaId: string) => void;
   /** Callback when a persona card is clicked for editing */
   onEditPersona?: (persona: Persona) => void;
+  /** When true, marks the save button as unsaved due to external changes (e.g. working directory, task) */
+  hasExternalChanges?: boolean;
 }
 
 interface RoleOption {
@@ -130,6 +132,7 @@ export default function RoleAssignment({
   onAddPersona,
   onRemovePersona,
   onEditPersona,
+  hasExternalChanges = false,
 }: RoleAssignmentProps) {
   const existingAssignments = council.deliberation?.roleAssignments || [];
 
@@ -208,6 +211,13 @@ export default function RoleAssignment({
 
   // Track if configuration is saved (starts as true if there are existing assignments)
   const [saved, setSaved] = useState(() => existingAssignments.length > 0);
+
+  // Mark unsaved when external settings (working directory, task, etc.) change
+  useEffect(() => {
+    if (hasExternalChanges) {
+      setSaved(false);
+    }
+  }, [hasExternalChanges]);
 
   // Track which persona has model dropdown open
   const [openModelDropdown, setOpenModelDropdown] = useState<string | null>(null);
@@ -623,7 +633,7 @@ export default function RoleAssignment({
           }}
           disabled={!canSave || saved}
         >
-          {saved ? 'Saved ✓' : 'Save Roles'}
+          {saved ? 'Saved ✓' : 'Save Setup'}
         </button>
       </div>
     </>
