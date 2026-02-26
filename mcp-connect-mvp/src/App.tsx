@@ -8,7 +8,9 @@ import SearchServicePanel from './components/SearchServicePanel';
 import { CouncilLibrary, CouncilView } from './components/council';
 import { CollapsibleSection } from './components/CollapsibleSection';
 import NewChatDialog from './components/NewChatDialog';
+import PermissionDialog from './components/PermissionDialog';
 import { mcpClient } from './services/mcpClient';
+import { localToolsService } from './services/localTools';
 import { open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import {
   useTheme,
@@ -62,7 +64,10 @@ function App() {
         currentView={currentView}
         onViewChange={setCurrentView}
         currentChatId={chats.currentChatId}
-        onChatSelect={chats.setCurrentChatId}
+        onChatSelect={(id) => {
+          chats.setCurrentChatId(id);
+          localToolsService.resetAllowAllReads();
+        }}
         onNewChat={chats.requestNewChat}
         onChatDelete={chats.handleDeleteChat}
         onChatRename={chats.setChatName}
@@ -369,6 +374,16 @@ function App() {
           defaultDir={providerConfig.globalWorkingDirectory}
           onConfirm={chats.createNewChat}
           onCancel={chats.cancelNewChat}
+        />
+      )}
+
+      {serverHook.pendingPermission && (
+        <PermissionDialog
+          message={serverHook.pendingPermission.message}
+          operation={serverHook.pendingPermission.operation}
+          onAllow={() => serverHook.resolvePermission('allow')}
+          onAllowAll={() => serverHook.resolvePermission('allow-all')}
+          onDeny={() => serverHook.resolvePermission('deny')}
         />
       )}
 

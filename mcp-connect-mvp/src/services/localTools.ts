@@ -84,11 +84,15 @@ export const LOCAL_SERVER_ID = '__local__';
 const WORKING_DIR_KEY = 'kondi-working-dir';
 
 // Callback for requesting user permission for out-of-scope operations
-type PermissionCallback = (message: string) => Promise<boolean>;
+// Returns 'allow' | 'allow-all' | 'deny'
+type PermissionResult = 'allow' | 'allow-all' | 'deny';
+type PermissionCallback = (message: string, operation: string) => Promise<PermissionResult>;
 
 export class LocalToolsService {
   private workingDirectory: string | null = null;
   private permissionCallback: PermissionCallback | null = null;
+  /** When true, skip permission prompts for read/list operations */
+  private allowAllReads = false;
 
   constructor() {
     // Load saved working directory
@@ -100,6 +104,11 @@ export class LocalToolsService {
 
   setPermissionCallback(callback: PermissionCallback): void {
     this.permissionCallback = callback;
+  }
+
+  /** Reset the "allow all reads" flag (call when switching chats) */
+  resetAllowAllReads(): void {
+    this.allowAllReads = false;
   }
 
   getWorkingDirectory(): string | null {
@@ -152,17 +161,29 @@ export class LocalToolsService {
     }
   }
 
-  private async requestPermission(operation: string, path: string): Promise<boolean> {
+  private async requestPermission(operation: string, path: string, effectiveDir?: string): Promise<boolean> {
+    // Auto-allow reads/lists if user previously chose "Allow All"
+    const isRead = operation === 'read' || operation === 'list';
+    if (isRead && this.allowAllReads) {
+      return true;
+    }
+
     if (!this.permissionCallback) {
-      // No callback set - deny by default for safety
       throw new Error(`Operation "${operation}" on "${path}" is outside the working directory. Permission denied.`);
     }
 
-    const allowed = await this.permissionCallback(
-      `The AI wants to ${operation} "${path}" which is outside the working directory (${this.workingDirectory}). Allow this operation?`
+    const dir = effectiveDir ?? this.workingDirectory ?? '(none)';
+    const result = await this.permissionCallback(
+      `The AI wants to ${operation} "${path}" which is outside the working directory (${dir}). Allow this operation?`,
+      operation,
     );
 
-    if (!allowed) {
+    if (result === 'allow-all') {
+      this.allowAllReads = true;
+      return true;
+    }
+
+    if (result === 'deny') {
       throw new Error(`Operation "${operation}" on "${path}" was denied by user.`);
     }
 
@@ -177,7 +198,7 @@ export class LocalToolsService {
         const resolvedPath = this.resolvePath(args.path, workingDirectory);
         const inScope = await this.checkScope(resolvedPath, workingDirectory);
         if (!inScope) {
-          await this.requestPermission('read', resolvedPath);
+          await this.requestPermission('read', resolvedPath, dir ?? undefined);
         }
         const content = await invoke<string>('read_local_file', { path: resolvedPath });
         return [{ type: 'text', text: content }];
@@ -190,7 +211,7 @@ export class LocalToolsService {
         const resolvedPath = this.resolvePath(args.path, workingDirectory);
         const inScope = await this.checkScope(resolvedPath, workingDirectory);
         if (!inScope) {
-          await this.requestPermission('write to', resolvedPath);
+          await this.requestPermission('write to', resolvedPath, dir);
         }
         await invoke<void>('write_local_file', { path: resolvedPath, content: args.content });
         return [{ type: 'text', text: `Successfully wrote to ${resolvedPath}` }];
@@ -200,7 +221,7 @@ export class LocalToolsService {
         const resolvedPath = this.resolvePath(args.path, workingDirectory);
         const inScope = await this.checkScope(resolvedPath, workingDirectory);
         if (!inScope) {
-          await this.requestPermission('list', resolvedPath);
+          await this.requestPermission('list', resolvedPath, dir ?? undefined);
         }
         const files = await invoke<FileInfo[]>('list_directory', { path: resolvedPath });
         const formatted = files.map(f => {

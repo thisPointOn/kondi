@@ -14,10 +14,17 @@ interface UseServersParams {
   validationReport: StartupValidationReport | null;
 }
 
+export interface PermissionRequest {
+  message: string;
+  operation: string;
+  resolve: (result: 'allow' | 'allow-all' | 'deny') => void;
+}
+
 export function useServers({ hasLoadedKeys, validationReport }: UseServersParams) {
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [connectDeadlines, setConnectDeadlines] = useState<Record<string, number>>({});
   const [showToolsPanel, setShowToolsPanel] = useState(true);
+  const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const hasInitializedRef = useRef(false);
 
   // Load existing server state from the MCP client
@@ -92,9 +99,10 @@ export function useServers({ hasLoadedKeys, validationReport }: UseServersParams
     });
 
     // Set up permission callback for local tools out-of-scope operations
-    localToolsService.setPermissionCallback(async (message: string) => {
-      // eslint-disable-next-line no-alert
-      return window.confirm(message);
+    localToolsService.setPermissionCallback(async (message: string, operation: string) => {
+      return new Promise<'allow' | 'allow-all' | 'deny'>((resolve) => {
+        setPendingPermission({ message, operation, resolve });
+      });
     });
   }, []);
 
@@ -535,6 +543,13 @@ export function useServers({ hasLoadedKeys, validationReport }: UseServersParams
     [servers]
   );
 
+  const resolvePermission = (result: 'allow' | 'allow-all' | 'deny') => {
+    if (pendingPermission) {
+      pendingPermission.resolve(result);
+      setPendingPermission(null);
+    }
+  };
+
   return {
     servers,
     connectDeadlines,
@@ -552,5 +567,7 @@ export function useServers({ hasLoadedKeys, validationReport }: UseServersParams
     handleReconnectServer,
     handleServerAddLocal,
     handleSearchServiceStatusChange,
+    pendingPermission,
+    resolvePermission,
   } as const;
 }
