@@ -390,7 +390,6 @@ function App() {
       {serverHook.showToolsPanel && (
         <ToolsPanel
           className="tools-drawer"
-          onClose={() => serverHook.setShowToolsPanel(false)}
           servers={serverHook.servers}
           onServerConnect={serverHook.handleConnectServer}
           onServerReconnect={serverHook.handleReconnectServer}

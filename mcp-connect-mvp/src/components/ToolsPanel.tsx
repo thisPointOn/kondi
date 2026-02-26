@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, type FC } from 'react';
-import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal, FileText, Search, Eye, EyeOff, PanelRightClose } from 'lucide-react';
+import { ChevronRight, Plus, Library, Settings2, Zap, Loader2, AlertCircle, Lock, FolderOpen, Globe, Terminal, FileText, Search, Eye, EyeOff, PanelRightClose, PanelRight } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, OAuthDiscovery } from '../types/mcp';
@@ -28,7 +28,6 @@ interface ToolsPanelProps {
   onGithubCheck?: (params: { repoUrl: string; manifestRaw: string; readmeText: string }) => Promise<void>;
   onToolClick: (toolName: string) => void;
   connectDeadlines: Record<string, number>;
-  onClose?: () => void;
   className?: string;
 }
 
@@ -516,10 +515,10 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
   onGithubCheck,
   onToolClick,
   connectDeadlines,
-  onClose,
   className,
 }) => {
   const isTauri = typeof window !== 'undefined' && ((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI_IPC__);
+  const [collapsed, setCollapsed] = useState(false);
   const [addMode, setAddMode] = useState<AddMode>(null);
   const [addPhase, setAddPhase] = useState<AddPhase>('url_entry');
   const [newServerName, setNewServerName] = useState('');
@@ -710,7 +709,22 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
   };
 
   return (
-    <aside className={['tools-panel', className].filter(Boolean).join(' ')}>
+    <aside className={['tools-panel', collapsed ? 'collapsed' : '', className].filter(Boolean).join(' ')}>
+      {collapsed ? (
+        <div className="tools-collapsed-strip">
+          <button
+            className="collapse-panel-btn"
+            onClick={() => setCollapsed(false)}
+            title="Expand panel"
+          >
+            <PanelRight size={18} />
+          </button>
+          <span className="tools-collapsed-label">MCP</span>
+          <div className="tools-collapsed-spacer" />
+          <Zap size={16} className="tools-collapsed-icon" />
+        </div>
+      ) : (
+      <>
       <div className="tools-header">
         <div className="tools-header-row">
           <h2>MCP Servers</h2>
@@ -720,11 +734,9 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
                 <Plus size={18} />
               </button>
             )}
-            {onClose && (
-              <button className="collapse-panel-btn" onClick={onClose} title="Close panel">
-                <PanelRightClose size={18} />
-              </button>
-            )}
+            <button className="collapse-panel-btn" onClick={() => setCollapsed(true)} title="Collapse panel">
+              <PanelRightClose size={18} />
+            </button>
           </div>
         </div>
 
@@ -1214,6 +1226,8 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
           )}
         </div>
       </div>
+      </>
+      )}
     </aside>
   );
 };
