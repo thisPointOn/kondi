@@ -1398,14 +1398,14 @@ const ServerCard: FC<{
                 </button>
               )}
               {isConnected && (
-                <>
-                  <button className="menu-item" onClick={onConnect}>
-                    Refresh
-                  </button>
-                  <button className="menu-item" onClick={onDisconnect}>
-                    Disconnect
-                  </button>
-                </>
+                <button className="menu-item" onClick={onConnect}>
+                  Refresh
+                </button>
+              )}
+              {(isConnected || isConnecting || server.status === 'error') && (
+                <button className="menu-item" onClick={onDisconnect}>
+                  Disconnect
+                </button>
               )}
               <button className="menu-item" onClick={() => { setShowLogs(!showLogs); setMenuOpen(false); }}>
                 <FileText size={12} />
