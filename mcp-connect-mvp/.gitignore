@@ -24,6 +24,9 @@ dist-ssr
 *.sw?
 openclaw/
 
+# Claude Code
+.claude/
+
 # Personal dev artifacts
 launch-kondi.sh
 neurosity-crown-pipeline.json
