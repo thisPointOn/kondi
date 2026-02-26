@@ -1402,11 +1402,9 @@ const ServerCard: FC<{
                   Refresh
                 </button>
               )}
-              {(isConnected || isConnecting || server.status === 'error') && (
-                <button className="menu-item" onClick={onDisconnect}>
-                  Disconnect
-                </button>
-              )}
+              <button className="menu-item" onClick={onDisconnect}>
+                Disconnect
+              </button>
               <button className="menu-item" onClick={() => { setShowLogs(!showLogs); setMenuOpen(false); }}>
                 <FileText size={12} />
                 {showLogs ? 'Hide Logs' : 'View Logs'}
