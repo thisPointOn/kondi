@@ -9,11 +9,13 @@ import OpenAI from 'openai';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 import { LOCAL_SERVER_ID, localToolsService } from './localTools';
+import { formatToolCallSummary } from './formatToolCallSummary';
 import {
   resolveApiKey,
   resolveApiKeySync,
   reportSuccess,
   reportFailure,
+  PROFILE_IDS,
 } from './auth-profiles';
 import type { AuthProvider } from './auth-profiles';
 
@@ -28,6 +30,20 @@ interface OpenAICompatibleConfig {
 const BASE_SYSTEM_PROMPT = `You are a helpful general-purpose AI assistant. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
 
 You have access to MCP (Model Context Protocol) tools that let you interact with external services. These tools are OPTIONAL - use them when relevant to the user's request, but you are NOT limited to only topics related to these tools. You are a general-purpose assistant first.
+
+CRITICAL EXECUTION RULES — TOOL CALLING:
+A response that says "I'm doing it now" or "proceeding" WITHOUT tool_use blocks is a FAILED response. You MUST include actual tool calls. Every response where you promise to act MUST contain tool_use function calls — no exceptions.
+
+BANNED PATTERNS (these are failures — never produce them):
+- "I'll do this now." [end of response with no tool calls]
+- "Proceeding with execution-only mode." [end of response with no tool calls]
+- "Starting now." [end of response with no tool calls]
+- Any response where you say you will act but produce zero tool_use calls
+
+CORRECT PATTERN:
+- Brief explanation (optional) FOLLOWED BY actual tool_use calls in the same response
+- If you need data, call the tool to get it. If you need to create something, call the tool to create it. Do this NOW, not "next".
+- Do NOT ask for confirmation before using tools unless the operation is destructive (deleting data, overwriting files). For read operations, searches, and data retrieval — just execute.
 
 IMPORTANT SECURITY RULES:
 - NEVER ask users for passwords, login credentials, API keys, or authentication tokens.
@@ -47,6 +63,18 @@ export class OpenAICompatibleClient {
 
   constructor(config: OpenAICompatibleConfig) {
     this.config = { requiresAuth: true, ...config };
+  }
+
+  /**
+   * Map a UI provider ID (e.g. 'deepseek') to the corresponding auth profile ID.
+   */
+  private mapProvIdToProfileId(provId: string): string | undefined {
+    const map: Record<string, string> = {
+      'deepseek': PROFILE_IDS.deepseekApiKey,
+      'xai': PROFILE_IDS.xaiApiKey,
+      'google-api': PROFILE_IDS.googleApiKey,
+    };
+    return map[provId];
   }
 
   getAuthMethod(): 'api_key' | 'none' {
@@ -171,10 +199,11 @@ export class OpenAICompatibleClient {
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
     model?: string,
     additionalSystemPrompt?: string,
-    workingDirectory?: string
+    workingDirectory?: string,
+    provId?: string,
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     const authMethod = this.getAuthMethod();
-    console.log(`[${this.config.providerName}] chat() called`, { authMethod, model });
+    console.log(`[${this.config.providerName}] chat() called`, { authMethod, model, provId });
 
     if (this.config.requiresAuth && authMethod === 'none') {
       throw new Error(`No ${this.config.providerName} authentication configured. Please set up credentials in Settings.`);
@@ -182,7 +211,12 @@ export class OpenAICompatibleClient {
 
     await this.ensureClientInitialized();
 
-    const resolved = this.config.requiresAuth ? await resolveApiKey(this.config.authProvider) : null;
+    // Map provider ID to auth profile ID to prevent credential fallover
+    const preferredProfileId = provId
+      ? this.mapProvIdToProfileId(provId)
+      : undefined;
+
+    const resolved = this.config.requiresAuth ? await resolveApiKey(this.config.authProvider, preferredProfileId) : null;
     const profileId = resolved?.profileId || null;
 
     const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [];
@@ -224,7 +258,9 @@ export class OpenAICompatibleClient {
       { role: 'system', content: systemPrompt },
       ...messages.map((message) => ({
         role: message.role as 'user' | 'assistant',
-        content: message.content,
+        content: message.role === 'assistant' && message.toolCalls?.length
+          ? message.content + '\n\n' + formatToolCallSummary(message.toolCalls)
+          : message.content,
       })),
     ];
 

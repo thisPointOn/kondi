@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 import { LOCAL_SERVER_ID, localToolsService } from './localTools';
+import { formatToolCallSummary } from './formatToolCallSummary';
 import {
   resolveApiKey,
   resolveApiKeySync,
@@ -9,6 +10,7 @@ import {
   getBetasForToken,
   reportSuccess,
   reportFailure,
+  PROFILE_IDS,
 } from './auth-profiles';
 
 type AnthropicMessage = {
@@ -19,6 +21,20 @@ type AnthropicMessage = {
 const BASE_SYSTEM_PROMPT = `You are Claude, a helpful general-purpose AI assistant made by Anthropic. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
 
 You also have access to MCP (Model Context Protocol) tools that let you interact with external services. These tools are OPTIONAL - use them when relevant to the user's request, but you are NOT limited to only topics related to these tools. You are a general-purpose assistant first.
+
+CRITICAL EXECUTION RULES — TOOL CALLING:
+A response that says "I'm doing it now" or "proceeding" WITHOUT tool_use blocks is a FAILED response. You MUST include actual tool calls. Every response where you promise to act MUST contain tool_use function calls — no exceptions.
+
+BANNED PATTERNS (these are failures — never produce them):
+- "I'll do this now." [end of response with no tool calls]
+- "Proceeding with execution-only mode." [end of response with no tool calls]
+- "Starting now." [end of response with no tool calls]
+- Any response where you say you will act but produce zero tool_use calls
+
+CORRECT PATTERN:
+- Brief explanation (optional) FOLLOWED BY actual tool_use calls in the same response
+- If you need data, call the tool to get it. If you need to create something, call the tool to create it. Do this NOW, not "next".
+- Do NOT ask for confirmation before using tools unless the operation is destructive (deleting data, overwriting files). For read operations, searches, and data retrieval — just execute.
 
 IMPORTANT SECURITY RULES:
 - NEVER ask users for passwords, login credentials, API keys, or authentication tokens.
@@ -47,6 +63,7 @@ class AnthropicClient {
     method: 'GET' | 'POST',
     body?: Record<string, any>,
     apiKeyOverride?: string,
+    preferredProfileId?: string,
   ): Promise<any> {
     const url = `https://api.anthropic.com${path}`;
     const payload = body ? JSON.stringify(body) : null;
@@ -57,7 +74,7 @@ class AnthropicClient {
     if (apiKeyOverride) {
       token = apiKeyOverride;
     } else {
-      const resolved = await resolveApiKey('anthropic');
+      const resolved = await resolveApiKey('anthropic', preferredProfileId);
       if (!resolved) {
         throw new Error('No Anthropic authentication configured. Please set up credentials in Settings.');
       }
@@ -120,14 +137,22 @@ class AnthropicClient {
     model = 'claude-sonnet-4-5-20250929',
     serverSummary?: string,
     additionalSystemPrompt?: string,
-    workingDirectory?: string
+    workingDirectory?: string,
+    provId?: string,
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     const authMethod = this.getAuthMethod();
-    console.log('[Anthropic] chat() called', { authMethod, model });
+    console.log('[Anthropic] chat() called', { authMethod, model, provId });
 
     if (authMethod === 'none') {
       throw new Error('No Anthropic authentication configured. Please set up credentials in Settings.');
     }
+
+    // Map provider ID to auth profile ID so we stick to the user's chosen credential
+    const preferredProfileId = provId === 'anthropic-cli'
+      ? PROFILE_IDS.anthropicCli
+      : provId === 'anthropic-api'
+        ? PROFILE_IDS.anthropicApiKey
+        : undefined;
 
     const toolMap = new Map<string, { serverId: string; tool: MCPTool }>();
 
@@ -157,10 +182,15 @@ class AnthropicClient {
     console.log('[Anthropic] Available tools:', tools);
     console.log('[Anthropic] Tool map keys:', Array.from(toolMap.keys()));
 
-    const anthropicMessages: AnthropicMessage[] = messages.map((m) => ({
-      role: m.role === 'assistant' ? 'assistant' : 'user',
-      content: [{ type: 'text', text: m.content }],
-    }));
+    const anthropicMessages: AnthropicMessage[] = messages.map((m) => {
+      const text = m.role === 'assistant' && m.toolCalls?.length
+        ? m.content + '\n\n' + formatToolCallSummary(m.toolCalls)
+        : m.content;
+      return {
+        role: m.role === 'assistant' ? 'assistant' as const : 'user' as const,
+        content: [{ type: 'text' as const, text }],
+      };
+    });
 
     const systemParts = [
       BASE_SYSTEM_PROMPT,
@@ -184,7 +214,7 @@ class AnthropicClient {
 
     while (turnCount < MAX_TOOL_TURNS) {
       turnCount++;
-      const response = await this.sendMessage(currentMessages, tools, model, system || undefined);
+      const response = await this.sendMessage(currentMessages, tools, model, system || undefined, preferredProfileId);
       console.log(`[Anthropic] Turn ${turnCount} response:`, JSON.stringify(response, null, 2));
 
       // Check for API errors
@@ -333,7 +363,8 @@ class AnthropicClient {
     messages: AnthropicMessage[],
     tools?: any[],
     model?: string,
-    system?: string
+    system?: string,
+    preferredProfileId?: string,
   ) {
     // Use array format for system prompt to enable prompt caching
     const systemContent = system ? [{
@@ -358,7 +389,7 @@ class AnthropicClient {
       messages,
       tools: cachedTools && cachedTools.length > 0 ? cachedTools : undefined,
       system: systemContent,
-    });
+    }, undefined, preferredProfileId);
   }
 }
 

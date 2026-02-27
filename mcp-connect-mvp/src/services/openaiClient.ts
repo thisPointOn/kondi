@@ -2,21 +2,37 @@ import OpenAI from 'openai';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 import { LOCAL_SERVER_ID, localToolsService } from './localTools';
+import { formatToolCallSummary } from './formatToolCallSummary';
 import {
+  resolveApiKey,
   reportSuccess,
   reportFailure,
-  listProfiles,
+  PROFILE_IDS,
 } from './auth-profiles';
 
 const BASE_SYSTEM_PROMPT = `You are ChatGPT, a helpful general-purpose AI assistant made by OpenAI. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
 
 You have access to MCP (Model Context Protocol) tools that let you interact with external services. These tools are OPTIONAL - use them when relevant to the user's request, but you are NOT limited to only topics related to these tools. You are a general-purpose assistant first.
 
-CRITICAL CAPABILITY RULES:
+CRITICAL EXECUTION RULES — TOOL CALLING:
+A response that says "I'm doing it now" or "proceeding with execution" WITHOUT tool_use blocks is a FAILED response. You MUST include actual tool calls. Every response where you promise to act MUST contain tool_use function calls — no exceptions.
+
+BANNED PATTERNS (these are failures — never produce them):
+- "I'll do this now." [end of response with no tool calls]
+- "Proceeding with execution-only mode." [end of response with no tool calls]
+- "Starting now." [end of response with no tool calls]
+- Any response where you say you will act but produce zero tool_use calls
+
+CORRECT PATTERN:
+- Brief explanation (optional) FOLLOWED BY actual tool_use calls in the same response
+- If you need data, call the tool to get it. If you need to create something, call the tool to create it. Do this NOW, not "next".
+
+ADDITIONAL RULES:
 - You have FULL network access. NEVER say "network access is restricted" or that you cannot access the network.
 - Tool approval is AUTOMATIC. NEVER say approval is disabled or required.
 - If tools are available, USE them. If they are not available in this specific call, provide your best analysis using your training knowledge — do NOT claim you are restricted or blocked.
 - NEVER refuse a task by citing environment restrictions, sandboxing, or session policies.
+- Do NOT ask for confirmation before using tools unless the operation is destructive (deleting data, overwriting files). For read operations, searches, and data retrieval — just execute.
 
 IMPORTANT SECURITY RULES:
 - NEVER ask users for passwords, login credentials, API keys, or authentication tokens.
@@ -35,14 +51,15 @@ export class OpenAIClient {
 
   /**
    * Ensure the OpenAI SDK client is initialized with an API key.
+   * Uses resolveApiKey with optional preferred profile to avoid credential fallover.
    */
-  private async ensureClientInitialized(): Promise<void> {
-    const apiKeyProfile = listProfiles('openai').find(p => p.credential.type === 'api_key');
-    if (!apiKeyProfile || apiKeyProfile.credential.type !== 'api_key') {
+  private async ensureClientInitialized(preferredProfileId?: string): Promise<string | null> {
+    const resolved = await resolveApiKey('openai', preferredProfileId);
+    if (!resolved) {
       throw new Error('No OpenAI API key configured. Please add an API key in Settings.');
     }
 
-    const key = apiKeyProfile.credential.key;
+    const key = resolved.apiKey;
 
     if (!this.client || this.clientKey !== key) {
       console.log('[OpenAI] Initializing SDK client with API key');
@@ -52,6 +69,8 @@ export class OpenAIClient {
       });
       this.clientKey = key;
     }
+
+    return resolved.profileId;
   }
 
   /**
@@ -152,13 +171,16 @@ export class OpenAIClient {
     model = 'gpt-4o',
     additionalSystemPrompt?: string,
     workingDirectory?: string,
+    provId?: string,
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
-    console.log('[OpenAI] chat() called', { model });
+    console.log('[OpenAI] chat() called', { model, provId });
 
-    await this.ensureClientInitialized();
+    // Map provider ID to auth profile ID so we stick to the user's chosen credential
+    const preferredProfileId = provId === 'openai-api'
+      ? PROFILE_IDS.openaiApiKey
+      : undefined;
 
-    const apiKeyProfile = listProfiles('openai').find(p => p.credential.type === 'api_key');
-    const profileId = apiKeyProfile?.id || null;
+    const profileId = await this.ensureClientInitialized(preferredProfileId);
 
     const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [];
     const toolMap = new Map<string, { serverId: string; tool: MCPTool }>();
@@ -201,7 +223,9 @@ export class OpenAIClient {
       { role: 'system', content: systemPrompt },
       ...messages.map((message) => ({
         role: message.role as 'user' | 'assistant',
-        content: message.content,
+        content: message.role === 'assistant' && message.toolCalls?.length
+          ? message.content + '\n\n' + formatToolCallSummary(message.toolCalls)
+          : message.content,
       })),
     ];
 

@@ -10,17 +10,33 @@ import { invoke } from '@tauri-apps/api/core';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 import { LOCAL_SERVER_ID, localToolsService } from './localTools';
+import { formatToolCallSummary } from './formatToolCallSummary';
 import {
   resolveApiKey,
   resolveApiKeySync,
   reportSuccess,
   reportFailure,
+  PROFILE_IDS,
 } from './auth-profiles';
 import type { GeminiOAuthCredential } from './auth-profiles';
 
 const BASE_SYSTEM_PROMPT = `You are Gemini, a helpful general-purpose AI assistant made by Google. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
 
 You have access to MCP (Model Context Protocol) tools that let you interact with external services. These tools are OPTIONAL - use them when relevant to the user's request, but you are NOT limited to only topics related to these tools. You are a general-purpose assistant first.
+
+CRITICAL EXECUTION RULES — TOOL CALLING:
+A response that says "I'm doing it now" or "proceeding" WITHOUT tool_use blocks is a FAILED response. You MUST include actual tool calls. Every response where you promise to act MUST contain tool_use function calls — no exceptions.
+
+BANNED PATTERNS (these are failures — never produce them):
+- "I'll do this now." [end of response with no tool calls]
+- "Proceeding with execution-only mode." [end of response with no tool calls]
+- "Starting now." [end of response with no tool calls]
+- Any response where you say you will act but produce zero tool_use calls
+
+CORRECT PATTERN:
+- Brief explanation (optional) FOLLOWED BY actual tool_use calls in the same response
+- If you need data, call the tool to get it. If you need to create something, call the tool to create it. Do this NOW, not "next".
+- Do NOT ask for confirmation before using tools unless the operation is destructive (deleting data, overwriting files). For read operations, searches, and data retrieval — just execute.
 
 IMPORTANT SECURITY RULES:
 - NEVER ask users for passwords, login credentials, API keys, or authentication tokens.
@@ -102,16 +118,24 @@ class GeminiClient {
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
     model = 'models/gemini-2.5-flash',
     additionalSystemPrompt?: string,
-    workingDirectory?: string
+    workingDirectory?: string,
+    provId?: string,
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     const authMethod = this.getAuthMethod();
-    console.log('[Gemini] chat() called', { authMethod, model });
+    console.log('[Gemini] chat() called', { authMethod, model, provId });
 
     if (authMethod === 'none') {
       throw new Error('No Google authentication configured. Please connect via OAuth in Settings.');
     }
 
-    const resolved = await resolveApiKey('google');
+    // Pin to the user's chosen credential — no fallover
+    const preferredProfileId = provId === 'google'
+      ? PROFILE_IDS.googleOAuth
+      : provId === 'google-api'
+        ? PROFILE_IDS.googleApiKey
+        : undefined;
+
+    const resolved = await resolveApiKey('google', preferredProfileId);
     if (!resolved || resolved.credential.type !== 'gemini_oauth') {
       throw new Error('No valid Google OAuth credentials');
     }
@@ -155,7 +179,11 @@ class GeminiClient {
     // Convert messages to Gemini format
     const contents: GeminiContent[] = messages.map(m => ({
       role: m.role === 'assistant' ? 'model' as const : 'user' as const,
-      parts: [{ text: m.content }],
+      parts: [{
+        text: m.role === 'assistant' && m.toolCalls?.length
+          ? m.content + '\n\n' + formatToolCallSummary(m.toolCalls)
+          : m.content,
+      }],
     }));
 
     const MAX_TOOL_TURNS = 25;
