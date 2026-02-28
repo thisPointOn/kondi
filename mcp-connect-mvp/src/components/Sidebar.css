@@ -50,74 +50,19 @@
   color: #999;
 }
 
-.mcp-toggle-btn {
-  width: 100%;
-  padding: 10px 12px;
-  background: transparent;
-  border: 1px solid #2a2a2a;
-  border-radius: 8px;
-  color: #999;
-  font-size: 14px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-  transition: all 0.2s;
-}
-
-.sidebar.collapsed .mcp-toggle-btn {
-  justify-content: center;
-  padding: 10px;
-}
-
-.mcp-toggle-btn:hover {
-  background: #1a1a1a;
-  color: #ccc;
-  border-color: #3a3a3a;
-}
-
-.mcp-toggle-btn.active {
-  background: #1a2a1a;
-  border-color: #10a37f;
-  color: #10a37f;
-}
-
-.mcp-toggle-btn .check-icon {
-  margin-left: auto;
-}
-
-.new-chat-btn {
-  width: 100%;
-  padding: 10px 14px;
-  background: #2a2a2a;
-  border: none;
-  border-radius: 8px;
-  color: white;
-  font-size: 14px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
-  transition: background 0.2s;
-}
-
-.sidebar.collapsed .new-chat-btn {
-  justify-content: center;
-  padding: 10px;
-}
-
-.new-chat-btn:hover {
-  background: #333;
-}
-
 .chats-section {
   display: flex;
   flex-direction: column;
 }
 
 .section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.section-header-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -127,17 +72,46 @@
   border-radius: 8px;
   cursor: pointer;
   color: #e8e8e8;
-  margin-bottom: 8px;
   transition: all 0.15s;
+  flex: 1;
+  min-width: 0;
 }
 
-.section-header:hover {
+.section-header-toggle:hover {
   background: #1a1a1a;
 }
 
-.section-header .chevron {
+.section-header-toggle .chevron {
   transition: transform 0.2s;
   color: #888;
+}
+
+.section-header-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #666;
+  cursor: pointer;
+  padding: 6px;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.section-header-action:hover {
+  background: #1a1a1a;
+  color: #ccc;
+}
+
+.light-theme .section-header-action {
+  color: #999;
+}
+
+.light-theme .section-header-action:hover {
+  background: #e8e8e8;
+  color: #333;
 }
 
 .section-label {
@@ -213,13 +187,6 @@
 .light-theme .sidebar-logo {
   color: #111;
 }
-.light-theme .new-chat-btn {
-  background: #e6e6e6;
-  color: #111;
-}
-.light-theme .new-chat-btn:hover {
-  background: #dcdcdc;
-}
 .light-theme .nav-item {
   color: #444;
 }
@@ -245,21 +212,6 @@
 }
 .light-theme .chat-title {
   color: #111;
-}
-.light-theme .mcp-toggle-btn {
-  background: #f2f2f2;
-  border-color: #dcdcdc;
-  color: #222;
-}
-.light-theme .mcp-toggle-btn:hover {
-  background: #e8e8e8;
-  border-color: #cfcfcf;
-  color: #000;
-}
-.light-theme .mcp-toggle-btn.active {
-  background: #e6f4ef;
-  border-color: #10a37f;
-  color: #0b3c2c;
 }
 .light-theme .settings-btn {
   background: #f2f2f2;
@@ -397,6 +349,9 @@
 }
 
 .popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 12px 14px;
   font-size: 13px;
   font-weight: 600;
@@ -521,6 +476,10 @@
   border-color: rgba(239, 68, 68, 0.3);
 }
 
+.nav-btn.has-warning {
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
 .nav-btn .error-badge {
   margin-left: auto;
   display: flex;
@@ -530,7 +489,17 @@
   animation: pulse-error 2s ease-in-out infinite;
 }
 
-.sidebar.collapsed .nav-btn .error-badge {
+.nav-btn .warning-badge {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #f59e0b;
+  animation: pulse-error 2s ease-in-out infinite;
+}
+
+.sidebar.collapsed .nav-btn .error-badge,
+.sidebar.collapsed .nav-btn .warning-badge {
   position: absolute;
   top: 4px;
   right: 4px;
@@ -605,9 +574,6 @@
   }
 
   .sidebar .sidebar-logo,
-  .sidebar .mcp-toggle-btn span,
-  .sidebar .mcp-toggle-btn .check-icon,
-  .sidebar .new-chat-btn span,
   .sidebar .nav-btn span,
   .sidebar .settings-btn span,
   .sidebar .chats-section,
@@ -620,8 +586,6 @@
     display: block !important;
   }
 
-  .sidebar .mcp-toggle-btn,
-  .sidebar .new-chat-btn,
   .sidebar .nav-btn,
   .sidebar .settings-btn {
     justify-content: center;

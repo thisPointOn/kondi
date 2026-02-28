@@ -1,4 +1,4 @@
-import { Plus, Settings, ChevronDown, Check, Zap, MessageSquare, PanelLeftClose, PanelLeft, Workflow, Cpu, Users, AlertCircle, Server } from 'lucide-react';
+import { Plus, Settings, ChevronDown, MessageSquare, PanelLeftClose, PanelLeft, Workflow, Cpu, Users, AlertCircle, Server } from 'lucide-react';
 import { useEffect, useState, type FC } from 'react';
 import './Sidebar.css';
 
@@ -21,11 +21,11 @@ interface SidebarProps {
   chats: SidebarChat[];
   /** Chat IDs that currently have in-flight LLM calls */
   chatsSending?: Record<string, boolean>;
-  showToolsPanel: boolean;
-  onToggleToolsPanel: () => void;
   className?: string;
   /** Number of LLM providers with errors */
   providerErrorCount?: number;
+  /** Number of LLM providers with expired OAuth tokens */
+  providerExpiredCount?: number;
 }
 
 const Sidebar: FC<SidebarProps> = ({
@@ -38,10 +38,9 @@ const Sidebar: FC<SidebarProps> = ({
   onChatRename,
   chats,
   chatsSending = {},
-  showToolsPanel,
-  onToggleToolsPanel,
   className,
   providerErrorCount = 0,
+  providerExpiredCount = 0,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [chatsExpanded, setChatsExpanded] = useState(false);
@@ -69,21 +68,6 @@ const Sidebar: FC<SidebarProps> = ({
         </button>
       </div>
 
-      <button
-        className={`mcp-toggle-btn ${showToolsPanel ? 'active' : ''}`}
-        onClick={onToggleToolsPanel}
-        title="MCP Servers"
-      >
-        <Zap size={18} />
-        {!collapsed && <span>MCP Servers</span>}
-        {showToolsPanel && !collapsed && <Check size={16} className="check-icon" />}
-      </button>
-
-      <button className="new-chat-btn" onClick={onNewChat} title="New Chat">
-        <Plus size={18} />
-        {!collapsed && <span>New Chat</span>}
-      </button>
-
       {/* Collapsed chats - shown when sidebar is collapsed or on narrow screens */}
       <div className={`chats-collapsed ${collapsed ? '' : 'hidden-when-expanded'}`}>
         <button
@@ -97,7 +81,12 @@ const Sidebar: FC<SidebarProps> = ({
           <>
             <div className="popover-backdrop" onClick={() => setShowChatsPopover(false)} />
             <div className="chats-popover">
-              <div className="popover-header">Chats</div>
+              <div className="popover-header">
+                <span>Chats</span>
+                <button className="section-header-action" onClick={(e) => { e.stopPropagation(); onNewChat(); setShowChatsPopover(false); }} title="New Chat">
+                  <Plus size={14} />
+                </button>
+              </div>
               <div className="popover-list">
                 {chats.map((chat) => (
                   <div
@@ -129,17 +118,22 @@ const Sidebar: FC<SidebarProps> = ({
       {/* Expanded chats - shown when sidebar is expanded */}
       {!collapsed && (
         <div className="chats-section">
-          <button
-            className="section-header"
-            onClick={() => setChatsExpanded((p) => !p)}
-          >
-            <ChevronDown
-              size={16}
-              className="chevron"
-              style={{ transform: chatsExpanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}
-            />
-            <span className="section-label">Chats</span>
-          </button>
+          <div className="section-header">
+            <button
+              className="section-header-toggle"
+              onClick={() => setChatsExpanded((p) => !p)}
+            >
+              <ChevronDown
+                size={16}
+                className="chevron"
+                style={{ transform: chatsExpanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+              />
+              <span className="section-label">Chats</span>
+            </button>
+            <button className="section-header-action" onClick={onNewChat} title="New Chat">
+              <Plus size={14} />
+            </button>
+          </div>
 
           {chatsExpanded && (
             <div className="chat-list">
@@ -205,17 +199,21 @@ const Sidebar: FC<SidebarProps> = ({
       </button>
 
       <button
-        className={`nav-btn ${currentView === 'providers' ? 'active' : ''} ${providerErrorCount > 0 ? 'has-error' : ''}`}
+        className={`nav-btn ${currentView === 'providers' ? 'active' : ''} ${providerErrorCount > 0 ? 'has-error' : providerExpiredCount > 0 ? 'has-warning' : ''}`}
         onClick={() => onViewChange('providers')}
-        title={providerErrorCount > 0 ? `LLM Providers (${providerErrorCount} error${providerErrorCount > 1 ? 's' : ''})` : 'LLM Providers'}
+        title={providerErrorCount > 0 ? `LLM Providers (${providerErrorCount} error${providerErrorCount > 1 ? 's' : ''})` : providerExpiredCount > 0 ? `LLM Providers (${providerExpiredCount} expired)` : 'LLM Providers'}
       >
         <Cpu size={18} />
         {!collapsed && <span>LLM Providers</span>}
-        {providerErrorCount > 0 && (
+        {providerErrorCount > 0 ? (
           <span className="error-badge" title={`${providerErrorCount} provider error${providerErrorCount > 1 ? 's' : ''}`}>
             <AlertCircle size={14} />
           </span>
-        )}
+        ) : providerExpiredCount > 0 ? (
+          <span className="warning-badge" title={`${providerExpiredCount} expired token${providerExpiredCount > 1 ? 's' : ''}`}>
+            <AlertCircle size={14} />
+          </span>
+        ) : null}
       </button>
 
       <button

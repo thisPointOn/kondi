@@ -73,9 +73,8 @@ function App() {
         onChatRename={chats.setChatName}
         chats={chats.sidebarChats}
         chatsSending={chats.chatsSending}
-        showToolsPanel={serverHook.showToolsPanel}
-        onToggleToolsPanel={() => serverHook.setShowToolsPanel((p) => !p)}
         providerErrorCount={providerConfig.validationReport?.llmProviders.filter(r => r.status === 'error').length || 0}
+        providerExpiredCount={providerConfig.providersList.filter(p => p.oauthExpired).length}
       />
 
       <div className="main-column">
@@ -159,6 +158,7 @@ function App() {
             onAuthMethodChange={providerConfig.handleAuthMethodChange}
             onDisconnectOAuth={providerConfig.handleDisconnectOAuth}
             onStartOAuthLogin={providerConfig.handleStartOAuthLogin}
+            onSwitchAccount={providerConfig.handleSwitchAccount}
             onCodexLogin={providerConfig.handleCodexLogin}
             isCodexLoggingIn={providerConfig.isCodexLoggingIn}
           />

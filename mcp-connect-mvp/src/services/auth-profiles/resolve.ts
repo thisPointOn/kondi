@@ -13,14 +13,44 @@ import { ANTHROPIC_OAUTH_PREFIX, JWT_PREFIX, OAUTH_BETAS, API_KEY_BETAS } from '
 
 /**
  * Resolve the best available API key/token for a provider.
- * Walks the profile order, skips cooled-down profiles, auto-refreshes expired OAuth.
+ * If preferredProfileId is given, ONLY that profile is used (no fallback).
+ * Otherwise walks the profile order, skips cooled-down profiles, auto-refreshes expired OAuth.
  * Returns null if no usable credential is found.
  */
-export async function resolveApiKey(provider: AuthProvider): Promise<ResolvedCredential | null> {
+export async function resolveApiKey(provider: AuthProvider, preferredProfileId?: string): Promise<ResolvedCredential | null> {
+  const store = getStore();
+
+  // If a specific profile is requested, use ONLY that profile — no fallback
+  if (preferredProfileId) {
+    const profile = store.profiles[preferredProfileId];
+    if (!profile) return null;
+
+    // Auto-refresh if needed
+    if ((profile.credential.type === 'oauth' || profile.credential.type === 'gemini_oauth') && needsRefresh(profile.credential)) {
+      try {
+        const refreshed = await refreshProfile(preferredProfileId);
+        return {
+          profileId: preferredProfileId,
+          credential: refreshed.credential,
+          apiKey: getCredentialKey(refreshed.credential),
+        };
+      } catch {
+        // Refresh failed — no fallback when a specific profile is requested
+        return null;
+      }
+    }
+
+    return {
+      profileId: preferredProfileId,
+      credential: profile.credential,
+      apiKey: getCredentialKey(profile.credential),
+    };
+  }
+
+  // No preference — use rotation to pick best available profile
   const profileId = getNextUsableProfile(provider);
   if (!profileId) return null;
 
-  const store = getStore();
   const profile = store.profiles[profileId];
   if (!profile) return null;
 

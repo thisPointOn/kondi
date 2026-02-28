@@ -13,7 +13,10 @@ import {
   listProfiles,
   upsertProfile,
   deleteProfile,
+  getProfile,
   importCliCredentials,
+  refreshProfile,
+  isExpired,
   PROFILE_IDS,
 } from '../services/auth-profiles';
 
@@ -468,35 +471,69 @@ export function useProviderConfig() {
     console.log('[useProviderConfig] Starting OAuth login for:', providerId);
     try {
       if (providerId.startsWith('anthropic')) {
-        // Try to import from Claude CLI first
-        const imported = await importCliCredentials();
+        // Step 1: Import CLI credentials from ~/.claude/.credentials.json
+        let imported = await importCliCredentials();
+
+        // Step 2: If we got credentials, check if they're expired
         if (imported) {
-          console.log('[useProviderConfig] Imported Claude CLI credentials');
-          refreshAuthProfileState();
+          const profile = getProfile(PROFILE_IDS.anthropicCli);
+          const credential = profile?.credential;
+          const tokenExpired = credential?.type === 'oauth' && isExpired(credential);
 
-          const report = await startupValidator.validate({
-            onProgress: (msg) => console.log('[StartupValidator]', msg),
-            onProviderValidated: (result) => {
-              console.log('[StartupValidator] Provider validated:', result);
-            },
-          });
-          setValidationReport(report);
+          if (!tokenExpired) {
+            // Token is still valid — validate and done
+            console.log('[useProviderConfig] Imported valid Claude CLI credentials');
+            refreshAuthProfileState();
+            const report = await startupValidator.validate({
+              onProgress: (msg) => console.log('[StartupValidator]', msg),
+              onProviderValidated: (result) => {
+                console.log('[StartupValidator] Provider validated:', result);
+              },
+            });
+            setValidationReport(report);
 
-          if (report.llmProviders.find(r => r.provider === 'Anthropic CLI')?.status === 'ok') {
-            alert('Claude subscription connected and verified!');
-          } else {
-            alert('Claude CLI credentials imported but validation failed. Try running "claude" in terminal to re-authenticate.');
+            if (report.llmProviders.find(r => r.provider === 'Anthropic CLI')?.status === 'ok') {
+              alert('Claude subscription connected and verified!');
+              return true;
+            }
+            // Validation failed even though token isn't expired — fall through to refresh
+            console.log('[useProviderConfig] Token not expired but validation failed, trying refresh...');
           }
-          return true;
+
+          // Step 3: Token is expired — try refresh
+          if (credential?.type === 'oauth' && credential.refreshToken) {
+            console.log('[useProviderConfig] Token expired, attempting refresh...');
+            try {
+              await refreshProfile(PROFILE_IDS.anthropicCli);
+              refreshAuthProfileState();
+              const report = await startupValidator.validate({
+                onProgress: (msg) => console.log('[StartupValidator]', msg),
+                onProviderValidated: (result) => {
+                  console.log('[StartupValidator] Provider validated:', result);
+                },
+              });
+              setValidationReport(report);
+
+              if (report.llmProviders.find(r => r.provider === 'Anthropic CLI')?.status === 'ok') {
+                alert('Claude subscription reconnected and verified!');
+                return true;
+              }
+              console.log('[useProviderConfig] Refresh succeeded but validation failed, opening browser login...');
+            } catch (err) {
+              console.log('[useProviderConfig] Token refresh failed:', err, '— opening browser login...');
+            }
+          }
         }
 
-        // No CLI credentials — tell user to log in to Claude CLI
+        // Step 4: No valid CLI credentials available
+        // Claude Subscription uses CLI tokens only — user must re-authenticate via terminal
         alert(
-          'No Claude CLI credentials found.\n\n' +
-          'To use your Claude subscription:\n' +
-          '1. Install Claude Code: npm install -g @anthropic-ai/claude-code\n' +
-          '2. Run "claude" in terminal to log in\n' +
-          '3. Click Connect again to import credentials'
+          'Your Claude CLI session has expired and could not be refreshed.\n\n' +
+          'To reconnect:\n' +
+          '1. Open a terminal\n' +
+          '2. Run: claude\n' +
+          '3. Follow the login prompts\n' +
+          '4. Come back here and click Connect again'
         );
         return false;
       } else if (providerId.startsWith('openai')) {
@@ -584,6 +621,7 @@ export function useProviderConfig() {
       })(),
       cliTool: 'claude',
       oauthAvailable: anthropicHasOAuth,
+      oauthExpired: anthropicHasOAuth && typeof anthropicOAuthExpiry === 'number' && Date.now() >= anthropicOAuthExpiry,
       activeAuthMethod: anthropicHasOAuth ? 'oauth' : undefined,
       validationError: (() => {
         const err = validationReport?.llmProviders.find(
@@ -606,6 +644,7 @@ export function useProviderConfig() {
       })(),
       cliTool: 'codex',
       oauthAvailable: openaiHasOAuth,
+      oauthExpired: openaiHasOAuth && typeof openaiOAuthExpiry === 'number' && Date.now() >= openaiOAuthExpiry,
       activeAuthMethod: openaiHasOAuth ? 'oauth' : undefined,
       validationError: (() => {
         const err = validationReport?.llmProviders.find(
@@ -708,6 +747,7 @@ export function useProviderConfig() {
       })(),
       cliTool: 'gemini',
       oauthAvailable: googleHasOAuth,
+      oauthExpired: googleHasOAuth && typeof googleOAuthExpiry === 'number' && Date.now() >= googleOAuthExpiry,
       activeAuthMethod: googleHasOAuth ? 'oauth' : undefined,
       validationError: (() => {
         const err = validationReport?.llmProviders.find(

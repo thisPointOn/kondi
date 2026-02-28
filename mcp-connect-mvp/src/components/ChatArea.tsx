@@ -576,7 +576,7 @@ const ChatArea: FC<ChatAreaProps> = ({
     if (provId.startsWith('anthropic')) {
       console.log('[ChatArea] Routing to Anthropic client');
       const result = await anthropicClient.chat(
-        msgs, availableTools, modelForCall, serverSummary, modePrompt, effectiveWorkingDir
+        msgs, availableTools, modelForCall, serverSummary, modePrompt, effectiveWorkingDir, provId
       );
       message = result.message;
       toolCalls = result.toolCalls;
@@ -589,31 +589,31 @@ const ChatArea: FC<ChatAreaProps> = ({
       message.provider = provId;
     } else if (provId === 'openai-api' || provId.startsWith('openai')) {
       console.log('[ChatArea] Routing to OpenAI client');
-      const result = await openaiClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir);
+      const result = await openaiClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir, provId);
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;
     } else if (provId === 'deepseek') {
       console.log('[ChatArea] Routing to DeepSeek client');
-      const result = await deepseekClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir);
+      const result = await deepseekClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir, provId);
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;
     } else if (provId === 'xai') {
       console.log('[ChatArea] Routing to xAI client');
-      const result = await xaiClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir);
+      const result = await xaiClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir, provId);
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;
     } else if (provId === 'google') {
       console.log('[ChatArea] Routing to Gemini client');
-      const result = await geminiClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir);
+      const result = await geminiClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir, provId);
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;
     } else if (provId === 'ollama') {
       console.log('[ChatArea] Routing to Ollama client');
-      const result = await ollamaClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir);
+      const result = await ollamaClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir, provId);
       message = result.message;
       toolCalls = result.toolCalls;
       message.provider = provId;

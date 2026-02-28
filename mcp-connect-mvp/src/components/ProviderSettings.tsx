@@ -20,6 +20,7 @@ import {
   Layers,
   GitBranch,
   ExternalLink,
+  LogOut,
 } from 'lucide-react';
 import './ProviderSettings.css';
 
@@ -42,6 +43,8 @@ export interface ProviderInfo {
   cliTool?: string;
   /** Whether OAuth credentials are available from CLI */
   oauthAvailable?: boolean;
+  /** Whether the OAuth token has expired */
+  oauthExpired?: boolean;
   /** Currently active auth method for this provider */
   activeAuthMethod?: 'oauth' | 'api_key';
   /** Validation error from startup validation */
@@ -95,6 +98,8 @@ export interface ProviderSettingsProps {
   onAuthMethodChange?: (providerId: string, method: 'oauth' | 'api_key') => void;
   /** Callback to start OAuth login flow */
   onStartOAuthLogin?: (providerId: string) => Promise<boolean>;
+  /** Callback to disconnect + re-authenticate (switch account) */
+  onSwitchAccount?: (providerId: string) => Promise<boolean>;
   /** Callback to run automated Codex CLI login */
   onCodexLogin?: () => Promise<void>;
   /** Whether Codex login is in progress */
@@ -116,6 +121,7 @@ const ProviderSettings: FC<ProviderSettingsProps> = ({
   onAuthMethodChange,
   onDisconnectOAuth,
   onStartOAuthLogin,
+  onSwitchAccount,
   onCodexLogin,
   isCodexLoggingIn,
 }: ProviderSettingsProps) => {
@@ -247,6 +253,9 @@ const ProviderSettings: FC<ProviderSettingsProps> = ({
               }
               return false;
             }}
+            onSwitchAccount={onSwitchAccount ? async () => {
+              return onSwitchAccount(provider.id);
+            } : undefined}
             onCodexLogin={provider.id === 'openai' ? onCodexLogin : undefined}
             isCodexLoggingIn={isCodexLoggingIn}
           />
@@ -290,6 +299,7 @@ interface ProviderCardProps {
   onRefreshOAuth?: () => void;
   onAuthMethodChange?: (method: 'oauth' | 'api_key') => void;
   onStartOAuthLogin?: () => Promise<boolean>;
+  onSwitchAccount?: () => Promise<boolean>;
   onCodexLogin?: () => Promise<void>;
   isCodexLoggingIn?: boolean;
 }
@@ -316,6 +326,7 @@ const ProviderCard: FC<ProviderCardProps> = ({
   onRefreshOAuth,
   onAuthMethodChange,
   onStartOAuthLogin,
+  onSwitchAccount,
   onCodexLogin,
   isCodexLoggingIn,
 }) => {
@@ -343,6 +354,11 @@ const ProviderCard: FC<ProviderCardProps> = ({
           {provider.validationError && (
             <div className="validation-error-icon" title={provider.validationError.message}>
               <AlertCircle size={18} className="error-icon" />
+            </div>
+          )}
+          {provider.oauthExpired && !provider.validationError && (
+            <div className="validation-warning-icon" title="OAuth token expired — click to reconnect">
+              <AlertCircle size={18} className="warning-icon" />
             </div>
           )}
           <StatusIndicator status={provider.status} />
@@ -438,7 +454,7 @@ const ProviderCard: FC<ProviderCardProps> = ({
                     <span className="oauth-cli-name">Subscription</span>
                   </div>
                   <div className="oauth-status-wrapper">
-                    {provider.oauthAvailable ? (
+                    {provider.oauthAvailable && !provider.oauthExpired ? (
                       <button
                         className="oauth-status-btn connected"
                         onClick={(e) => {
@@ -448,6 +464,18 @@ const ProviderCard: FC<ProviderCardProps> = ({
                       >
                         <span className="status-dot-small green" />
                         Connected
+                        <ChevronDown size={12} className={showOAuthMenu ? 'rotated' : ''} />
+                      </button>
+                    ) : provider.oauthExpired ? (
+                      <button
+                        className="oauth-status-btn expired"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowOAuthMenu(!showOAuthMenu);
+                        }}
+                      >
+                        <span className="status-dot-small orange" />
+                        Expired
                         <ChevronDown size={12} className={showOAuthMenu ? 'rotated' : ''} />
                       </button>
                     ) : (
@@ -480,6 +508,24 @@ const ProviderCard: FC<ProviderCardProps> = ({
                     {/* Dropdown menu */}
                     {showOAuthMenu && provider.oauthAvailable && (
                       <div className="oauth-dropdown">
+                        {provider.oauthExpired && onStartOAuthLogin && (
+                          <button
+                            className="oauth-dropdown-item"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              setShowOAuthMenu(false);
+                              setIsConnecting(true);
+                              try {
+                                await onStartOAuthLogin();
+                              } finally {
+                                setIsConnecting(false);
+                              }
+                            }}
+                          >
+                            <RefreshCw size={14} />
+                            Reconnect
+                          </button>
+                        )}
                         <button
                           className="oauth-dropdown-item"
                           onClick={(e) => {
@@ -491,6 +537,24 @@ const ProviderCard: FC<ProviderCardProps> = ({
                           <RefreshCw size={14} />
                           Refresh Connection
                         </button>
+                        {onSwitchAccount && (
+                          <button
+                            className="oauth-dropdown-item"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              setShowOAuthMenu(false);
+                              setIsConnecting(true);
+                              try {
+                                await onSwitchAccount();
+                              } finally {
+                                setIsConnecting(false);
+                              }
+                            }}
+                          >
+                            <LogOut size={14} />
+                            Switch Account
+                          </button>
+                        )}
                         <button
                           className="oauth-dropdown-item danger"
                           onClick={(e) => {

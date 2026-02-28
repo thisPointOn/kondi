@@ -359,7 +359,6 @@ function defaultPlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): 
       maxRounds: 4,
       maxRevisions: 3,
       expectedOutput: 'A detailed, actionable plan with clear steps, dependencies, and success criteria.',
-      allowedServerIds: [],
     },
     inputTemplate: '{{input}}',
     outputType: 'string',
@@ -385,7 +384,6 @@ function defaultDecisioningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL
       }],
       maxRounds: 0,
       maxRevisions: 0,
-      allowedServerIds: [],
     },
     inputTemplate: '{{input}}',
     outputType: 'string',
@@ -420,7 +418,6 @@ After executing, report: what you did, what succeeded, what failed, and any rema
       }],
       maxRounds: 0,
       maxRevisions: 0,
-      allowedServerIds: [],
     },
     inputTemplate: '{{input}}',
     outputType: 'string',
@@ -447,7 +444,6 @@ function defaultCodingConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): Co
       maxReviewCycles: 2,
       maxDebugCycles: 5,
       expectedOutput: 'Working code implementation that meets the requirements and passes review.',
-      allowedServerIds: [],
     },
     inputTemplate: '{{input}}',
     outputType: 'directory',
@@ -461,7 +457,7 @@ function defaultGateConfig(): GateStepConfig {
   };
 }
 
-function getDefaultConfigForType(type: PipelineStepType, avail?: Record<string, boolean>): StepConfig {
+export function getDefaultConfigForType(type: PipelineStepType, avail?: Record<string, boolean>): StepConfig {
   switch (type) {
     case 'planning': return defaultPlanningConfig(avail);
     case 'decisioning': return defaultDecisioningConfig(avail);
@@ -488,6 +484,14 @@ export default function StepConfigPanel({
   useEffect(() => {
     setLocalName(step.name);
   }, [step.id, step.name]);
+
+  // Auto-migrate legacy flat configs: if this is a council type but missing councilSetup,
+  // replace with the proper default config for this type.
+  useEffect(() => {
+    if (isCouncilType(step.config.type) && !(step.config as CouncilStepConfig).councilSetup) {
+      onConfigUpdate(getDefaultConfigForType(step.config.type, configuredProviders));
+    }
+  }, [step.id]);
 
   const handleTypeChange = (newType: PipelineStepType) => {
     if (newType === step.config.type) return;
@@ -535,7 +539,7 @@ export default function StepConfigPanel({
       </div>
 
       {/* Type-specific config — all non-gate types are council-based */}
-      {isCouncilType(step.config.type) && (
+      {isCouncilType(step.config.type) && (step.config as CouncilStepConfig).councilSetup && (
         <CouncilConfig
           config={step.config as CouncilStepConfig}
           pipelineSettings={pipelineSettings}

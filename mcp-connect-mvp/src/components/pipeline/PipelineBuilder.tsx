@@ -8,7 +8,7 @@ import type { Pipeline, PipelineStep, StepConfig, PipelineSchedule } from '../..
 import { pipelineStore } from '../../pipeline/store';
 import { buildScheduledOutputDir } from '../../pipeline/scheduler';
 import StageRow from './StageRow';
-import StepConfigPanel from './StepConfigPanel';
+import StepConfigPanel, { getDefaultConfigForType } from './StepConfigPanel';
 import './PipelineBuilder.css';
 
 export interface ConnectedServerInfo {
@@ -111,13 +111,7 @@ export default function PipelineBuilder({
   };
 
   const handleAddStep = (stageId: string) => {
-    const defaultConfig: StepConfig = {
-      type: 'execution',
-      model: 'claude-sonnet-4-20250514',
-      provider: 'anthropic-cli',
-      systemPrompt: 'You are an execution agent. Carry out the requested task, analyze the results, and report status. Be thorough and precise.',
-      inputTemplate: '{{input}}',
-    };
+    const defaultConfig = getDefaultConfigForType('execution', configuredProviders);
     pipelineStore.addStep(pipelineId, stageId, defaultConfig, 'New Step');
   };
 
