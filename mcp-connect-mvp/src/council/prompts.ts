@@ -337,7 +337,7 @@ export interface WorkerPermissions {
   directoryConstrained?: boolean;
 }
 
-export function getMinimalWorkerSystemPrompt(permissions?: WorkerPermissions, stepType?: 'planning' | 'coding'): string {
+export function getMinimalWorkerSystemPrompt(permissions?: WorkerPermissions, stepType?: 'planning' | 'coding' | 'review-docs'): string {
   if (permissions?.writePermissions) {
     const scopeNote = permissions.workingDirectory
       ? (permissions.directoryConstrained
@@ -348,6 +348,28 @@ Working directory: ${permissions.workingDirectory}
 You may write to any location on the system.`)
       : `You have WRITE PERMISSIONS to the file system.
 You may read and write files as needed.`;
+
+    if (stepType === 'review-docs') {
+      return `You are the Worker agent — a documentation specialist. Your job is to review the codebase for quality and produce THREE documentation deliverables.
+
+${scopeNote}
+
+You have these tools available — USE THEM:
+- write_file: Create or overwrite files on disk (takes path + content)
+- read_file: Read file contents (takes path)
+- list_directory: List files in a directory (takes path)
+- run_command: Execute shell commands
+
+CRITICAL RULES:
+- You MUST produce exactly THREE documentation artifacts by calling write_file:
+  1. README.md — Project overview, setup instructions, usage guide, architecture summary
+  2. docs/ folder — Detailed documentation (API reference, architecture decisions, guides)
+  3. review.md — Code quality review: spec adherence, issues found, recommendations
+- Read the codebase thoroughly before writing any documentation
+- Do NOT modify any source code files — only create documentation files
+- Follow the directive exactly as written
+- When DONE, you MUST end with a ## COMPLETION SUMMARY section (status, files created, what was produced, known issues)`;
+    }
 
     if (stepType === 'planning') {
       return `You are the Worker agent — a planning specialist. Your job is to produce a DETAILED PLAN DOCUMENT, NOT code.
@@ -501,7 +523,7 @@ export function buildManagerDecisionPrompt(
   ledgerContext: string,
   decisionCriteria?: string[],
   expectedOutput?: string,
-  stepType?: 'planning' | 'coding'
+  stepType?: 'planning' | 'coding' | 'review-docs'
 ): string {
   const criteriaBlock = decisionCriteria?.length
     ? `\n---\n\nDECISION CRITERIA (evaluate against these):\n${decisionCriteria.map((c) => `- ${c}`).join('\n')}`
@@ -511,7 +533,13 @@ export function buildManagerDecisionPrompt(
     ? `\n---\n\nEXPECTED OUTPUT (the final deliverable MUST satisfy this):\n${expectedOutput}`
     : '';
 
-  const stepTypeNote = stepType === 'planning'
+  const stepTypeNote = stepType === 'review-docs'
+    ? `\n\nCRITICAL: This is a REVIEW & DOCUMENTATION step. Your decision must direct the worker to produce THREE documentation artifacts:
+1. README.md — Project overview, setup, usage, and architecture summary
+2. docs/ folder — Detailed documentation files (API reference, architecture decisions, guides)
+3. review.md — Code quality review with spec adherence evaluation, issues found, and recommendations
+The worker must NOT modify any source code. The worker should read the codebase thoroughly, evaluate quality against the spec, then write all three documentation deliverables using file tools.`
+    : stepType === 'planning'
     ? `\n\nCRITICAL: This is a PLANNING step. Your decision must direct the worker to produce a DETAILED PLAN DOCUMENT — NOT code or implementation. The worker output should be a comprehensive specification covering architecture, dependencies, step-by-step implementation instructions, data flows, edge cases, and acceptance criteria. Think of it as a product/engineering spec that another developer could follow to implement the feature without ambiguity. Do NOT ask the worker to write code, create files, or implement anything.`
     : '';
 
@@ -542,9 +570,11 @@ the strongest reasoning.`;
  */
 export function buildManagerForcedDecisionPrompt(
   ledgerContext: string,
-  stepType?: 'planning' | 'coding'
+  stepType?: 'planning' | 'coding' | 'review-docs'
 ): string {
-  const stepTypeNote = stepType === 'planning'
+  const stepTypeNote = stepType === 'review-docs'
+    ? `\n\nCRITICAL: This is a REVIEW & DOCUMENTATION step. Your decision must direct the worker to produce three documentation artifacts: README.md, docs/ folder, and review.md. The worker must NOT modify source code.`
+    : stepType === 'planning'
     ? `\n\nCRITICAL: This is a PLANNING step. Your decision must direct the worker to produce a DETAILED PLAN DOCUMENT — NOT code. The output should be a comprehensive specification, not implementation.`
     : '';
 
@@ -585,11 +615,18 @@ Keep the plan concrete and actionable.`;
 /**
  * Manager issues work directive - Section 9.6
  */
-export function buildWorkDirectivePrompt(decision: string, plan?: string, hasWritePermissions?: boolean, stepType?: 'planning' | 'coding'): string {
+export function buildWorkDirectivePrompt(decision: string, plan?: string, hasWritePermissions?: boolean, stepType?: 'planning' | 'coding' | 'review-docs'): string {
   const planSection = plan ? `\nPLAN:\n${plan}\n` : '';
 
   let outputNote = '';
-  if (stepType === 'planning') {
+  if (stepType === 'review-docs') {
+    outputNote = `\nCRITICAL: This is a REVIEW & DOCUMENTATION step. The worker must produce exactly THREE deliverables:
+1. README.md — Project overview, setup instructions, usage guide, architecture summary
+2. docs/ folder — Detailed documentation (API reference, architecture decisions, guides)
+3. review.md — Code quality review: spec adherence, issues found, recommendations
+The worker has file tools and MUST use them to write these files to disk.
+The worker must NOT modify any source code files — only create documentation.\n`;
+  } else if (stepType === 'planning') {
     outputNote = `\nCRITICAL: This is a PLANNING step. The worker must produce a DETAILED PLAN — NOT code.
 The output should be a structured, actionable plan document with:
 - Clear steps and phases
@@ -636,7 +673,7 @@ export function buildManagerReviewPrompt(
   acceptanceCriteria?: string,
   expectedOutput?: string,
   hasWritePermissions?: boolean,
-  stepType?: 'planning' | 'coding',
+  stepType?: 'planning' | 'coding' | 'review-docs',
   consultantReviews?: string,
 ): string {
   const criteriaSection = acceptanceCriteria
@@ -647,7 +684,14 @@ export function buildManagerReviewPrompt(
     ? `\nEXPECTED OUTPUT (the deliverable MUST match this):\n${expectedOutput}\n`
     : '';
 
-  const implementationNote = stepType === 'planning'
+  const implementationNote = stepType === 'review-docs'
+    ? `\nNOTE: This is a REVIEW & DOCUMENTATION step. The worker was expected to produce THREE documentation artifacts:
+1. README.md — Project overview, setup, usage, architecture
+2. docs/ folder — Detailed documentation files
+3. review.md — Code quality review and recommendations
+Verify that ALL THREE artifacts were created via file-writing tool calls. The worker must NOT have modified any source code files.
+If any artifact is missing or incomplete, use REVISE with specific instructions on what to add.\n`
+    : stepType === 'planning'
     ? `\nNOTE: This is a PLANNING step. The worker was expected to produce a detailed PLAN document,
 NOT code or implementation. Evaluate whether the plan is thorough, actionable, and covers all requirements.\n`
     : hasWritePermissions
@@ -860,8 +904,48 @@ Be concise — 3-5 sentences max. Focus on actionable feedback, not style prefer
 /**
  * Worker execution - Section 9.7
  */
-export function buildWorkerExecutionPrompt(directive: string, permissions?: WorkerPermissions, stepType?: 'planning' | 'coding'): string {
+export function buildWorkerExecutionPrompt(directive: string, permissions?: WorkerPermissions, stepType?: 'planning' | 'coding' | 'review-docs'): string {
   if (permissions?.writePermissions) {
+    if (stepType === 'review-docs') {
+      return `DIRECTIVE:
+${directive}
+
+---
+STEP 1 — UNDERSTAND THE CODEBASE:
+Use list_directory and read_file to thoroughly explore the project structure, source files, and existing documentation.
+Understand the architecture, patterns, and conventions used.
+
+STEP 2 — REVIEW CODE QUALITY:
+Evaluate the codebase against the spec/requirements provided in the directive.
+Note: code quality issues, spec adherence gaps, architectural concerns, and areas for improvement.
+
+STEP 3 — WRITE DOCUMENTATION:
+You MUST produce exactly THREE documentation artifacts by calling write_file:
+
+1. README.md — Project overview, setup instructions, usage guide, architecture summary
+2. docs/ folder — Create multiple files covering: API reference, architecture decisions, developer guides
+   (e.g., docs/architecture.md, docs/api-reference.md, docs/getting-started.md)
+3. review.md — Code quality review including: spec adherence evaluation, issues found, recommendations, quality score
+
+Do NOT modify any source code files — only create documentation files.
+Call write_file for EACH file. Do not just describe what you would write.
+
+MANDATORY — When you are DONE, you MUST end your response with a completion summary
+in EXACTLY this format:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**Files created:**
+- README.md — brief description
+- docs/architecture.md — brief description
+- docs/api-reference.md — brief description
+- review.md — brief description
+**What was produced:** 1-3 sentence description of the documentation
+**Known issues:** [None | list any issues]
+
+This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT skip it.`;
+    }
+
     if (stepType === 'planning') {
       return `DIRECTIVE:
 ${directive}
@@ -955,9 +1039,43 @@ export function buildWorkerRevisionPrompt(
   previousOutput: string,
   feedback: string,
   permissions?: WorkerPermissions,
-  stepType?: 'planning' | 'coding',
+  stepType?: 'planning' | 'coding' | 'review-docs',
 ): string {
   if (permissions?.writePermissions) {
+    if (stepType === 'review-docs') {
+      return `DIRECTIVE:
+${directive}
+
+YOUR PREVIOUS OUTPUT:
+${previousOutput}
+
+REVISION FEEDBACK:
+${feedback}
+
+Revise your documentation to address the feedback. Follow the original directive.
+Only change what the feedback asks you to change.
+
+IMPORTANT: Call write_file to update the documentation files on disk. Do not just describe the changes.
+Use read_file to check existing content first, then write_file to save your changes.
+You must maintain all three deliverables: README.md, docs/ folder, and review.md.
+Do NOT modify any source code files — only documentation files.
+
+MANDATORY — When you are DONE with revisions, you MUST end your response with a completion summary
+in EXACTLY this format:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**Files created:**
+- path/to/file — brief description
+**Files modified:**
+- path/to/file — what changed
+**What was produced:** 1-3 sentence description of the documentation
+**What was revised:** 1-2 sentences on what the feedback asked for and what you changed
+**Known issues:** [None | list any issues]
+
+This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT skip it.`;
+    }
+
     if (stepType === 'planning') {
       return `DIRECTIVE:
 ${directive}

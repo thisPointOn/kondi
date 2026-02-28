@@ -43,6 +43,7 @@ function getStepIcon(type: string): string {
     case 'decisioning': return '\uD83E\uDD14';
     case 'execution': return '\uD83E\uDD16';
     case 'coding': return '\uD83D\uDCBB';
+    case 'review-docs': return '\uD83D\uDCDD';
     case 'gate': return '\uD83D\uDEA7';
     default: return '\u2753';
   }

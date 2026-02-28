@@ -7,7 +7,7 @@
 // Step & Pipeline Status
 // ============================================================================
 
-export type PipelineStepType = 'planning' | 'decisioning' | 'execution' | 'coding' | 'gate';
+export type PipelineStepType = 'planning' | 'decisioning' | 'execution' | 'coding' | 'review-docs' | 'gate';
 
 /** What kind of data a step produces for downstream consumption */
 export type OutputType = 'string' | 'file' | 'directory';
@@ -45,7 +45,7 @@ export interface StepArtifact {
     outputPath?: string;   // file path where output was saved (planning/coding steps)
     outputType?: OutputType; // what kind of data this artifact represents
     stepName?: string;     // human-readable name of the producing step
-    stepType?: string;     // 'planning' | 'coding' | 'decisioning' | 'execution' | 'gate'
+    stepType?: string;     // 'planning' | 'coding' | 'review-docs' | 'decisioning' | 'execution' | 'gate'
   };
   createdAt: string;
 }
@@ -85,7 +85,7 @@ export interface PipelinePersona {
 // ============================================================================
 
 export interface CouncilStepConfig {
-  type: 'planning' | 'coding' | 'decisioning' | 'execution';
+  type: 'planning' | 'coding' | 'review-docs' | 'decisioning' | 'execution';
   councilSetup: {
     name: string;
     personas: PipelinePersona[];

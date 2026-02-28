@@ -503,7 +503,7 @@ export class PipelineExecutor {
             try {
               const safeName = config.councilSetup.name
                 .toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_').slice(0, 50);
-              const suffix = config.type === 'coding' ? '_code.md' : '_plan.md';
+              const suffix = config.type === 'coding' ? '_code.md' : config.type === 'review-docs' ? '_review.md' : '_plan.md';
               workerOutputPath = `${effectiveDir.replace(/\/$/, '')}/${safeName}${suffix}`;
               await this.platform.writeFile(workerOutputPath, workerOutput.content);
               console.log(`[Pipeline:Council] Saved worker output to: ${workerOutputPath}`);

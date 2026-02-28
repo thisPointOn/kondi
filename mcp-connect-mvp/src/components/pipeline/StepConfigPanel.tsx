@@ -450,6 +450,28 @@ function defaultCodingConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): Co
   };
 }
 
+function defaultReviewDocsConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
+  const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
+  const consultant = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
+  const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
+  return {
+    type: 'review-docs',
+    councilSetup: {
+      name: 'Review & Documentation',
+      personas: [
+        { name: 'Code Reviewer', role: 'manager', model: manager.model, provider: manager.provider, avatar: '\uD83D\uDD0D', color: '#6366f1', suppressPersona: false, traits: ['analytical', 'quality-focused'] },
+        { name: 'Domain Expert', role: 'consultant', model: consultant.model, provider: consultant.provider, avatar: '\uD83C\uDF93', color: '#16a34a', traits: ['insightful', 'collaborative'] },
+        { name: 'Documentation Writer', role: 'worker', model: worker.model, provider: worker.provider, avatar: '\uD83D\uDCDD', color: '#f59e0b', suppressPersona: true, traits: ['thorough', 'detail-oriented'], saveOutput: true },
+      ],
+      maxRounds: 3,
+      maxRevisions: 2,
+      expectedOutput: 'Three documentation deliverables: README.md, docs/ folder with detailed documentation, and review.md with code quality assessment.',
+    },
+    inputTemplate: '{{input}}',
+    outputType: 'directory',
+  };
+}
+
 function defaultGateConfig(): GateStepConfig {
   return {
     type: 'gate',
@@ -463,6 +485,7 @@ export function getDefaultConfigForType(type: PipelineStepType, avail?: Record<s
     case 'decisioning': return defaultDecisioningConfig(avail);
     case 'execution': return defaultExecutionConfig(avail);
     case 'coding': return defaultCodingConfig(avail);
+    case 'review-docs': return defaultReviewDocsConfig(avail);
     case 'gate': return defaultGateConfig();
   }
 }
@@ -533,6 +556,7 @@ export default function StepConfigPanel({
             <option value="decisioning">Decisioning</option>
             <option value="execution">Execution</option>
             <option value="coding">Coding</option>
+            <option value="review-docs">Review & Docs</option>
             <option value="gate">Gate</option>
           </select>
         </div>
@@ -687,8 +711,8 @@ function CouncilConfig({
       // Execution: must have at least 1 worker
       return persona.role === 'worker' && countRole('worker') <= 1;
     }
-    if (config.type === 'coding') {
-      // Coding: must have at least 1 manager, 1 worker
+    if (config.type === 'coding' || config.type === 'review-docs') {
+      // Coding / Review & Docs: must have at least 1 manager, 1 worker
       if (persona.role === 'manager') return countRole('manager') <= 1;
       if (persona.role === 'worker') return countRole('worker') <= 1;
       return false;
