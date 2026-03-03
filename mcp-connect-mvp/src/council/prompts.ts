@@ -337,7 +337,7 @@ export interface WorkerPermissions {
   directoryConstrained?: boolean;
 }
 
-export function getMinimalWorkerSystemPrompt(permissions?: WorkerPermissions, stepType?: 'planning' | 'coding' | 'review-docs'): string {
+export function getMinimalWorkerSystemPrompt(permissions?: WorkerPermissions, stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment'): string {
   if (permissions?.writePermissions) {
     const scopeNote = permissions.workingDirectory
       ? (permissions.directoryConstrained
@@ -367,6 +367,28 @@ CRITICAL RULES:
   3. review.md — Code quality review: spec adherence, issues found, recommendations
 - Read the codebase thoroughly before writing any documentation
 - Do NOT modify any source code files — only create documentation files
+- Follow the directive exactly as written
+- When DONE, you MUST end with a ## COMPLETION SUMMARY section (status, files created, what was produced, known issues)`;
+    }
+
+    if (stepType === 'enrichment') {
+      return `You are the Worker agent — an innovation specialist. Your job is to research the codebase and market landscape, then brainstorm creative feature ideas that extend beyond the original spec.
+
+${scopeNote}
+
+You have these tools available — USE THEM:
+- write_file: Create or overwrite files on disk (takes path + content)
+- read_file: Read file contents (takes path)
+- list_directory: List files in a directory (takes path)
+- run_command: Execute shell commands
+
+CRITICAL RULES:
+- You MUST produce an enrichment document by calling write_file (e.g., enrichment.md or ENRICHMENT.md)
+- Read the codebase thoroughly to understand what exists, what patterns are used, and what gaps exist
+- Research the market context — competitive landscape, user needs, industry trends (use web tools if available)
+- Brainstorm NEW features and enhancements that go BEYOND the original spec
+- For each feature idea, assess: user value, technical feasibility, implementation effort, and priority
+- Do NOT modify any source code files — only create the enrichment document
 - Follow the directive exactly as written
 - When DONE, you MUST end with a ## COMPLETION SUMMARY section (status, files created, what was produced, known issues)`;
     }
@@ -523,7 +545,7 @@ export function buildManagerDecisionPrompt(
   ledgerContext: string,
   decisionCriteria?: string[],
   expectedOutput?: string,
-  stepType?: 'planning' | 'coding' | 'review-docs'
+  stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment'
 ): string {
   const criteriaBlock = decisionCriteria?.length
     ? `\n---\n\nDECISION CRITERIA (evaluate against these):\n${decisionCriteria.map((c) => `- ${c}`).join('\n')}`
@@ -533,7 +555,14 @@ export function buildManagerDecisionPrompt(
     ? `\n---\n\nEXPECTED OUTPUT (the final deliverable MUST satisfy this):\n${expectedOutput}`
     : '';
 
-  const stepTypeNote = stepType === 'review-docs'
+  const stepTypeNote = stepType === 'enrichment'
+    ? `\n\nCRITICAL: This is an ENRICHMENT step. Your decision must direct the worker to produce a creative enrichment document that goes BEYOND the original spec. The worker should:
+1. Research the codebase thoroughly to understand what exists and what gaps/opportunities are present
+2. Analyze the market context — competitive landscape, user needs, and industry trends
+3. Brainstorm new features and enhancements with user value, feasibility, effort, and priority assessments
+4. Write a structured enrichment document to disk using file tools
+The worker must NOT modify any source code — only create the enrichment document.`
+    : stepType === 'review-docs'
     ? `\n\nCRITICAL: This is a REVIEW & DOCUMENTATION step. Your decision must direct the worker to produce THREE documentation artifacts:
 1. README.md — Project overview, setup, usage, and architecture summary
 2. docs/ folder — Detailed documentation files (API reference, architecture decisions, guides)
@@ -570,9 +599,11 @@ the strongest reasoning.`;
  */
 export function buildManagerForcedDecisionPrompt(
   ledgerContext: string,
-  stepType?: 'planning' | 'coding' | 'review-docs'
+  stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment'
 ): string {
-  const stepTypeNote = stepType === 'review-docs'
+  const stepTypeNote = stepType === 'enrichment'
+    ? `\n\nCRITICAL: This is an ENRICHMENT step. Your decision must direct the worker to research the codebase and market landscape, then produce a creative enrichment document with new feature ideas, feasibility assessments, and priorities. The worker must NOT modify source code.`
+    : stepType === 'review-docs'
     ? `\n\nCRITICAL: This is a REVIEW & DOCUMENTATION step. Your decision must direct the worker to produce three documentation artifacts: README.md, docs/ folder, and review.md. The worker must NOT modify source code.`
     : stepType === 'planning'
     ? `\n\nCRITICAL: This is a PLANNING step. Your decision must direct the worker to produce a DETAILED PLAN DOCUMENT — NOT code. The output should be a comprehensive specification, not implementation.`
@@ -615,11 +646,19 @@ Keep the plan concrete and actionable.`;
 /**
  * Manager issues work directive - Section 9.6
  */
-export function buildWorkDirectivePrompt(decision: string, plan?: string, hasWritePermissions?: boolean, stepType?: 'planning' | 'coding' | 'review-docs'): string {
+export function buildWorkDirectivePrompt(decision: string, plan?: string, hasWritePermissions?: boolean, stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment'): string {
   const planSection = plan ? `\nPLAN:\n${plan}\n` : '';
 
   let outputNote = '';
-  if (stepType === 'review-docs') {
+  if (stepType === 'enrichment') {
+    outputNote = `\nCRITICAL: This is an ENRICHMENT step. The worker must produce a structured enrichment document that:
+1. Analyzes the existing codebase — architecture, patterns, gaps, and opportunities
+2. Researches market context — competitive landscape, user needs, industry trends
+3. Brainstorms new features and enhancements BEYOND the original spec
+4. Assesses each idea for: user value, technical feasibility, implementation effort, and priority
+The worker has file tools and MUST use them to write the enrichment document to disk (e.g., enrichment.md).
+The worker must NOT modify any source code files — only create the enrichment document.\n`;
+  } else if (stepType === 'review-docs') {
     outputNote = `\nCRITICAL: This is a REVIEW & DOCUMENTATION step. The worker must produce exactly THREE deliverables:
 1. README.md — Project overview, setup instructions, usage guide, architecture summary
 2. docs/ folder — Detailed documentation (API reference, architecture decisions, guides)
@@ -635,7 +674,12 @@ The output should be a structured, actionable plan document with:
 - Technical approach and architecture decisions
 - Success criteria and acceptance tests
 Do NOT tell the worker to write code, create files, or implement anything.
-The worker should produce a comprehensive plan that a separate coding step will later implement.\n`;
+The worker should produce a comprehensive plan that a separate coding step will later implement.
+
+IMPORTANT: The worker's plan MUST include a ## STRUCTURED SPEC section at the end containing a
+JSON code block with machine-readable project specification. This allows downstream coding steps
+to consume concrete features, acceptance criteria, and file trees instead of guessing from prose.
+Tell the worker this is mandatory.\n`;
   } else if (hasWritePermissions) {
     outputNote = `\nCRITICAL: The worker has tools to create and edit files on disk.
 Your directive MUST tell the worker to ACTUALLY WRITE THE CODE — not describe it, not outline it, not summarize it.
@@ -673,7 +717,7 @@ export function buildManagerReviewPrompt(
   acceptanceCriteria?: string,
   expectedOutput?: string,
   hasWritePermissions?: boolean,
-  stepType?: 'planning' | 'coding' | 'review-docs',
+  stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment',
   consultantReviews?: string,
 ): string {
   const criteriaSection = acceptanceCriteria
@@ -684,7 +728,16 @@ export function buildManagerReviewPrompt(
     ? `\nEXPECTED OUTPUT (the deliverable MUST match this):\n${expectedOutput}\n`
     : '';
 
-  const implementationNote = stepType === 'review-docs'
+  const implementationNote = stepType === 'enrichment'
+    ? `\nNOTE: This is an ENRICHMENT step. The worker was expected to produce an enrichment document covering:
+1. Codebase analysis — existing architecture, patterns, gaps, and opportunities
+2. Market research — competitive landscape, user needs, industry trends
+3. Feature brainstorm — new ideas with user value, feasibility, effort, and priority
+4. Prioritized recommendations — which features to pursue first
+Verify the enrichment document was created via file-writing tool calls and covers all four areas.
+The worker must NOT have modified any source code files.
+If the document is missing areas or lacks depth, use REVISE with specific instructions on what to expand.\n`
+    : stepType === 'review-docs'
     ? `\nNOTE: This is a REVIEW & DOCUMENTATION step. The worker was expected to produce THREE documentation artifacts:
 1. README.md — Project overview, setup, usage, architecture
 2. docs/ folder — Detailed documentation files
@@ -693,7 +746,10 @@ Verify that ALL THREE artifacts were created via file-writing tool calls. The wo
 If any artifact is missing or incomplete, use REVISE with specific instructions on what to add.\n`
     : stepType === 'planning'
     ? `\nNOTE: This is a PLANNING step. The worker was expected to produce a detailed PLAN document,
-NOT code or implementation. Evaluate whether the plan is thorough, actionable, and covers all requirements.\n`
+NOT code or implementation. Evaluate whether the plan is thorough, actionable, and covers all requirements.
+The plan MUST include a ## STRUCTURED SPEC section with a JSON code block containing: features (name,
+description, acceptanceCriteria, files), architecture (fileTree, techStack), and phases. If the
+structured spec is missing or incomplete, use REVISE and instruct the worker to add it.\n`
     : hasWritePermissions
     ? `\nNOTE: The worker had file-writing tools and was expected to ACTUALLY CREATE FILES on disk.
 The worker creates files by using tool calls (Bash, Write, etc.) — these tool calls appear in
@@ -904,8 +960,52 @@ Be concise — 3-5 sentences max. Focus on actionable feedback, not style prefer
 /**
  * Worker execution - Section 9.7
  */
-export function buildWorkerExecutionPrompt(directive: string, permissions?: WorkerPermissions, stepType?: 'planning' | 'coding' | 'review-docs'): string {
+export function buildWorkerExecutionPrompt(directive: string, permissions?: WorkerPermissions, stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment'): string {
   if (permissions?.writePermissions) {
+    if (stepType === 'enrichment') {
+      return `DIRECTIVE:
+${directive}
+
+---
+STEP 1 — RESEARCH THE PROJECT:
+Use list_directory and read_file to thoroughly explore the project structure, source files, and existing documentation.
+Understand the architecture, patterns, conventions, and capabilities. Note what exists and what's missing.
+
+STEP 2 — RESEARCH THE MARKET:
+Analyze the competitive landscape, user needs, and industry trends relevant to this project.
+If you have web search or browsing tools available, use them. Otherwise, draw on your knowledge of the domain.
+Consider: What do competing products offer? What do users expect? What are emerging trends?
+
+STEP 3 — BRAINSTORM FEATURES:
+Generate creative feature ideas and enhancements that go BEYOND the original spec. For each idea include:
+- **Feature name** and brief description
+- **User value** — why users would want this
+- **Technical feasibility** — how hard to implement given the existing architecture
+- **Implementation effort** — rough estimate (small / medium / large)
+- **Priority** — recommended priority (P0 critical / P1 high / P2 medium / P3 nice-to-have)
+
+STEP 4 — WRITE ENRICHMENT DOCUMENT:
+Call write_file to create the enrichment document (e.g., enrichment.md) with all your findings structured as:
+- Executive Summary
+- Codebase Analysis (architecture, patterns, gaps, opportunities)
+- Market Research (competitive landscape, user needs, trends)
+- Feature Ideas (the full brainstorm from Step 3)
+- Prioritized Recommendations (top features to pursue, with rationale)
+
+Do NOT modify any source code files — only create the enrichment document.
+Call write_file for the document. Do not just describe what you would write.
+
+MANDATORY — When you are DONE, you MUST end your response with a completion summary
+in EXACTLY this format:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**Files created:**
+- path/to/enrichment.md — brief description
+**What was produced:** 1-3 sentence description of the enrichment document
+**Known issues:** [None | list any issues]`;
+    }
+
     if (stepType === 'review-docs') {
       return `DIRECTIVE:
 ${directive}
@@ -964,6 +1064,36 @@ The plan should be thorough and actionable, covering:
 - File/module structure
 - Interface definitions
 - Success criteria and acceptance tests
+
+MANDATORY STRUCTURED SPEC — Your plan document MUST end with a ## STRUCTURED SPEC section
+containing a JSON code block. This machine-readable spec allows downstream coding steps to
+consume concrete features, acceptance criteria, and file trees. Format:
+
+\`\`\`json
+{
+  "features": [
+    {
+      "name": "Feature name",
+      "description": "What it does",
+      "acceptanceCriteria": ["Criterion 1", "Criterion 2"],
+      "files": ["src/path/to/file.ts"]
+    }
+  ],
+  "architecture": {
+    "fileTree": ["src/", "src/components/", "src/utils/"],
+    "techStack": ["React", "TypeScript"]
+  },
+  "phases": [
+    {
+      "name": "Phase 1",
+      "features": ["Feature name"],
+      "dependencies": []
+    }
+  ]
+}
+\`\`\`
+
+This structured spec is CRITICAL — downstream coding steps parse it to decompose work.
 
 MANDATORY — When you are DONE, you MUST end your response with a completion summary
 in EXACTLY this format:
@@ -1039,9 +1169,40 @@ export function buildWorkerRevisionPrompt(
   previousOutput: string,
   feedback: string,
   permissions?: WorkerPermissions,
-  stepType?: 'planning' | 'coding' | 'review-docs',
+  stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment',
 ): string {
   if (permissions?.writePermissions) {
+    if (stepType === 'enrichment') {
+      return `DIRECTIVE:
+${directive}
+
+YOUR PREVIOUS OUTPUT:
+${previousOutput}
+
+REVISION FEEDBACK:
+${feedback}
+
+Revise your enrichment document to address the feedback. Follow the original directive.
+Only change what the feedback asks you to change.
+
+IMPORTANT: Call write_file to update the enrichment document on disk. Do not just describe the changes.
+Use read_file to check existing content first, then write_file to save your changes.
+Do NOT modify any source code files — only the enrichment document.
+
+MANDATORY — When you are DONE with revisions, you MUST end your response with a completion summary
+in EXACTLY this format:
+
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**Files created:**
+- path/to/file — brief description
+**Files modified:**
+- path/to/file — what changed
+**What was produced:** 1-3 sentence description of the enrichment document
+**What was revised:** 1-2 sentences on what the feedback asked for and what you changed
+**Known issues:** [None | list any issues]`;
+    }
+
     if (stepType === 'review-docs') {
       return `DIRECTIVE:
 ${directive}
@@ -1091,6 +1252,10 @@ Only change what the feedback asks you to change.
 
 IMPORTANT: Call write_file to edit or rewrite the plan document on disk. Do not just describe the changes.
 Actually modify the plan file. Do NOT write source code or implementation files.
+
+IMPORTANT: Preserve the ## STRUCTURED SPEC section with the JSON code block at the end of the plan.
+Update the structured spec to reflect any changes from the revision. The structured spec must contain:
+features (name, description, acceptanceCriteria, files), architecture (fileTree, techStack), and phases.
 
 MANDATORY — When you are DONE with revisions, you MUST end your response with a completion summary
 in EXACTLY this format:

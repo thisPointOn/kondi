@@ -1,7 +1,8 @@
 /**
  * Pipeline Executor
  * Runs pipelines: sequential stages, parallel steps within stages.
- * All step types (planning, coding, decisioning, execution) create councils.
+ * Council steps (planning, coding, decisioning, execution, etc.) create councils.
+ * Script steps run shell commands. Condition steps evaluate expressions.
  * Gate steps pause for user approval.
  */
 
@@ -13,6 +14,8 @@ import type {
   CouncilStepConfig,
   LlmStepConfig,
   GateStepConfig,
+  ScriptStepConfig,
+  ConditionStepConfig,
 } from './types';
 import { migrateLlmConfig } from './types';
 
@@ -22,6 +25,7 @@ import { createCouncilFromSetup } from '../council/factory';
 import { DeliberationOrchestrator } from '../council/deliberation-orchestrator';
 import { CodingOrchestrator } from '../council/coding-orchestrator';
 import { getDecision, getLatestOutput } from '../council/context-store';
+import { stripCompletedCouncil } from '../council/storage-cleanup';
 import { buildAbbreviatedSummary } from '../services/deliberationSummary';
 import type { Persona } from '../council/types';
 import type { AgentInvocation, AgentResponse } from '../council/deliberation-orchestrator';
@@ -80,7 +84,9 @@ function formatArtifactForInput(artifact: StepArtifact): string {
   const outputType = artifact.metadata?.outputType || 'string';
   const outputPath = artifact.metadata?.outputPath;
 
-  if (outputType === 'directory' && outputPath) {
+  if (outputType === 'json') {
+    lines.push(`[Output type: json]`);
+  } else if (outputType === 'directory' && outputPath) {
     lines.push(`[Output type: directory]`);
     lines.push(`[Output directory: ${outputPath}]`);
     lines.push(`IMPORTANT: The previous step produced output in the directory above. Use your tools to list and read the files in that directory to understand the full context of what was produced.`);
@@ -96,6 +102,24 @@ function formatArtifactForInput(artifact: StepArtifact): string {
     return lines.join('\n') + '\n\n' + artifact.content;
   }
   return artifact.content;
+}
+
+/**
+ * Parse artifact content as JSON and walk a dot-separated path.
+ * Returns the stringified value at the path, or '' if parsing fails or path not found.
+ */
+function resolveJsonPath(content: string, dotPath: string): string {
+  try {
+    let obj = JSON.parse(content);
+    for (const key of dotPath.split('.')) {
+      if (obj == null || typeof obj !== 'object') return '';
+      obj = obj[key];
+    }
+    if (obj === undefined || obj === null) return '';
+    return typeof obj === 'string' ? obj : JSON.stringify(obj);
+  } catch {
+    return '';
+  }
 }
 
 function renderInputTemplate(
@@ -135,6 +159,20 @@ function renderInputTemplate(
     return previousArtifacts[i]?.metadata?.outputPath || '';
   });
 
+  // Replace {{input.fieldName}} with JSON field from last artifact (dot-path walk)
+  result = result.replace(/\{\{input\.([a-zA-Z0-9_.]+)\}\}/g, (_match, path) => {
+    const last = previousArtifacts[previousArtifacts.length - 1];
+    if (!last) return '';
+    return resolveJsonPath(last.content, path);
+  });
+
+  // Replace {{input[N].fieldName}} with JSON field from specific artifact
+  result = result.replace(/\{\{input\[(\d+)\]\.([a-zA-Z0-9_.]+)\}\}/g, (_match, index, path) => {
+    const i = parseInt(index, 10);
+    if (!previousArtifacts[i]) return '';
+    return resolveJsonPath(previousArtifacts[i].content, path);
+  });
+
   return result;
 }
 
@@ -147,6 +185,10 @@ export class PipelineExecutor {
   private platform: PlatformAdapter;
   private aborted = false;
   private runningPipelineId: string | null = null;
+  /** Set by condition steps to skip the next stage */
+  private skipNextStage = false;
+  /** Set by condition steps to stop the pipeline (completes, not fails) */
+  private stopPipeline = false;
 
   constructor(callbacks: PipelineExecutorCallbacks, platform: PlatformAdapter) {
     this.callbacks = callbacks;
@@ -166,6 +208,8 @@ export class PipelineExecutor {
     }
 
     this.aborted = false;
+    this.skipNextStage = false;
+    this.stopPipeline = false;
     this.runningPipelineId = pipelineId;
     pipelineStore.setPipelineStatus(pipelineId, 'running');
 
@@ -186,6 +230,19 @@ export class PipelineExecutor {
           continue;
         }
 
+        // Check if a condition step requested skipping this stage
+        if (this.skipNextStage) {
+          this.skipNextStage = false;
+          // Mark all steps in this stage as skipped
+          for (const step of stage.steps) {
+            if (step.status !== 'completed' && step.status !== 'skipped') {
+              pipelineStore.setStepStatus(pipelineId, step.id, 'skipped');
+            }
+          }
+          pipelineStore.advanceStage(pipelineId);
+          continue;
+        }
+
         // Collect previous stage artifacts (or initial input for stage 0)
         const previousArtifacts = this.collectPreviousArtifacts(current, i);
 
@@ -203,6 +260,22 @@ export class PipelineExecutor {
 
         // Advance stage index
         pipelineStore.advanceStage(pipelineId);
+
+        // Check if a condition step requested stopping after this stage
+        if (this.stopPipeline) {
+          // Skip remaining stages
+          const updated = pipelineStore.get(pipelineId);
+          if (updated) {
+            for (let j = i + 1; j < updated.stages.length; j++) {
+              for (const step of updated.stages[j].steps) {
+                if (step.status === 'pending') {
+                  pipelineStore.setStepStatus(pipelineId, step.id, 'skipped');
+                }
+              }
+            }
+          }
+          break;
+        }
       }
 
       if (!this.aborted) {
@@ -302,7 +375,7 @@ export class PipelineExecutor {
       // Accumulate artifacts so later steps can reference earlier steps' outputs.
       const accumulatedArtifacts = [...previousArtifacts];
       for (const step of stage.steps) {
-        if (this.aborted) return;
+        if (this.aborted || this.stopPipeline) return;
 
         try {
           await this.runStep(pipelineId, step, accumulatedArtifacts, pipelineSettings);
@@ -339,7 +412,6 @@ export class PipelineExecutor {
     this.callbacks.onStepStart?.(step.id);
 
     // Track council ID so we can link to the deliberation even if the step fails
-    // All step types now route through councils (including decisioning/execution)
     let stepCouncilId: string | null = null;
     const origOnCouncilCreated = this.callbacks.onCouncilCreated;
     this.callbacks.onCouncilCreated = (stepId, councilId) => {
@@ -352,6 +424,10 @@ export class PipelineExecutor {
 
       if (step.config.type === 'gate') {
         artifact = await this.runGateStep(pipelineId, step);
+      } else if (step.config.type === 'script') {
+        artifact = await this.runScriptStep(step, previousArtifacts);
+      } else if (step.config.type === 'condition') {
+        artifact = await this.runConditionStep(step, previousArtifacts);
       } else {
         // Convert LLM steps (decisioning/execution) to lightweight council configs
         const councilStep = this.normalizeToCouncilStep(step);
@@ -503,7 +579,7 @@ export class PipelineExecutor {
             try {
               const safeName = config.councilSetup.name
                 .toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_').slice(0, 50);
-              const suffix = config.type === 'coding' ? '_code.md' : config.type === 'review-docs' ? '_review.md' : '_plan.md';
+              const suffix = config.type === 'coding' ? '_code.md' : config.type === 'review-docs' ? '_review.md' : config.type === 'enrichment' ? '_enrichment.md' : '_plan.md';
               workerOutputPath = `${effectiveDir.replace(/\/$/, '')}/${safeName}${suffix}`;
               await this.platform.writeFile(workerOutputPath, workerOutput.content);
               console.log(`[Pipeline:Council] Saved worker output to: ${workerOutputPath}`);
@@ -539,11 +615,119 @@ export class PipelineExecutor {
       metadata.outputId = output?.id;
     }
 
+    // Strip the localStorage copy of this council's metadata to keep
+    // the mcp-councils key small.  The authoritative council data
+    // (ledger, context, decision, etc.) remains in the in-memory
+    // CouncilDataStore, so it stays accessible for the rest of this session.
+    try {
+      stripCompletedCouncil(council.id);
+    } catch (err) {
+      console.warn('[Pipeline] Non-fatal: failed to strip council localStorage copy:', err);
+    }
+
     return {
       stepId: step.id,
       content,
       artifactType,
       metadata,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Script Step
+  // --------------------------------------------------------------------------
+
+  private async runScriptStep(
+    step: PipelineStep,
+    previousArtifacts: StepArtifact[]
+  ): Promise<StepArtifact> {
+    const config = step.config as ScriptStepConfig;
+
+    if (!this.platform.runCommand) {
+      throw new Error('Script steps require a platform with runCommand support');
+    }
+
+    if (!config.command.trim()) {
+      throw new Error('Script step has no command configured');
+    }
+
+    // Render input from previous steps and export as $KONDI_INPUT env var.
+    // The input is shell-escaped and passed via env var to avoid injection.
+    const inputContext = renderInputTemplate(config.inputTemplate, previousArtifacts);
+    const escaped = inputContext.replace(/'/g, "'\\''");
+    const command = `export KONDI_INPUT='${escaped}'\n${config.command}`;
+
+    const cwd = this.platform.getWorkingDir();
+    const result = await this.platform.runCommand(command, cwd);
+
+    if (!result.success) {
+      const errorDetail = result.stderr || result.stdout || `exit code ${result.exit_code}`;
+      throw new Error(`Script failed: ${errorDetail}`);
+    }
+
+    return {
+      stepId: step.id,
+      content: result.stdout,
+      artifactType: 'output',
+      metadata: {
+        stepName: step.name,
+        stepType: 'script',
+        outputType: config.outputType || 'string',
+      },
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Condition Step
+  // --------------------------------------------------------------------------
+
+  private async runConditionStep(
+    step: PipelineStep,
+    previousArtifacts: StepArtifact[]
+  ): Promise<StepArtifact> {
+    const config = step.config as ConditionStepConfig;
+
+    if (!config.expression) {
+      throw new Error('Condition step has no expression configured');
+    }
+
+    const inputContext = renderInputTemplate(config.inputTemplate, previousArtifacts);
+
+    // Evaluate the condition
+    let matches = false;
+    switch (config.mode) {
+      case 'contains':
+        matches = inputContext.includes(config.expression);
+        break;
+      case 'equals':
+        matches = inputContext.trim() === config.expression.trim();
+        break;
+      case 'regex':
+        try {
+          matches = new RegExp(config.expression).test(inputContext);
+        } catch {
+          throw new Error(`Invalid regex in condition: ${config.expression}`);
+        }
+        break;
+    }
+
+    const action = matches ? config.trueAction : config.falseAction;
+    const resultLabel = matches ? 'TRUE' : 'FALSE';
+
+    // Apply the action
+    if (action === 'skip_next_stage') {
+      this.skipNextStage = true;
+    } else if (action === 'stop') {
+      this.stopPipeline = true;
+    }
+
+    return {
+      stepId: step.id,
+      content: `Condition evaluated: ${resultLabel} (mode: ${config.mode}, expression: "${config.expression}"). Action: ${action}.`,
+      artifactType: 'output',
+      metadata: { stepName: step.name, stepType: 'condition' },
       createdAt: new Date().toISOString(),
     };
   }

@@ -9,6 +9,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { KondiSession, Pipeline } from './types';
 import { pipelineStore } from './store';
+import { councilDataStore } from '../council/storage-cleanup';
 
 interface FileInfo {
   name: string;
@@ -98,7 +99,7 @@ export async function discoverCliSessions(): Promise<CliSessionSummary[]> {
 }
 
 /**
- * Import a CLI session into browser localStorage.
+ * Import a CLI session into the in-memory data store.
  * Merges the pipeline, councils, and all deliberation data.
  */
 export async function importCliSession(filePath: string): Promise<string> {
@@ -122,19 +123,19 @@ export async function importCliSession(filePath: string): Promise<string> {
     // Update in place — replaces old execution data
     pipelineStore.update(pipeline.id, pipeline);
   } else {
-    // Insert directly into localStorage (create() would generate a new ID)
-    const raw = localStorage.getItem('mcp-pipelines');
+    // Insert directly into store (create() would generate a new ID)
+    const raw = councilDataStore.getItem('mcp-pipelines');
     const data = raw
       ? JSON.parse(raw)
       : { version: 2, pipelines: [], lastUpdated: '' };
     data.pipelines.push(pipeline);
     data.lastUpdated = new Date().toISOString();
-    localStorage.setItem('mcp-pipelines', JSON.stringify(data));
+    councilDataStore.setItem('mcp-pipelines', JSON.stringify(data));
   }
 
   // 2. Import councils
   if (session.councils.length > 0) {
-    const raw = localStorage.getItem('mcp-councils');
+    const raw = councilDataStore.getItem('mcp-councils');
     const data = raw
       ? JSON.parse(raw)
       : { version: 2, councils: [], lastUpdated: '' };
@@ -149,37 +150,37 @@ export async function importCliSession(filePath: string): Promise<string> {
     }
 
     data.lastUpdated = new Date().toISOString();
-    localStorage.setItem('mcp-councils', JSON.stringify(data));
+    councilDataStore.setItem('mcp-councils', JSON.stringify(data));
   }
 
   // 3. Import council data (ledger, context, decisions, etc.)
   for (const [councilId, cdata] of Object.entries(session.councilData)) {
     if (cdata.ledgerIndex) {
-      localStorage.setItem(`ledger-index-${councilId}`, JSON.stringify(cdata.ledgerIndex));
+      councilDataStore.setItem(`ledger-index-${councilId}`, JSON.stringify(cdata.ledgerIndex));
     }
     for (const [n, chunk] of Object.entries(cdata.ledgerChunks)) {
-      localStorage.setItem(`ledger-chunk-${councilId}-${n}`, JSON.stringify(chunk));
+      councilDataStore.setItem(`ledger-chunk-${councilId}-${n}`, JSON.stringify(chunk));
     }
     if (cdata.context) {
-      localStorage.setItem(`context-${councilId}`, JSON.stringify(cdata.context));
+      councilDataStore.setItem(`context-${councilId}`, JSON.stringify(cdata.context));
     }
     if (cdata.contextHistory.length > 0) {
-      localStorage.setItem(`context-history-${councilId}`, JSON.stringify(cdata.contextHistory));
+      councilDataStore.setItem(`context-history-${councilId}`, JSON.stringify(cdata.contextHistory));
     }
     if (cdata.contextPatches.length > 0) {
-      localStorage.setItem(`context-patches-${councilId}`, JSON.stringify(cdata.contextPatches));
+      councilDataStore.setItem(`context-patches-${councilId}`, JSON.stringify(cdata.contextPatches));
     }
     if (cdata.decision) {
-      localStorage.setItem(`decision-${councilId}`, JSON.stringify(cdata.decision));
+      councilDataStore.setItem(`decision-${councilId}`, JSON.stringify(cdata.decision));
     }
     if (cdata.plan) {
-      localStorage.setItem(`plan-${councilId}`, JSON.stringify(cdata.plan));
+      councilDataStore.setItem(`plan-${councilId}`, JSON.stringify(cdata.plan));
     }
     if (cdata.directive) {
-      localStorage.setItem(`directive-${councilId}`, JSON.stringify(cdata.directive));
+      councilDataStore.setItem(`directive-${councilId}`, JSON.stringify(cdata.directive));
     }
     if (cdata.outputs.length > 0) {
-      localStorage.setItem(`outputs-${councilId}`, JSON.stringify(cdata.outputs));
+      councilDataStore.setItem(`outputs-${councilId}`, JSON.stringify(cdata.outputs));
     }
   }
 

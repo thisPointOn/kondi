@@ -11,7 +11,11 @@ import type {
   StepConfig,
   CouncilStepConfig,
   GateStepConfig,
+  ScriptStepConfig,
+  ConditionStepConfig,
   PipelineStepType,
+  ConditionMode,
+  ConditionAction,
 } from '../../pipeline/types';
 import { isCouncilType } from '../../pipeline/types';
 import type { OutputType } from '../../pipeline/types';
@@ -472,10 +476,52 @@ function defaultReviewDocsConfig(avail: Record<string, boolean> = DEFAULT_AVAIL)
   };
 }
 
+function defaultEnrichmentConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
+  const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
+  const consultant = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
+  const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
+  return {
+    type: 'enrichment',
+    councilSetup: {
+      name: 'Enrichment Council',
+      personas: [
+        { name: 'Product Lead', role: 'manager', model: manager.model, provider: manager.provider, avatar: '\uD83D\uDCA1', color: '#6366f1', suppressPersona: false, traits: ['strategic', 'evaluative'] },
+        { name: 'Market Expert', role: 'consultant', model: consultant.model, provider: consultant.provider, avatar: '\uD83C\uDFAF', color: '#16a34a', traits: ['insightful', 'market-aware'] },
+        { name: 'Innovation Specialist', role: 'worker', model: worker.model, provider: worker.provider, avatar: '\uD83D\uDD2C', color: '#f59e0b', suppressPersona: true, traits: ['creative', 'research-oriented'], saveOutput: true },
+      ],
+      maxRounds: 3,
+      maxRevisions: 2,
+      expectedOutput: 'A structured enrichment document with codebase analysis, market research, feature brainstorm, and prioritized recommendations.',
+    },
+    inputTemplate: '{{input}}',
+    outputType: 'string',
+  };
+}
+
 function defaultGateConfig(): GateStepConfig {
   return {
     type: 'gate',
     approvalPrompt: 'Please review the outputs and approve to continue.',
+  };
+}
+
+function defaultScriptConfig(): ScriptStepConfig {
+  return {
+    type: 'script',
+    command: '',
+    inputTemplate: '{{input}}',
+    outputType: 'string',
+  };
+}
+
+function defaultConditionConfig(): ConditionStepConfig {
+  return {
+    type: 'condition',
+    expression: '',
+    mode: 'contains',
+    inputTemplate: '{{input}}',
+    trueAction: 'continue',
+    falseAction: 'stop',
   };
 }
 
@@ -486,7 +532,10 @@ export function getDefaultConfigForType(type: PipelineStepType, avail?: Record<s
     case 'execution': return defaultExecutionConfig(avail);
     case 'coding': return defaultCodingConfig(avail);
     case 'review-docs': return defaultReviewDocsConfig(avail);
+    case 'enrichment': return defaultEnrichmentConfig(avail);
     case 'gate': return defaultGateConfig();
+    case 'script': return defaultScriptConfig();
+    case 'condition': return defaultConditionConfig();
   }
 }
 
@@ -557,12 +606,15 @@ export default function StepConfigPanel({
             <option value="execution">Execution</option>
             <option value="coding">Coding</option>
             <option value="review-docs">Review & Docs</option>
+            <option value="enrichment">Enrichment</option>
+            <option value="script">Script</option>
+            <option value="condition">Condition</option>
             <option value="gate">Gate</option>
           </select>
         </div>
       </div>
 
-      {/* Type-specific config — all non-gate types are council-based */}
+      {/* Type-specific config */}
       {isCouncilType(step.config.type) && (step.config as CouncilStepConfig).councilSetup && (
         <CouncilConfig
           config={step.config as CouncilStepConfig}
@@ -577,6 +629,22 @@ export default function StepConfigPanel({
       {step.config.type === 'gate' && (
         <GateConfig
           config={step.config as GateStepConfig}
+          onChange={onConfigUpdate}
+        />
+      )}
+
+      {step.config.type === 'script' && (
+        <ScriptConfig
+          config={step.config as ScriptStepConfig}
+          availableInputSteps={availableInputSteps}
+          onChange={onConfigUpdate}
+        />
+      )}
+
+      {step.config.type === 'condition' && (
+        <ConditionConfig
+          config={step.config as ConditionStepConfig}
+          availableInputSteps={availableInputSteps}
           onChange={onConfigUpdate}
         />
       )}
@@ -711,7 +779,7 @@ function CouncilConfig({
       // Execution: must have at least 1 worker
       return persona.role === 'worker' && countRole('worker') <= 1;
     }
-    if (config.type === 'coding' || config.type === 'review-docs') {
+    if (config.type === 'coding' || config.type === 'review-docs' || config.type === 'enrichment') {
       // Coding / Review & Docs: must have at least 1 manager, 1 worker
       if (persona.role === 'manager') return countRole('manager') <= 1;
       if (persona.role === 'worker') return countRole('worker') <= 1;
@@ -990,6 +1058,7 @@ function CouncilConfig({
             <option value="string">String (text content passed directly)</option>
             <option value="file">File (file path — next step reads the file)</option>
             <option value="directory">Directory (directory path — next step reads all files)</option>
+            <option value="json">JSON (structured data — fields accessible via {'{{input.fieldName}}'})</option>
           </select>
           <span className="hint">
             Tells downstream steps how to handle this output — {
@@ -997,6 +1066,8 @@ function CouncilConfig({
                 ? 'the next step will be instructed to read all files in the output directory'
                 : (config.outputType || 'string') === 'file'
                 ? 'the next step will be instructed to read the output file'
+                : (config.outputType || 'string') === 'json'
+                ? 'downstream steps can access fields via {{input.fieldName}} templates'
                 : 'the output text is passed directly to the next step'}
           </span>
         </div>
@@ -1080,6 +1151,148 @@ function GateConfig({
           <label>Output</label>
           <span className="hint">Gate outputs &ldquo;Approved&rdquo; when the user approves, or halts the pipeline if rejected.</span>
         </div>
+      </div>
+    </>
+  );
+}
+
+// ============================================================================
+// Script Config
+// ============================================================================
+
+function ScriptConfig({
+  config,
+  availableInputSteps,
+  onChange,
+}: {
+  config: ScriptStepConfig;
+  availableInputSteps?: AvailableInputStep[];
+  onChange: (c: StepConfig) => void;
+}) {
+  const update = (partial: Partial<ScriptStepConfig>) => onChange({ ...config, ...partial });
+
+  return (
+    <>
+      <div className="config-section">
+        <div className="config-section-title">Script Settings</div>
+        <div className="config-field">
+          <label>Command</label>
+          <textarea
+            value={config.command}
+            onChange={(e) => update({ command: e.target.value })}
+            rows={4}
+            placeholder="e.g., npm test, curl https://api.example.com, echo $KONDI_INPUT | jq .status"
+            style={{ fontFamily: 'monospace', fontSize: '13px' }}
+          />
+          {!config.command.trim() && (
+            <span className="hint" style={{ color: '#f59e0b' }}>A command is required to run this step.</span>
+          )}
+          <span className="hint">
+            Shell command to execute. Previous step output is available as <code>$KONDI_INPUT</code>.
+          </span>
+        </div>
+      </div>
+      <div className="config-section">
+        <div className="config-section-title">Input / Output</div>
+        <InputSourcePicker
+          value={config.inputTemplate}
+          onChange={(v) => update({ inputTemplate: v })}
+          availableInputSteps={availableInputSteps}
+        />
+        <div className="config-field">
+          <label>Output Type</label>
+          <select
+            value={config.outputType || 'string'}
+            onChange={(e) => update({ outputType: e.target.value as OutputType })}
+          >
+            <option value="string">String (stdout passed as text)</option>
+            <option value="json">JSON (stdout parsed as JSON — fields accessible via {'{{input.fieldName}}'})</option>
+            <option value="file">File (stdout is a file path)</option>
+          </select>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ============================================================================
+// Condition Config
+// ============================================================================
+
+function ConditionConfig({
+  config,
+  availableInputSteps,
+  onChange,
+}: {
+  config: ConditionStepConfig;
+  availableInputSteps?: AvailableInputStep[];
+  onChange: (c: StepConfig) => void;
+}) {
+  const update = (partial: Partial<ConditionStepConfig>) => onChange({ ...config, ...partial });
+
+  return (
+    <>
+      <div className="config-section">
+        <div className="config-section-title">Condition Settings</div>
+        <div className="config-field">
+          <label>Mode</label>
+          <select
+            value={config.mode}
+            onChange={(e) => update({ mode: e.target.value as ConditionMode })}
+          >
+            <option value="contains">Contains (input includes the expression)</option>
+            <option value="equals">Equals (input exactly matches the expression)</option>
+            <option value="regex">Regex (input matches the regex pattern)</option>
+          </select>
+        </div>
+        <div className="config-field">
+          <label>Expression</label>
+          <input
+            type="text"
+            value={config.expression}
+            onChange={(e) => update({ expression: e.target.value })}
+            placeholder={config.mode === 'regex' ? 'e.g., pass(ed)?|success' : 'e.g., pass'}
+            style={{ fontFamily: 'monospace' }}
+          />
+          {!config.expression && (
+            <span className="hint" style={{ color: '#f59e0b' }}>An expression is required to evaluate this condition.</span>
+          )}
+          <span className="hint">
+            {config.mode === 'contains' ? 'Check if the input text contains this string'
+              : config.mode === 'equals' ? 'Check if the input text exactly equals this string (whitespace trimmed)'
+              : 'A regular expression pattern to test against the input'}
+          </span>
+        </div>
+        <div className="config-field">
+          <label>If TRUE (expression matches)</label>
+          <select
+            value={config.trueAction}
+            onChange={(e) => update({ trueAction: e.target.value as ConditionAction })}
+          >
+            <option value="continue">Continue (proceed normally)</option>
+            <option value="skip_next_stage">Skip Next Stage</option>
+            <option value="stop">Stop Pipeline</option>
+          </select>
+        </div>
+        <div className="config-field">
+          <label>If FALSE (expression does not match)</label>
+          <select
+            value={config.falseAction}
+            onChange={(e) => update({ falseAction: e.target.value as ConditionAction })}
+          >
+            <option value="continue">Continue (proceed normally)</option>
+            <option value="skip_next_stage">Skip Next Stage</option>
+            <option value="stop">Stop Pipeline</option>
+          </select>
+        </div>
+      </div>
+      <div className="config-section">
+        <div className="config-section-title">Input</div>
+        <InputSourcePicker
+          value={config.inputTemplate}
+          onChange={(v) => update({ inputTemplate: v })}
+          availableInputSteps={availableInputSteps}
+        />
       </div>
     </>
   );

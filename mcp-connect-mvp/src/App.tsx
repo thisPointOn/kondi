@@ -41,6 +41,7 @@ function App() {
   const chats = useChats({
     setCurrentView,
     provider: providerConfig.provider,
+    selectedProviderId: providerConfig.selectedProviderId,
     openaiKey: providerConfig.openaiKey,
     anthropicKey: providerConfig.anthropicKey,
     openaiModel: providerConfig.openaiModel,

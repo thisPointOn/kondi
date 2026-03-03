@@ -21,7 +21,7 @@ import readline from 'node:readline';
 import { pipelineStore } from '../src/pipeline/store';
 import { PipelineExecutor } from '../src/pipeline/executor';
 import type { PlatformAdapter } from '../src/pipeline/executor';
-import type { Pipeline, CouncilStepConfig, LlmStepConfig } from '../src/pipeline/types';
+import type { Pipeline, CouncilStepConfig, LlmStepConfig, ScriptStepConfig, ConditionStepConfig } from '../src/pipeline/types';
 import { migrateLlmConfig } from '../src/pipeline/types';
 import { callClaude } from './claude-caller';
 import { callCodex } from './codex-caller';
@@ -247,7 +247,9 @@ function printPipelineStructure(pipeline: Pipeline) {
     for (const step of stage.steps) {
       const typeColor = step.config.type === 'gate' ? C.yellow :
                         step.config.type === 'coding' ? C.magenta :
-                        step.config.type === 'planning' ? C.blue : C.green;
+                        step.config.type === 'planning' ? C.blue :
+                        step.config.type === 'script' ? C.cyan :
+                        step.config.type === 'condition' ? C.yellow : C.green;
       console.log(`    ${typeColor}[${step.config.type}]${C.reset} ${step.name}`);
       if (step.description) {
         console.log(`      ${C.dim}${step.description}${C.reset}`);
@@ -269,6 +271,22 @@ function printPipelineStructure(pipeline: Pipeline) {
           if (p.domain) console.log(`          ${C.dim}Domain: ${p.domain}${C.reset}`);
           if (p.traits?.length) console.log(`          ${C.dim}Traits: ${p.traits.join(', ')}${C.reset}`);
         }
+      }
+
+      // Show script command
+      if (step.config.type === 'script') {
+        const config = step.config as ScriptStepConfig;
+        console.log(`      ${C.dim}Command: ${config.command || '(empty)'}${C.reset}`);
+        if (config.outputType && config.outputType !== 'string') {
+          console.log(`      ${C.dim}Output: ${config.outputType}${C.reset}`);
+        }
+      }
+
+      // Show condition config
+      if (step.config.type === 'condition') {
+        const config = step.config as ConditionStepConfig;
+        console.log(`      ${C.dim}Mode: ${config.mode}, Expression: "${config.expression}"${C.reset}`);
+        console.log(`      ${C.dim}If TRUE: ${config.trueAction}, If FALSE: ${config.falseAction}${C.reset}`);
       }
 
       // Show model for lightweight council steps (decisioning/execution)
@@ -510,7 +528,11 @@ async function main() {
       const allowedTools = invocation.allowedServerIds
         ? ['Edit', 'Write', 'Read', 'Bash', 'Glob', 'Grep', ...invocation.allowedServerIds.map(id => `mcp__${id}`)]
         : undefined;
+      // Use generous timeouts: workers get 30 min, Opus models get 20 min, others get 15 min.
+      // Complex deliberation phases (deciding, planning) with large context can take a long time.
       const isWorker = persona.preferredDeliberationRole === 'worker';
+      const isOpus = persona.model?.includes('opus');
+      const timeoutMs = isWorker ? 1_800_000 : isOpus ? 1_200_000 : 900_000;
       const result = await callLLM({
         systemPrompt: invocation.systemPrompt,
         userMessage: invocation.userMessage,
@@ -519,7 +541,7 @@ async function main() {
         skipTools: invocation.skipTools,
         conversationId: invocation.conversationId,
         allowedTools,
-        timeoutMs: isWorker ? 1_800_000 : undefined, // 30 min for workers
+        timeoutMs,
       });
       log(C.cyan, persona.name, `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);
       return { ...result, sessionId: result.sessionId };

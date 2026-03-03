@@ -7,10 +7,10 @@
 // Step & Pipeline Status
 // ============================================================================
 
-export type PipelineStepType = 'planning' | 'decisioning' | 'execution' | 'coding' | 'review-docs' | 'gate';
+export type PipelineStepType = 'planning' | 'decisioning' | 'execution' | 'coding' | 'review-docs' | 'enrichment' | 'gate' | 'script' | 'condition';
 
 /** What kind of data a step produces for downstream consumption */
-export type OutputType = 'string' | 'file' | 'directory';
+export type OutputType = 'string' | 'file' | 'directory' | 'json';
 
 export type PipelineStepStatus =
   | 'pending'
@@ -45,7 +45,7 @@ export interface StepArtifact {
     outputPath?: string;   // file path where output was saved (planning/coding steps)
     outputType?: OutputType; // what kind of data this artifact represents
     stepName?: string;     // human-readable name of the producing step
-    stepType?: string;     // 'planning' | 'coding' | 'review-docs' | 'decisioning' | 'execution' | 'gate'
+    stepType?: string;     // PipelineStepType value
   };
   createdAt: string;
 }
@@ -85,7 +85,7 @@ export interface PipelinePersona {
 // ============================================================================
 
 export interface CouncilStepConfig {
-  type: 'planning' | 'coding' | 'review-docs' | 'decisioning' | 'execution';
+  type: 'planning' | 'coding' | 'review-docs' | 'enrichment' | 'decisioning' | 'execution';
   councilSetup: {
     name: string;
     personas: PipelinePersona[];
@@ -127,11 +127,38 @@ export interface GateStepConfig {
   approvalPrompt: string;
 }
 
-export type StepConfig = CouncilStepConfig | LlmStepConfig | GateStepConfig;
+export interface ScriptStepConfig {
+  type: 'script';
+  /** Shell command to execute. Previous step output available as $KONDI_INPUT env var. */
+  command: string;
+  /** Template that renders previous step outputs into the $KONDI_INPUT env var */
+  inputTemplate: string;
+  /** What kind of data this step produces (default: 'string') */
+  outputType?: OutputType;
+}
 
-/** Helper: is this a council-based step type? All non-gate types are councils. */
+export type ConditionMode = 'contains' | 'regex' | 'equals';
+export type ConditionAction = 'continue' | 'skip_next_stage' | 'stop';
+
+export interface ConditionStepConfig {
+  type: 'condition';
+  /** The expression to match against (string literal, regex pattern, or exact match) */
+  expression: string;
+  /** How to evaluate the expression against input */
+  mode: ConditionMode;
+  /** Template that renders previous step outputs as input to evaluate */
+  inputTemplate: string;
+  /** Action when expression matches */
+  trueAction: ConditionAction;
+  /** Action when expression does not match */
+  falseAction: ConditionAction;
+}
+
+export type StepConfig = CouncilStepConfig | LlmStepConfig | GateStepConfig | ScriptStepConfig | ConditionStepConfig;
+
+/** Helper: is this a council-based step type? Excludes gate, script, and condition. */
 export function isCouncilType(type: PipelineStepType): boolean {
-  return type !== 'gate';
+  return type !== 'gate' && type !== 'script' && type !== 'condition';
 }
 
 /** Helper: is this a lightweight council (single-agent, 0-round)? */

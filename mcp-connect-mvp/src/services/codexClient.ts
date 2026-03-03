@@ -54,6 +54,32 @@ const CODEX_MODELS = [
 ];
 
 export class CodexClient {
+  private static readonly RATE_LIMIT_MAX_RETRIES = 5;
+  private static readonly RATE_LIMIT_BASE_DELAY_MS = 10_000;
+
+  /**
+   * Invoke Tauri codex_request with rate limit retry.
+   */
+  private async invokeWithRetry(body: string, bearerToken: string): Promise<string> {
+    for (let attempt = 0; attempt <= CodexClient.RATE_LIMIT_MAX_RETRIES; attempt++) {
+      try {
+        return await invoke<string>('codex_request', { body, bearerToken });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isTransient = /\b(429|529|rate.limit|overloaded|too many requests)\b/i.test(errMsg);
+
+        if (isTransient && attempt < CodexClient.RATE_LIMIT_MAX_RETRIES) {
+          const delayMs = CodexClient.RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt);
+          console.warn(`[Codex] Rate limited, retrying in ${Math.round(delayMs / 1000)}s (attempt ${attempt + 1}/${CodexClient.RATE_LIMIT_MAX_RETRIES})`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error('Unexpected: exhausted Codex retry loop');
+  }
+
   /**
    * Resolve the OAuth token from stored profiles.
    */
@@ -114,15 +140,15 @@ export class CodexClient {
     }
 
     try {
-      await invoke<string>('codex_request', {
-        body: JSON.stringify({
+      await this.invokeWithRetry(
+        JSON.stringify({
           model: 'gpt-5.2-codex',
           instructions: 'Reply with ok.',
           input: [{ type: 'message', role: 'user', content: 'hi' }],
           store: false,
         }),
-        bearerToken: auth.token,
-      });
+        auth.token,
+      );
       reportSuccess(auth.profileId);
       return { ok: true };
     } catch (err) {
@@ -210,10 +236,10 @@ export class CodexClient {
         }
 
         // Route through Rust backend to bypass CORS (chatgpt.com has no CORS headers)
-        const responseText = await invoke<string>('codex_request', {
-          body: JSON.stringify(body),
-          bearerToken: token,
-        });
+        const responseText = await this.invokeWithRetry(
+          JSON.stringify(body),
+          token,
+        );
 
         const data = JSON.parse(responseText);
         const outputItems: any[] = data.output || [];

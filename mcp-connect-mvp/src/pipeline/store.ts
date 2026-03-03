@@ -14,6 +14,8 @@ import type {
   LlmStepConfig,
 } from './types';
 import { migrateLlmConfig } from './types';
+import { councilDataStore } from '../council/storage-cleanup';
+import { deleteCouncilWithData } from '../council/store';
 
 const STORAGE_KEY = 'mcp-pipelines';
 
@@ -75,7 +77,7 @@ function migrateV2toV3(data: StorageData): StorageData {
 
 function loadFromStorage(): StorageData {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = councilDataStore.getItem(STORAGE_KEY);
     if (!raw) {
       return { version: 3, pipelines: [], lastUpdated: new Date().toISOString() };
     }
@@ -125,13 +127,9 @@ function resetStaleExecutionStates(): void {
 resetStaleExecutionStates();
 
 function saveToStorage(data: StorageData): void {
-  try {
-    data.lastUpdated = new Date().toISOString();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch (error) {
-    console.error('[PipelineStore] Failed to save to storage:', error);
-    throw new Error('Failed to save pipelines to storage');
-  }
+  data.lastUpdated = new Date().toISOString();
+  // In-memory store never throws on quota — localStorage is best-effort cache
+  councilDataStore.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
 // ============================================================================
@@ -448,9 +446,31 @@ export function advanceStage(pipelineId: string): Pipeline | null {
   });
 }
 
+/**
+ * Delete council deliberation data (ledger, context, decisions) for steps
+ * that are about to be reset.  Without this, the UI shows stale entries
+ * from the previous run mixed with the new one.
+ */
+function purgeCouncilsForSteps(steps: PipelineStep[]): void {
+  for (const step of steps) {
+    const councilId = step.artifact?.metadata?.councilId;
+    if (councilId) {
+      try {
+        deleteCouncilWithData(councilId);
+      } catch (err) {
+        console.warn('[PipelineStore] Failed to delete council data:', councilId, err);
+      }
+    }
+  }
+}
+
 export function resetExecution(pipelineId: string): Pipeline | null {
   const pipeline = getPipeline(pipelineId);
   if (!pipeline) return null;
+
+  // Delete all council deliberation data before resetting steps
+  const allSteps = pipeline.stages.flatMap((s) => s.steps);
+  purgeCouncilsForSteps(allSteps);
 
   const stages = pipeline.stages.map((stage) => ({
     ...stage,
@@ -494,6 +514,17 @@ export function resetStepAndAfter(pipelineId: string, stepId: string): Pipeline 
     if (targetStageIndex >= 0) break;
   }
   if (targetStageIndex < 0) return null;
+
+  // Delete council deliberation data for steps being reset
+  const stepsToReset: PipelineStep[] = [];
+  for (let si = targetStageIndex; si < pipeline.stages.length; si++) {
+    for (let sti = 0; sti < pipeline.stages[si].steps.length; sti++) {
+      if (si > targetStageIndex || sti >= targetStepIndex) {
+        stepsToReset.push(pipeline.stages[si].steps[sti]);
+      }
+    }
+  }
+  purgeCouncilsForSteps(stepsToReset);
 
   const stages = pipeline.stages.map((stage, si) => {
     if (si < targetStageIndex) return stage; // earlier stages untouched

@@ -88,6 +88,7 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
           systemPrompt: invocation.systemPrompt,
           userMessage: invocation.userMessage,
           skipTools: invocation.skipTools,
+          allowedTools: invocation.allowedTools,
           temperature: persona.temperature,
           availableTools: filteredTools,
           timeoutMs: isWorker ? 1_800_000 : undefined, // 30 min for workers
@@ -220,7 +221,8 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
   const handleRetryStep = (stepId: string) => {
     if (!currentPipelineId) return;
 
-    // Reset the target step and all subsequent steps
+    // resetStepAndAfter now deletes council deliberation data (ledger,
+    // context, decisions) for every step being reset, so the UI starts clean.
     pipelineStore.resetStepAndAfter(currentPipelineId, stepId);
 
     // Clear previous selection state

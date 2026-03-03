@@ -113,7 +113,8 @@ export class LLMAdapter implements LLMProvider {
       params.model || 'claude-sonnet-4-5-20250929',
       undefined,
       params.systemPrompt,
-      params.workingDirectory
+      params.workingDirectory,
+      params.provider,
     );
 
     const latencyMs = Date.now() - startTime;
@@ -148,6 +149,7 @@ export class LLMAdapter implements LLMProvider {
       params.model || 'gpt-4o',
       params.systemPrompt,
       params.workingDirectory,
+      params.provider,
     );
 
     const latencyMs = Date.now() - startTime;
@@ -215,7 +217,8 @@ export class LLMAdapter implements LLMProvider {
       availableTools,
       params.model,
       params.systemPrompt,
-      params.workingDirectory
+      params.workingDirectory,
+      params.provider,
     );
 
     const latencyMs = Date.now() - startTime;
@@ -249,7 +252,8 @@ export class LLMAdapter implements LLMProvider {
       availableTools,
       params.model || 'models/gemini-2.5-flash',
       params.systemPrompt,
-      params.workingDirectory
+      params.workingDirectory,
+      params.provider,
     );
 
     const latencyMs = Date.now() - startTime;

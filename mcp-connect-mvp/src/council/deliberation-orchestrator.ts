@@ -303,6 +303,25 @@ export class DeliberationOrchestrator {
         }
       } catch (error) {
         const errMsg = (error as Error).message || String(error);
+        const isRateLimit = /\b(429|rate.limit|too many requests)\b/i.test(errMsg);
+
+        if (isRateLimit) {
+          // Rate limit during deliberation round — wait and retry this iteration
+          const delayMs = 120_000; // 2 minutes
+          console.warn(
+            `[Orchestrator] Rate limit during ${phase}, waiting ${Math.round(delayMs / 1000)}s before retrying...`
+          );
+          this.createEntry(
+            councilId, 'manager', this.getManager(council).id,
+            'error', phase || 'failed',
+            `Rate limited during ${phase} — waiting ${Math.round(delayMs / 1000)}s before retrying...`,
+            0, 0, undefined, council.deliberationState?.currentRound
+          );
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          loopGuard--; // don't count this as a loop iteration
+          continue; // retry the same phase
+        }
+
         console.error(`[Orchestrator] Error during phase ${phase}:`, errMsg);
 
         // Record the error as a ledger entry — attribute to the phase's active role
@@ -328,7 +347,14 @@ export class DeliberationOrchestrator {
       }
     }
 
-    // Phase 3: Decision + Plan + Directive
+    // Phase 3: Decision + Plan + Directive + Execution
+    // Wrapped with phase-level rate-limit retry: if a phase fails due to
+    // rate limiting (after invokeAgentSafe's own 5 retries are exhausted),
+    // we wait and retry from the current phase instead of failing the council.
+    const PHASE_RETRY_MAX = 3;
+    const PHASE_RETRY_BASE_MS = 120_000; // 2 minutes
+
+    for (let phaseAttempt = 0; phaseAttempt <= PHASE_RETRY_MAX; phaseAttempt++) {
     try {
       council = councilStore.get(councilId)!;
       let phase = council.deliberationState?.currentPhase;
@@ -421,12 +447,34 @@ export class DeliberationOrchestrator {
           break;
       }
     }
+
+    // Success — break out of the phase-level retry loop
+    break;
+
     } catch (error) {
       const errMsg = (error as Error).message || String(error);
-      console.error(`[Orchestrator] Error during post-round phase:`, errMsg);
+      const isRateLimit = /\b(429|rate.limit|too many requests)\b/i.test(errMsg);
 
       council = councilStore.get(councilId)!;
       const errPhase = council.deliberationState?.currentPhase;
+
+      if (isRateLimit && phaseAttempt < PHASE_RETRY_MAX) {
+        const delayMs = PHASE_RETRY_BASE_MS * Math.pow(1.5, phaseAttempt);
+        console.warn(
+          `[Orchestrator] Rate limit during ${errPhase}, retrying phase in ${Math.round(delayMs / 1000)}s ` +
+          `(phase attempt ${phaseAttempt + 1}/${PHASE_RETRY_MAX})`
+        );
+        this.createEntry(
+          councilId, 'manager', this.getManager(council).id,
+          'error', errPhase || 'failed',
+          `Rate limited during ${errPhase} — waiting ${Math.round(delayMs / 1000)}s before retrying...`,
+          0, 0, undefined, council.deliberationState?.currentRound
+        );
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        continue; // retry from current phase
+      }
+
+      console.error(`[Orchestrator] Error during post-round phase:`, errMsg);
 
       // Record error in ledger — attribute to the phase's active role
       try {
@@ -450,6 +498,7 @@ export class DeliberationOrchestrator {
       this.transitionPhase(councilId, 'failed');
       throw error;
     }
+    } // end phase-level retry loop
 
     console.log('[Orchestrator] Auto-run finished');
   }
@@ -2149,16 +2198,40 @@ export class DeliberationOrchestrator {
       invocation = { ...invocation, workingDirectory: councilDir };
     }
 
-    try {
-      this.config.onAgentThinkingStart?.(persona);
-      const response = await this.config.invokeAgent(invocation, persona);
-      this.config.onAgentThinkingEnd?.(persona);
-      return response;
-    } catch (error) {
-      this.config.onAgentThinkingEnd?.(persona);
-      this.config.onError?.(error as Error, context);
-      throw error;
+    // Retry transient errors (rate limits, overload) with exponential backoff.
+    // This covers ALL roles (manager, consultant, worker) uniformly.
+    const MAX_TRANSIENT_RETRIES = 5;
+    const BASE_DELAY_MS = 15_000; // 15 seconds
+
+    for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
+      try {
+        this.config.onAgentThinkingStart?.(persona);
+        const response = await this.config.invokeAgent(invocation, persona);
+        this.config.onAgentThinkingEnd?.(persona);
+        return response;
+      } catch (error) {
+        this.config.onAgentThinkingEnd?.(persona);
+
+        const errMsg = error instanceof Error ? error.message : String(error);
+        const isTransient = /\b(429|529|rate.limit|overloaded|too many requests)\b/i.test(errMsg);
+
+        if (isTransient && attempt < MAX_TRANSIENT_RETRIES) {
+          const delayMs = BASE_DELAY_MS * Math.pow(2, attempt);
+          console.warn(
+            `[Orchestrator] Transient error for ${persona.name} (${context}), ` +
+            `retrying in ${Math.round(delayMs / 1000)}s (attempt ${attempt + 1}/${MAX_TRANSIENT_RETRIES}): ${errMsg}`
+          );
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          continue;
+        }
+
+        this.config.onError?.(error as Error, context);
+        throw error;
+      }
     }
+
+    // Should not reach here
+    throw new Error('Unexpected: exhausted transient retry loop');
   }
 
   /**
@@ -2447,8 +2520,13 @@ export class DeliberationOrchestrator {
           return null;
         }
 
-        // Brief delay before retry (escalating backoff)
-        await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+        // Delay before retry — longer backoff for rate limit errors
+        const errMsg = (error as Error).message || '';
+        const isRateLimit = /\b(429|529|rate.limit|overloaded|too many requests)\b/i.test(errMsg);
+        const delayMs = isRateLimit
+          ? 15_000 * Math.pow(2, attempt)  // 15s, 30s, 60s for rate limits
+          : 2_000 * (attempt + 1);          // 2s, 4s, 6s for other errors
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
     }
 

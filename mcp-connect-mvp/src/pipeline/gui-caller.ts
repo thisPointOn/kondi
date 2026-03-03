@@ -117,6 +117,7 @@ async function callAnthropicApi(opts: CallLLMOptions): Promise<CallerResult> {
     undefined,
     opts.systemPrompt,
     opts.workingDirectory,
+    opts.provider,
   );
 
   const latencyMs = Date.now() - start;
@@ -154,6 +155,7 @@ async function callOpenAiApi(opts: CallLLMOptions): Promise<CallerResult> {
     opts.model || 'gpt-4o',
     opts.systemPrompt,
     opts.workingDirectory,
+    opts.provider,
   );
 
   const latencyMs = Date.now() - start;
@@ -217,7 +219,7 @@ async function callCompatibleApi(
   ];
   const tools = opts.skipTools ? new Map() : applyAllowedToolsFilter(opts.availableTools || new Map(), opts.allowedTools);
 
-  const result = await client.chat(messages, tools, opts.model, opts.systemPrompt, opts.workingDirectory);
+  const result = await client.chat(messages, tools, opts.model, opts.systemPrompt, opts.workingDirectory, opts.provider);
 
   const latencyMs = Date.now() - start;
   const inputTokens = Math.ceil((opts.systemPrompt.length + opts.userMessage.length) / 4);
@@ -236,7 +238,7 @@ async function callGeminiApi(opts: CallLLMOptions): Promise<CallerResult> {
   ];
   const tools = opts.skipTools ? new Map() : applyAllowedToolsFilter(opts.availableTools || new Map(), opts.allowedTools);
 
-  const result = await geminiClient.chat(messages, tools, opts.model || 'models/gemini-2.5-flash', opts.systemPrompt, opts.workingDirectory);
+  const result = await geminiClient.chat(messages, tools, opts.model || 'models/gemini-2.5-flash', opts.systemPrompt, opts.workingDirectory, opts.provider);
 
   const latencyMs = Date.now() - start;
   const inputTokens = Math.ceil((opts.systemPrompt.length + opts.userMessage.length) / 4);

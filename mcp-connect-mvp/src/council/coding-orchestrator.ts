@@ -106,6 +106,8 @@ export class CodingOrchestrator {
   private config: CodingOrchestratorConfig;
   /** Active council ID for the current workflow */
   private activeCouncilId: string | null = null;
+  /** Phase-level rate limit retry count (reset per workflow start) */
+  private phaseRetryCount = 0;
 
   constructor(config: CodingOrchestratorConfig) {
     this.config = config;
@@ -125,6 +127,7 @@ export class CodingOrchestrator {
     const maxDebugCycles = council.deliberation?.maxDebugCycles ?? 5;
 
     let snapshotSha: string | null = null;
+    this.phaseRetryCount = 0;
 
     const warnings: string[] = [];
 
@@ -292,10 +295,32 @@ export class CodingOrchestrator {
 
     } catch (error) {
       const errMsg = (error as Error).message || String(error);
-      console.error('[CodingOrchestrator] Workflow error:', errMsg);
+      const isRateLimit = /\b(429|rate.limit|too many requests)\b/i.test(errMsg);
 
       council = councilStore.get(council.id)!;
       const currentPhase = council.deliberationState?.currentPhase;
+
+      // Rate limit: wait and retry from the current phase instead of failing
+      if (isRateLimit && this.phaseRetryCount < 3) {
+        this.phaseRetryCount++;
+        const delayMs = 120_000 * Math.pow(1.5, this.phaseRetryCount - 1);
+        console.warn(
+          `[CodingOrchestrator] Rate limit during ${currentPhase}, retrying in ${Math.round(delayMs / 1000)}s ` +
+          `(attempt ${this.phaseRetryCount}/3)`
+        );
+        this.createEntry(
+          council.id, 'manager', this.getManager(council).id, 'error',
+          currentPhase || 'created',
+          `Rate limited during ${currentPhase} — waiting ${Math.round(delayMs / 1000)}s before retrying...`,
+          0, 0
+        );
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        // Re-run from current phase — the workflow reads state from the store
+        // so it will resume from where it left off
+        return this.runCodingWorkflow(councilStore.get(council.id)!, spec);
+      }
+
+      console.error('[CodingOrchestrator] Workflow error:', errMsg);
 
       // Attribute error to the phase's active role
       try {
@@ -898,16 +923,46 @@ export class CodingOrchestrator {
       };
     }
 
-    try {
-      this.config.onAgentThinkingStart?.(persona);
-      const response = await this.config.invokeAgent(invocation, persona);
-      this.config.onAgentThinkingEnd?.(persona);
-      return response;
-    } catch (error) {
-      this.config.onAgentThinkingEnd?.(persona);
-      this.config.onError?.(error as Error, context);
-      throw error;
+    // Thread working directory from council so each invocation uses its own dir
+    const councilDir = council?.deliberation?.workingDirectory;
+    if (councilDir) {
+      invocation = { ...invocation, workingDirectory: councilDir };
     }
+
+    // Retry transient errors (rate limits, overload) with exponential backoff.
+    // This covers ALL roles (manager, worker, reviewer) uniformly.
+    const MAX_TRANSIENT_RETRIES = 5;
+    const BASE_DELAY_MS = 15_000; // 15 seconds
+
+    for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
+      try {
+        this.config.onAgentThinkingStart?.(persona);
+        const response = await this.config.invokeAgent(invocation, persona);
+        this.config.onAgentThinkingEnd?.(persona);
+        return response;
+      } catch (error) {
+        this.config.onAgentThinkingEnd?.(persona);
+
+        const errMsg = error instanceof Error ? error.message : String(error);
+        const isTransient = /\b(429|529|rate.limit|overloaded|too many requests)\b/i.test(errMsg);
+
+        if (isTransient && attempt < MAX_TRANSIENT_RETRIES) {
+          const delayMs = BASE_DELAY_MS * Math.pow(2, attempt);
+          console.warn(
+            `[CodingOrchestrator] Transient error for ${persona.name} (${context}), ` +
+            `retrying in ${Math.round(delayMs / 1000)}s (attempt ${attempt + 1}/${MAX_TRANSIENT_RETRIES}): ${errMsg}`
+          );
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          continue;
+        }
+
+        this.config.onError?.(error as Error, context);
+        throw error;
+      }
+    }
+
+    // Should not reach here
+    throw new Error('Unexpected: exhausted transient retry loop');
   }
 
   private createEntry(

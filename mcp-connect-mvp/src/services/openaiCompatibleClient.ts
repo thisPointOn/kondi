@@ -101,6 +101,8 @@ export class OpenAICompatibleClient {
         apiKey: key,
         baseURL: this.config.baseURL,
         dangerouslyAllowBrowser: true,
+        maxRetries: 5,
+        timeout: 120_000,
       });
       this.clientKey = key;
     }

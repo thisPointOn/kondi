@@ -15,6 +15,12 @@ export function upsertProfile(
   const store = getStore();
   const existing = store.profiles[id];
 
+  // Reset failure state when credential actually changes (fresh token import, OAuth refresh, etc.)
+  const credentialChanged = existing && getCredentialKey(existing.credential) !== getCredentialKey(credential);
+  if (credentialChanged) {
+    console.log('[AuthProfiles] Credential changed for', id, '— resetting failure state');
+  }
+
   const profile: AuthProfile = {
     id,
     provider,
@@ -22,7 +28,8 @@ export function upsertProfile(
     label,
     createdAt: existing?.createdAt || Date.now(),
     lastUsed: existing?.lastUsed,
-    failCount: existing?.failCount || 0,
+    failCount: credentialChanged ? 0 : (existing?.failCount || 0),
+    cooldownUntil: credentialChanged ? undefined : existing?.cooldownUntil,
     successCount: existing?.successCount || 0,
   };
 

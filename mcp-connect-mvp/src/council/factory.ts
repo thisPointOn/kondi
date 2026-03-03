@@ -37,7 +37,7 @@ export interface CouncilSetup {
   saveDeliberationMode?: 'full' | 'abbreviated';
   maxWordsPerResponse?: number;
   bootstrapContext?: boolean;         // Default: true when workingDirectory is set
-  stepType?: 'planning' | 'coding' | 'review-docs' | 'decisioning' | 'execution';
+  stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment' | 'decisioning' | 'execution';
   testCommand?: string;
   maxDebugCycles?: number;
   maxReviewCycles?: number;

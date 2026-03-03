@@ -66,6 +66,8 @@ export class OpenAIClient {
       this.client = new OpenAI({
         apiKey: key,
         dangerouslyAllowBrowser: true,
+        maxRetries: 5,
+        timeout: 120_000,
       });
       this.clientKey = key;
     }

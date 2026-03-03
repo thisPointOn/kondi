@@ -27,6 +27,13 @@ export async function importCliCredentials(): Promise<AuthProfile | null> {
       return null;
     }
 
+    // Normalize expiresAt: if it looks like seconds (< 1e12), convert to milliseconds
+    let expiresAt = creds.expiresAt || 0;
+    if (expiresAt > 0 && expiresAt < 1e12) {
+      console.log('[CliCredentials] Converting expiresAt from seconds to milliseconds:', expiresAt);
+      expiresAt = expiresAt * 1000;
+    }
+
     const profile = upsertProfile(
       PROFILE_IDS.anthropicCli,
       'anthropic',
@@ -34,12 +41,12 @@ export async function importCliCredentials(): Promise<AuthProfile | null> {
         type: 'oauth',
         accessToken: creds.accessToken,
         refreshToken: creds.refreshToken || '',
-        expiresAt: creds.expiresAt || 0,
+        expiresAt,
       },
       'CLI Import',
     );
 
-    console.log('[CliCredentials] Imported Claude CLI credentials');
+    console.log('[CliCredentials] Imported Claude CLI credentials, expiresAt:', new Date(expiresAt).toISOString());
     return profile;
   } catch (err) {
     // Not an error — CLI credentials may not exist

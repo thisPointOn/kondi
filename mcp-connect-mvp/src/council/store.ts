@@ -19,6 +19,7 @@ import type {
 import { validateCouncil } from './validation';
 import { deleteLedger } from './ledger-store';
 import { deleteAllArtifacts } from './context-store';
+import { councilDataStore } from './storage-cleanup';
 
 const STORAGE_KEY = 'mcp-councils';
 const STORAGE_VERSION = 2;
@@ -35,7 +36,7 @@ interface StorageData {
 
 function loadFromStorage(): StorageData {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = councilDataStore.getItem(STORAGE_KEY);
     if (!raw) {
       return { version: STORAGE_VERSION, councils: [], lastUpdated: new Date().toISOString() };
     }
@@ -74,66 +75,11 @@ function migrateCouncils(councils: Council[], fromVersion: number): Council[] {
   return migrated;
 }
 
-/**
- * Free localStorage space by removing ledger/context data from resolved councils.
- */
-function freeStorageForCouncils(): boolean {
-  console.warn('[CouncilStore] localStorage quota exceeded — freeing space...');
-
-  const keysToRemove: string[] = [];
-  const prefixes = [
-    'ledger-chunk-', 'ledger-index-',
-    'context-history-', 'context-patches-', 'outputs-',
-    'context-', 'decision-', 'plan-', 'directive-',
-  ];
-
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (!key) continue;
-    for (const prefix of prefixes) {
-      if (key.startsWith(prefix)) {
-        keysToRemove.push(key);
-        break;
-      }
-    }
-  }
-
-  if (keysToRemove.length === 0) return false;
-
-  // Remove largest items first (ledger chunks tend to be biggest)
-  const sorted = keysToRemove.sort((a, b) => {
-    const sizeA = localStorage.getItem(a)?.length || 0;
-    const sizeB = localStorage.getItem(b)?.length || 0;
-    return sizeB - sizeA;
-  });
-
-  // Remove up to half of the items to free substantial space
-  const removeCount = Math.max(1, Math.floor(sorted.length / 2));
-  console.log(`[CouncilStore] Removing ${removeCount} old artifact keys to free space`);
-  for (let i = 0; i < removeCount; i++) {
-    try { localStorage.removeItem(sorted[i]); } catch { /* ignore */ }
-  }
-  return true;
-}
-
 function saveToStorage(data: StorageData): void {
   data.lastUpdated = new Date().toISOString();
   const json = JSON.stringify(data);
-  try {
-    localStorage.setItem(STORAGE_KEY, json);
-    console.log('[CouncilStore] Saved', data.councils.length, 'councils');
-  } catch (error) {
-    // On quota error, free space and retry
-    if (freeStorageForCouncils()) {
-      try {
-        localStorage.setItem(STORAGE_KEY, json);
-        console.log('[CouncilStore] Saved after freeing space:', data.councils.length, 'councils');
-        return;
-      } catch { /* fall through */ }
-    }
-    console.error('[CouncilStore] Failed to save to storage:', error);
-    throw new Error('Failed to save councils to storage');
-  }
+  councilDataStore.setItem(STORAGE_KEY, json);
+  console.log('[CouncilStore] Saved', data.councils.length, 'councils');
 }
 
 // ============================================================================

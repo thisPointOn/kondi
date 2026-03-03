@@ -58,6 +58,9 @@ class AnthropicClient {
     return 'none';
   }
 
+  private static readonly RATE_LIMIT_MAX_RETRIES = 5;
+  private static readonly RATE_LIMIT_BASE_DELAY_MS = 10_000; // 10 seconds
+
   private async request(
     path: string,
     method: 'GET' | 'POST',
@@ -85,30 +88,48 @@ class AnthropicClient {
     // Determine beta headers based on token type
     const betas = getBetasForToken(token);
 
-    try {
-      const text = await invoke<string>('anthropic_request', {
-        url,
-        method,
-        body: payload,
-        apiKey: token,
-        betas,
-      });
+    for (let attempt = 0; attempt <= AnthropicClient.RATE_LIMIT_MAX_RETRIES; attempt++) {
+      try {
+        const text = await invoke<string>('anthropic_request', {
+          url,
+          method,
+          body: payload,
+          apiKey: token,
+          betas,
+        });
 
-      // Report success
-      if (profileId) reportSuccess(profileId);
+        // Report success
+        if (profileId) reportSuccess(profileId);
 
-      return JSON.parse(text);
-    } catch (err) {
-      // Parse HTTP status from error message (format: "HTTP 401: ...")
-      const errMsg = err instanceof Error ? err.message : String(err);
-      const statusMatch = errMsg.match(/^HTTP (\d+):/);
-      const httpStatus = statusMatch ? parseInt(statusMatch[1]) : undefined;
+        return JSON.parse(text);
+      } catch (err) {
+        // Parse HTTP status from error message (format: "HTTP 401: ...")
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const statusMatch = errMsg.match(/^HTTP (\d+):/);
+        const httpStatus = statusMatch ? parseInt(statusMatch[1]) : undefined;
 
-      // Report failure for rotation
-      if (profileId) reportFailure(profileId, httpStatus);
+        // Retry on 429 (rate limit) and 529 (overloaded) with exponential backoff
+        if ((httpStatus === 429 || httpStatus === 529) && attempt < AnthropicClient.RATE_LIMIT_MAX_RETRIES) {
+          // Parse retry-after from error body if available
+          const retryAfterMatch = errMsg.match(/retry.after[:\s"]*(\d+)/i);
+          const retryAfterSec = retryAfterMatch ? parseInt(retryAfterMatch[1]) : 0;
+          const backoffMs = Math.max(
+            retryAfterSec * 1000,
+            AnthropicClient.RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt),
+          );
+          console.warn(`[Anthropic] Rate limited (${httpStatus}), retrying in ${Math.round(backoffMs / 1000)}s (attempt ${attempt + 1}/${AnthropicClient.RATE_LIMIT_MAX_RETRIES})...`);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+          continue;
+        }
 
-      throw err;
+        // Non-retryable error — report failure and throw
+        if (profileId) reportFailure(profileId, httpStatus);
+        throw err;
+      }
     }
+
+    // Should not reach here, but satisfy TypeScript
+    throw new Error('Unexpected: exhausted retry loop');
   }
 
   async validateKey(key: string): Promise<{ ok: boolean; error?: string }> {

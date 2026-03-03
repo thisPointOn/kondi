@@ -15,6 +15,7 @@ import {
   resolveApiKey,
   importCliCredentials,
   refreshExpiring,
+  PROFILE_IDS,
 } from './auth-profiles';
 import type { MCPServer } from '../types/mcp';
 
@@ -215,7 +216,8 @@ class StartupValidator {
   private async testAnthropicAuth(label: string): Promise<ValidationResult> {
     try {
       console.log(`[StartupValidator] Testing ${label} auth...`);
-      const resolved = await resolveApiKey('anthropic');
+      // Pin to CLI profile — never fall back to API key when testing subscription
+      const resolved = await resolveApiKey('anthropic', PROFILE_IDS.anthropicCli);
       if (!resolved) {
         return {
           provider: label,

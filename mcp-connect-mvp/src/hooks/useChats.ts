@@ -20,6 +20,7 @@ export interface ChatModelPin {
 interface UseChatsParams {
   setCurrentView: (view: AppView) => void;
   provider: 'claude' | 'chatgpt';
+  selectedProviderId: string;
   openaiKey: string;
   anthropicKey: string;
   openaiModel: string;
@@ -30,6 +31,7 @@ interface UseChatsParams {
 export function useChats({
   setCurrentView,
   provider,
+  selectedProviderId,
   openaiKey,
   anthropicKey,
   openaiModel,
@@ -345,13 +347,13 @@ export function useChats({
     try {
       let assistantMessage;
       if (provider === 'chatgpt' && openaiKey) {
-        const res = await openaiClient.chat([userMessage], available, openaiModel);
+        const res = await openaiClient.chat([userMessage], available, openaiModel, undefined, undefined, selectedProviderId);
         assistantMessage = { ...res.message, timestamp: new Date() };
       } else if (anthropicKey) {
-        const res = await anthropicClient.chat([userMessage], available, anthropicModel);
+        const res = await anthropicClient.chat([userMessage], available, anthropicModel, undefined, undefined, undefined, selectedProviderId);
         assistantMessage = { ...res.message, timestamp: new Date() };
       } else if (openaiKey) {
-        const res = await openaiClient.chat([userMessage], available, openaiModel);
+        const res = await openaiClient.chat([userMessage], available, openaiModel, undefined, undefined, selectedProviderId);
         assistantMessage = { ...res.message, timestamp: new Date() };
       } else {
         throw new Error('No LLM provider configured. Add credentials in LLM Providers settings.');

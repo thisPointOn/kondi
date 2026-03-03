@@ -24,7 +24,10 @@ function getStepIcon(type: StepConfig['type']): string {
     case 'execution': return '\uD83E\uDD16';
     case 'coding': return '\uD83D\uDCBB';
     case 'review-docs': return '\uD83D\uDCDD';
+    case 'enrichment': return '\uD83D\uDCA1';
     case 'gate': return '\uD83D\uDEA7';
+    case 'script': return '\u26A1';
+    case 'condition': return '\uD83D\uDD00';
     default: return '\u2753';
   }
 }
@@ -42,6 +45,14 @@ function getStepSummary(step: PipelineStep): string {
   }
   if (step.config.type === 'gate') {
     return 'Approval checkpoint';
+  }
+  if (step.config.type === 'script') {
+    const cmd = (step.config as { command?: string }).command || '';
+    return cmd ? cmd.slice(0, 40) + (cmd.length > 40 ? '...' : '') : 'No command';
+  }
+  if (step.config.type === 'condition') {
+    const cfg = step.config as { mode?: string; expression?: string };
+    return cfg.expression ? `${cfg.mode}: ${cfg.expression.slice(0, 30)}` : 'No expression';
   }
   return '';
 }

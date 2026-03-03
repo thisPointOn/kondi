@@ -63,6 +63,32 @@ interface GeminiResponse {
 }
 
 class GeminiClient {
+  private static readonly RATE_LIMIT_MAX_RETRIES = 5;
+  private static readonly RATE_LIMIT_BASE_DELAY_MS = 10_000;
+
+  /**
+   * Invoke Tauri gemini_request with rate limit retry.
+   */
+  private async invokeWithRetry(path: string, method: string, body: string, accessToken: string): Promise<string> {
+    for (let attempt = 0; attempt <= GeminiClient.RATE_LIMIT_MAX_RETRIES; attempt++) {
+      try {
+        return await invoke<string>('gemini_request', { path, method, body, accessToken });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isTransient = /\b(429|529|rate.limit|overloaded|too many requests|RESOURCE_EXHAUSTED)\b/i.test(errMsg);
+
+        if (isTransient && attempt < GeminiClient.RATE_LIMIT_MAX_RETRIES) {
+          const delayMs = GeminiClient.RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt);
+          console.warn(`[Gemini] Rate limited, retrying in ${Math.round(delayMs / 1000)}s (attempt ${attempt + 1}/${GeminiClient.RATE_LIMIT_MAX_RETRIES})`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error('Unexpected: exhausted Gemini retry loop');
+  }
+
   getAuthMethod(): 'oauth' | 'none' {
     const resolved = resolveApiKeySync('google');
     return resolved ? 'oauth' : 'none';
@@ -99,12 +125,12 @@ class GeminiClient {
         },
       });
 
-      const response = await invoke<string>('gemini_request', {
-        path: '/v1internal:streamGenerateContent?alt=sse',
-        method: 'POST',
+      const response = await this.invokeWithRetry(
+        '/v1internal:streamGenerateContent?alt=sse',
+        'POST',
         body,
-        accessToken: resolved.apiKey,
-      });
+        resolved.apiKey,
+      );
 
       // If we got a response without error, it's valid
       return { ok: true };
@@ -212,12 +238,12 @@ class GeminiClient {
           }];
         }
 
-        const responseText = await invoke<string>('gemini_request', {
-          path: '/v1internal:streamGenerateContent?alt=sse',
-          method: 'POST',
-          body: JSON.stringify(requestBody),
-          accessToken: resolved.apiKey,
-        });
+        const responseText = await this.invokeWithRetry(
+          '/v1internal:streamGenerateContent?alt=sse',
+          'POST',
+          JSON.stringify(requestBody),
+          resolved.apiKey,
+        );
 
         // Parse SSE response — collect all data: lines
         const parsed = this.parseSSEResponse(responseText);

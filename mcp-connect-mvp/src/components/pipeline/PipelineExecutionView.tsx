@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import type { Pipeline, PipelineStep } from '../../pipeline/types';
+import { isCouncilType } from '../../pipeline/types';
 import type { Council, Persona } from '../../council/types';
 import { pipelineStore } from '../../pipeline/store';
 import DeliberationView from '../council/DeliberationView';
@@ -44,7 +45,10 @@ function getStepIcon(type: string): string {
     case 'execution': return '\uD83E\uDD16';
     case 'coding': return '\uD83D\uDCBB';
     case 'review-docs': return '\uD83D\uDCDD';
+    case 'enrichment': return '\uD83D\uDCA1';
     case 'gate': return '\uD83D\uDEA7';
+    case 'script': return '\u26A1';
+    case 'condition': return '\uD83D\uDD00';
     default: return '\u2753';
   }
 }
@@ -127,7 +131,7 @@ export default function PipelineExecutionView({
             if (step.status === 'running' || step.status === 'waiting_approval') {
               // Any step with a councilId in artifact (or currently running non-gate) has a council
               const councilId = step.artifact?.metadata?.councilId
-                || (step.status === 'running' && step.config.type !== 'gate' ? activeCouncilIdRef.current : null);
+                || (step.status === 'running' && isCouncilType(step.config.type) ? activeCouncilIdRef.current : null);
               if (councilId) {
                 setSelectedCouncilId(councilId);
               } else {
@@ -261,7 +265,7 @@ export default function PipelineExecutionView({
                           gateResolver={gateResolvers.get(step.id)}
                           activeCouncilId={activeCouncilId}
                           isActiveCouncil={
-                            !!(step.artifact?.metadata?.councilId || (step.status === 'running' && step.config.type !== 'gate' && activeCouncilId)) &&
+                            !!(step.artifact?.metadata?.councilId || (step.status === 'running' && isCouncilType(step.config.type) && activeCouncilId)) &&
                             ((step.artifact?.metadata?.councilId === displayCouncilId) ||
                               (step.status === 'running' && activeCouncilId === displayCouncilId))
                           }
@@ -350,7 +354,7 @@ function ExecutionStepCard({
   const statusColor = getStatusColor(step.status);
   // Any step with a councilId in its artifact (or currently running non-gate) has a council
   const councilId = step.artifact?.metadata?.councilId
-    || (step.status === 'running' && step.config.type !== 'gate' ? activeCouncilId : null)
+    || (step.status === 'running' && isCouncilType(step.config.type) ? activeCouncilId : null)
     || null;
 
   return (

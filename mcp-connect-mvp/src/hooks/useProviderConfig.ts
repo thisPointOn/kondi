@@ -17,6 +17,7 @@ import {
   importCliCredentials,
   refreshProfile,
   isExpired,
+  resetProvider,
   PROFILE_IDS,
 } from '../services/auth-profiles';
 
@@ -415,6 +416,10 @@ export function useProviderConfig() {
 
   const handleRefreshStatus = async () => {
     try {
+      // Reset failure state for all providers — user is explicitly refreshing
+      resetProvider('anthropic');
+      resetProvider('openai');
+
       // Re-import CLI credentials
       try {
         await importCliCredentials();
@@ -471,6 +476,9 @@ export function useProviderConfig() {
     console.log('[useProviderConfig] Starting OAuth login for:', providerId);
     try {
       if (providerId.startsWith('anthropic')) {
+        // Reset failure state — user is explicitly reconnecting
+        resetProvider('anthropic');
+
         // Step 1: Import CLI credentials from ~/.claude/.credentials.json
         let imported = await importCliCredentials();
 
@@ -497,7 +505,8 @@ export function useProviderConfig() {
               return true;
             }
             // Validation failed even though token isn't expired — fall through to refresh
-            console.log('[useProviderConfig] Token not expired but validation failed, trying refresh...');
+            const cliResult = report.llmProviders.find(r => r.provider === 'Anthropic CLI');
+            console.log('[useProviderConfig] Token not expired but validation failed:', cliResult?.details, '— trying refresh...');
           }
 
           // Step 3: Token is expired — try refresh

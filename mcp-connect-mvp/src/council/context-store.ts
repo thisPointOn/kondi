@@ -21,6 +21,7 @@ import type {
   OutputArtifact,
   DeliberationRole,
 } from './types';
+import { councilDataStore } from './storage-cleanup';
 
 // Storage key prefixes
 const CONTEXT_PREFIX = 'context-';
@@ -37,7 +38,7 @@ const OUTPUTS_PREFIX = 'outputs-';
 
 function loadJson<T>(key: string, defaultValue: T): T {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = councilDataStore.getItem(key);
     if (!raw) return defaultValue;
     return JSON.parse(raw) as T;
   } catch (error) {
@@ -46,97 +47,12 @@ function loadJson<T>(key: string, defaultValue: T): T {
   }
 }
 
-/**
- * Free localStorage space by removing data from old councils.
- * Targets ledger chunks first (largest items), then context history, patches, etc.
- * Preserves data for the council being actively saved (currentCouncilId).
- */
-function freeLocalStorageSpace(currentCouncilId?: string): boolean {
-  console.warn('[ContextStore] localStorage quota exceeded — freeing space...');
-
-  // Collect all council-related keys grouped by council ID
-  const councilKeys = new Map<string, string[]>();
-  const prefixes = [
-    'context-', 'context-history-', 'context-patches-',
-    'decision-', 'plan-', 'directive-', 'outputs-',
-    'ledger-index-', 'ledger-chunk-',
-  ];
-
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (!key) continue;
-
-    for (const prefix of prefixes) {
-      if (key.startsWith(prefix)) {
-        // Extract council ID from key (handle ledger-chunk-{councilId}-{n})
-        let councilId = key.slice(prefix.length);
-        if (prefix === 'ledger-chunk-') {
-          councilId = councilId.replace(/-\d+$/, '');
-        }
-        if (councilId === currentCouncilId) break; // skip active council
-
-        if (!councilKeys.has(councilId)) councilKeys.set(councilId, []);
-        councilKeys.get(councilId)!.push(key);
-        break;
-      }
-    }
-  }
-
-  if (councilKeys.size === 0) return false;
-
-  // Sort by key count descending (councils with more data first) and remove
-  // the oldest/biggest councils until we free enough space
-  let freedAny = false;
-  const sortedCouncils = Array.from(councilKeys.entries())
-    .sort((a, b) => b[1].length - a[1].length);
-
-  for (const [councilId, keys] of sortedCouncils) {
-    console.log(`[ContextStore] Removing ${keys.length} localStorage keys for old council ${councilId.slice(0, 8)}...`);
-    for (const key of keys) {
-      try { localStorage.removeItem(key); } catch { /* ignore */ }
-    }
-    freedAny = true;
-
-    // Try a test write to see if we have enough space now
-    try {
-      localStorage.setItem('__quota_test__', 'x'.repeat(10000));
-      localStorage.removeItem('__quota_test__');
-      return true; // enough space freed
-    } catch {
-      continue; // need to free more
-    }
-  }
-
-  return freedAny;
-}
-
 function saveJson<T>(key: string, value: T): void {
-  const data = JSON.stringify(value);
-  try {
-    localStorage.setItem(key, data);
-  } catch (error) {
-    // On quota error, try to free space and retry once
-    const councilId = key.replace(/^(context-history-|context-patches-|context-|decision-|plan-|directive-|outputs-)/, '');
-    if (freeLocalStorageSpace(councilId)) {
-      try {
-        localStorage.setItem(key, data);
-        console.log('[ContextStore] Saved after freeing space:', key);
-        return;
-      } catch (retryError) {
-        console.error('[ContextStore] Still failed after freeing space:', key, retryError);
-      }
-    }
-    console.error('[ContextStore] Failed to save:', key, error);
-    throw new Error(`Failed to save ${key}`);
-  }
+  councilDataStore.setItem(key, JSON.stringify(value));
 }
 
 function removeKey(key: string): void {
-  try {
-    localStorage.removeItem(key);
-  } catch (error) {
-    console.error('[ContextStore] Failed to remove:', key, error);
-  }
+  councilDataStore.removeItem(key);
 }
 
 // ============================================================================
