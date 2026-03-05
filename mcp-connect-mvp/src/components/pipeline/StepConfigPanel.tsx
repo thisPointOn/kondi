@@ -628,6 +628,7 @@ export default function StepConfigPanel({
             onChange={(e) => handleTypeChange(e.target.value as PipelineStepType)}
           >
             <option value="council">Council</option>
+            <option value="code_planning">Code Planning</option>
             <option value="analysis">Analysis</option>
             <option value="agent">Agent</option>
             <option value="coding">Coding</option>
