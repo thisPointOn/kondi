@@ -61,10 +61,14 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
 
   /**
    * Create a PipelineExecutor with all the standard callbacks wired up.
+   * @param background - If true, uses no-op UI callbacks so the run doesn't
+   *                     interfere with the foreground pipeline's state.
    */
-  const createExecutor = (): { executor: PipelineExecutor; platform: PlatformAdapter } => {
-    const resolverMap = new Map<string, (approved: boolean) => void>();
-    setGateResolvers(resolverMap);
+  const createExecutor = (background = false): { executor: PipelineExecutor; platform: PlatformAdapter } => {
+    if (!background) {
+      const resolverMap = new Map<string, (approved: boolean) => void>();
+      setGateResolvers(resolverMap);
+    }
 
     let platformWorkingDir = '';
     const tauriPlatform: PlatformAdapter = {
@@ -81,7 +85,6 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
         const filteredTools = invocation.skipTools
           ? undefined
           : filterToolsByServerIds(availableTools, invocation.allowedServerIds);
-        const isWorker = persona.preferredDeliberationRole === 'worker';
         const result = await callLLM({
           model: persona.model,
           provider: persona.provider,
@@ -91,17 +94,19 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
           allowedTools: invocation.allowedTools,
           temperature: persona.temperature,
           availableTools: filteredTools,
-          timeoutMs: isWorker ? 1_800_000 : undefined, // 30 min for workers
+          timeoutMs: invocation.timeoutMs, // set by invokeAgentSafe based on role
           workingDirectory: invocation.workingDirectory,
         });
         return result;
       },
+      getAvailableTools: () => availableTools,
       onStageStart: (idx) => console.log(`[Pipeline] Stage ${idx} started`),
       onStageComplete: (idx) => console.log(`[Pipeline] Stage ${idx} completed`),
       onStepStart: (stepId) => console.log(`[Pipeline] Step ${stepId} started`),
       onStepComplete: (stepId) => console.log(`[Pipeline] Step ${stepId} completed`),
       onStepError: (stepId, error) => console.error(`[Pipeline] Step ${stepId} failed:`, error),
-      onGateWaiting: (stepId, _prompt) => {
+      // Background runs auto-approve gates (no UI to interact with)
+      onGateWaiting: background ? (_stepId, _prompt) => Promise.resolve(true) : (stepId, _prompt) => {
         return new Promise<boolean>((resolve) => {
           setGateResolvers((prev) => {
             const next = new Map(prev);
@@ -110,16 +115,26 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
           });
         });
       },
-      onCouncilCreated: (stepId, councilId) => {
-        console.log(`[Pipeline] Council ${councilId} created for step ${stepId}`);
-        setActivePipelineCouncilId(councilId);
-      },
-      onAgentThinkingStart: (persona) => {
-        setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
-      },
-      onAgentThinkingEnd: (persona) => {
-        setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
-      },
+      // Background runs use no-op UI callbacks to avoid interfering with foreground
+      onCouncilCreated: background
+        ? (stepId, councilId) => console.log(`[Pipeline:BG] Council ${councilId} created for step ${stepId}`)
+        : (stepId, councilId) => {
+            console.log(`[Pipeline] Council ${councilId} created for step ${stepId}`);
+            setActivePipelineCouncilId(councilId);
+          },
+      onAgentThinkingStart: background
+        ? () => {}
+        : (persona: Persona, startedAt: number) => {
+            setThinkingPersonas(prev => [
+              ...prev.filter(p => p.id !== persona.id),
+              { ...persona, thinkingStartedAt: startedAt } as Persona & { thinkingStartedAt: number },
+            ]);
+          },
+      onAgentThinkingEnd: background
+        ? () => {}
+        : (persona) => {
+            setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+          },
     }, tauriPlatform);
 
     return { executor, platform: tauriPlatform };
@@ -174,13 +189,12 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
           },
         });
 
-        // Reset and run
+        // Reset and run — background=true so it doesn't interfere with foreground UI
         pipelineStore.resetExecution(id);
         pipelineStore.setPipelineStatus(id, 'ready');
-        const { executor } = createExecutor();
+        const { executor } = createExecutor(true);
 
-        setPipelineExecutor(executor);
-        // Don't switch to execution view for scheduled runs — run in background
+        // Don't set setPipelineExecutor or switch to execution view for scheduled runs
 
         executor.run(id).then(() => {
           console.log(`[Scheduler] Pipeline "${pipeline.name}" completed`);
@@ -188,14 +202,12 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
           pipelineStore.update(id, {
             settings: { ...pipelineStore.get(id)!.settings, workingDirectory: baseDir },
           });
-          setThinkingPersonas([]);
         }).catch((err) => {
           console.error(`[Scheduler] Pipeline "${pipeline.name}" failed:`, err);
           // Restore the original working directory
           pipelineStore.update(id, {
             settings: { ...pipelineStore.get(id)!.settings, workingDirectory: baseDir },
           });
-          setThinkingPersonas([]);
         });
       })
       .catch((err) => {

@@ -98,6 +98,8 @@ export interface AgentInvocation {
   allowedServerIds?: string[];
   /** Working directory override for local tool calls (bypasses singleton) */
   workingDirectory?: string;
+  /** Timeout in ms — set by invokeAgentSafe based on role/context defaults */
+  timeoutMs?: number;
 }
 
 export interface AgentResponse {
@@ -114,10 +116,12 @@ export interface OrchestratorConfig {
   onPhaseChange?: (from: DeliberationPhase, to: DeliberationPhase) => void;
   onEntryAdded?: (entry: LedgerEntry) => void;
   onError?: (error: Error, context: string) => void;
-  /** Called when a persona starts thinking */
-  onAgentThinkingStart?: (persona: Persona) => void;
+  /** Called when a persona starts thinking (startedAt = Date.now() timestamp) */
+  onAgentThinkingStart?: (persona: Persona, startedAt: number) => void;
   /** Called when a persona finishes thinking */
   onAgentThinkingEnd?: (persona: Persona) => void;
+  /** Called when an agent times out (before retry). Enables UI timeout warnings. */
+  onAgentTimeout?: (persona: Persona, context: string, elapsedMs: number) => void;
 }
 
 // ============================================================================
@@ -233,6 +237,16 @@ export class DeliberationOrchestrator {
     // Special path: 0 managers → direct execution (worker-only council)
     if (managerAssignments.length === 0) {
       console.log('[Orchestrator] No manager — running direct execution path');
+      await this.runDirectExecution(council, rawProblem);
+      return;
+    }
+
+    // Lightweight council types (agent/analysis): skip full deliberation,
+    // go straight to worker execution. The manager's system prompt is folded into
+    // the worker's context so its guidance isn't lost.
+    const stepType = council.deliberation?.stepType;
+    if (stepType === 'agent' || stepType === 'analysis') {
+      console.log(`[Orchestrator] Lightweight step type '${stepType}' — running direct execution path`);
       await this.runDirectExecution(council, rawProblem);
       return;
     }
@@ -517,6 +531,9 @@ export class DeliberationOrchestrator {
     // Transition to problem_framing
     this.transitionPhase(council.id, 'problem_framing');
 
+    // Show manager as thinking immediately (before bootstrap, which can be slow)
+    this.config.onAgentThinkingStart?.(manager, Date.now());
+
     // Bootstrap directory context if enabled
     let enrichedProblem = rawProblem;
     if (council.deliberation?.bootstrapContext && council.deliberation?.workingDirectory) {
@@ -527,12 +544,16 @@ export class DeliberationOrchestrator {
         }
       } catch (error) {
         console.warn('[Orchestrator] Directory context bootstrap failed:', error);
+        // Clear thinking on bootstrap failure before continuing
       }
     }
 
     // Build prompts per Section 9.1
     const systemPrompt = manager.predisposition.systemPrompt;
     const userMessage = buildManagerFramingPrompt(enrichedProblem);
+
+    // Note: onAgentThinkingStart was already called above (before bootstrap).
+    // invokeAgentSafe will call it again (idempotent) and onAgentThinkingEnd when done.
 
     // Invoke manager
     const response = await this.invokeAgentSafe(
@@ -1049,7 +1070,7 @@ export class DeliberationOrchestrator {
       const systemPrompt = consultant.predisposition.systemPrompt;
       const userMessage = buildConsultantFinalPositionPrompt(consultant, focusArea, contextContent);
 
-      this.config.onAgentThinkingStart?.(consultant);
+      this.config.onAgentThinkingStart?.(consultant, Date.now());
       const response = await this.invokeAgentSafe(
         { personaId: consultant.id, systemPrompt, userMessage },
         consultant,
@@ -1334,7 +1355,7 @@ export class DeliberationOrchestrator {
         consultant, focusArea, output.content, directive.content, expectedOutput
       );
 
-      this.config.onAgentThinkingStart?.(consultant);
+      this.config.onAgentThinkingStart?.(consultant, Date.now());
       const response = await this.invokeAgentSafe(
         { personaId: consultant.id, systemPrompt, userMessage },
         consultant,
@@ -2139,7 +2160,7 @@ export class DeliberationOrchestrator {
     if (workerToolPhases.includes(context)) {
       // Planning workers get limited tools (no Edit, Bash, Grep — prevents code writing)
       // Coding/other workers get full tools
-      if (stepType === 'planning') {
+      if (stepType === 'council') {
         invocation = { ...invocation, allowedTools: PLAN_TOOLS };
       } else {
         invocation = { ...invocation, allowedTools: FULL_TOOLS };
@@ -2198,14 +2219,41 @@ export class DeliberationOrchestrator {
       invocation = { ...invocation, workingDirectory: councilDir };
     }
 
+    // Apply role-based default timeouts if not already set
+    const DEFAULT_TIMEOUTS: Record<string, number> = {
+      // Worker contexts — 30 min
+      execution: 1_800_000,
+      revision: 1_800_000,
+      debug: 1_800_000,
+      direct_execution: 1_800_000,
+      // Manager contexts — 10 min
+      problem_framing: 600_000,
+      evaluation: 600_000,
+      manager_evaluation: 600_000,
+      decision: 600_000,
+      forced_decision: 600_000,
+      directive: 600_000,
+      plan: 600_000,
+      review: 600_000,
+      round_summary: 600_000,
+      // Consultant contexts — 10 min
+      independent_analysis: 600_000,
+      deliberation_response: 600_000,
+      final_position: 600_000,
+      consultant_review: 600_000,
+    };
+    invocation = { ...invocation, timeoutMs: invocation.timeoutMs ?? DEFAULT_TIMEOUTS[context] ?? 600_000 };
+
     // Retry transient errors (rate limits, overload) with exponential backoff.
     // This covers ALL roles (manager, consultant, worker) uniformly.
+    // Timeout errors get 1 retry (no backoff — the timeout itself was the wait).
     const MAX_TRANSIENT_RETRIES = 5;
     const BASE_DELAY_MS = 15_000; // 15 seconds
 
     for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
       try {
-        this.config.onAgentThinkingStart?.(persona);
+        const startedAt = Date.now();
+        this.config.onAgentThinkingStart?.(persona, startedAt);
         const response = await this.config.invokeAgent(invocation, persona);
         this.config.onAgentThinkingEnd?.(persona);
         return response;
@@ -2214,6 +2262,16 @@ export class DeliberationOrchestrator {
 
         const errMsg = error instanceof Error ? error.message : String(error);
         const isTransient = /\b(429|529|rate.limit|overloaded|too many requests)\b/i.test(errMsg);
+        const isTimeout = /\btimed?\s*out\b/i.test(errMsg);
+
+        // Timeout: retry once, then fail
+        if (isTimeout && attempt === 0) {
+          const elapsedMs = invocation.timeoutMs || 0;
+          console.warn(`[Orchestrator] ${persona.name} (${context}) timed out after ${Math.round(elapsedMs / 1000)}s, retrying once...`);
+          this.config.onAgentTimeout?.(persona, context, elapsedMs);
+          this.config.onError?.(new Error(`${persona.name} timed out — retrying`), context);
+          continue; // retry once
+        }
 
         if (isTransient && attempt < MAX_TRANSIENT_RETRIES) {
           const delayMs = BASE_DELAY_MS * Math.pow(2, attempt);

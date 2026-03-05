@@ -485,6 +485,13 @@
   font-size: 0.875rem;
 }
 
+.thinking-elapsed {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #999);
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+}
+
 .thinking-dots {
   display: flex;
   align-items: center;

@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { createOrchestrator, DeliberationOrchestrator } from '../council';
 import { ledgerStore } from '../council/ledger-store';
 import { callLLM } from '../pipeline/gui-caller';
-import { filterToolsByServerIds } from '../utils/filterTools';
+import { filterToolsByServerIds, verifyRequiredTools } from '../utils/filterTools';
 import type { Persona, Council } from '../council/types';
 import type { MCPTool } from '../types/mcp';
 
@@ -24,6 +24,7 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
       return new DeliberationOrchestrator({
         invokeAgent: async (invocation, persona) => {
           console.log('[Council] invokeAgent called', { personaName: persona.name, model: persona.model, skipTools: invocation.skipTools, allowedTools: invocation.allowedTools });
+          const mcpTools = invocation.skipTools ? undefined : filterToolsByServerIds(availableTools, invocation.allowedServerIds);
           const result = await callLLM({
             model: persona.model,
             provider: persona.provider,
@@ -32,7 +33,7 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
             temperature: persona.temperature,
             skipTools: invocation.skipTools,
             allowedTools: invocation.allowedTools,
-            availableTools: invocation.skipTools ? undefined : filterToolsByServerIds(availableTools, invocation.allowedServerIds),
+            availableTools: mcpTools,
             conversationId: invocation.conversationId,
             workingDirectory: invocation.workingDirectory,
           });
@@ -46,9 +47,12 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
           onError: (err: Error, ctx: string) => console.error(`[Deliberation Error] ${ctx}:`, err),
         } : {}),
         ...(includeThinking ? {
-          onAgentThinkingStart: (persona: Persona) => {
+          onAgentThinkingStart: (persona: Persona, startedAt: number) => {
             console.log(`[Deliberation] ${persona.name} started thinking`);
-            setThinkingPersonas(prev => [...prev.filter(p => p.id !== persona.id), persona]);
+            setThinkingPersonas(prev => [
+              ...prev.filter(p => p.id !== persona.id),
+              { ...persona, thinkingStartedAt: startedAt } as Persona & { thinkingStartedAt: number },
+            ]);
           },
           onAgentThinkingEnd: (persona: Persona) => {
             console.log(`[Deliberation] ${persona.name} finished thinking`);
@@ -103,6 +107,15 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
   const onFrameProblem = useCallback(async (council: Council, rawProblem: string) => {
     console.log('[useCouncilHandlers] onFrameProblem called - starting full deliberation', { councilId: council.id, rawProblem });
     setThinkingPersonas([]);
+
+    // Pre-flight: verify MCP tools referenced in council prompts are available
+    const promptText = [
+      rawProblem,
+      council.deliberation?.savedProblem || '',
+      ...council.personas.map(p => p.predisposition?.systemPrompt || ''),
+    ].join('\n');
+    verifyRequiredTools(availableTools, promptText, council.name);
+
     try {
       const deliberator = makeDeliberator({ includePhaseChange: true, includeError: true });
       console.log('[useCouncilHandlers] Starting full deliberation...');
@@ -114,7 +127,7 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
     } finally {
       setThinkingPersonas([]);
     }
-  }, [makeDeliberator]);
+  }, [makeDeliberator, availableTools]);
 
   const onRunRound = useCallback(async (council: Council) => {
     const deliberator = makeDeliberator();

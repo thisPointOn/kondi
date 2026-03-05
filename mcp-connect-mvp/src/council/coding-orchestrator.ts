@@ -75,8 +75,9 @@ export interface CodingOrchestratorConfig {
   onPhaseChange?: (from: DeliberationPhase, to: DeliberationPhase) => void;
   onEntryAdded?: (entry: LedgerEntry) => void;
   onError?: (error: Error, context: string) => void;
-  onAgentThinkingStart?: (persona: Persona) => void;
+  onAgentThinkingStart?: (persona: Persona, startedAt: number) => void;
   onAgentThinkingEnd?: (persona: Persona) => void;
+  onAgentTimeout?: (persona: Persona, context: string, elapsedMs: number) => void;
 }
 
 // ============================================================================
@@ -472,7 +473,7 @@ export class CodingOrchestrator {
           );
         }
 
-        this.config.onAgentThinkingStart?.(worker);
+        this.config.onAgentThinkingStart?.(worker, Date.now());
 
         const response = await this.invokeAgentSafe(
           { personaId: worker.id, systemPrompt, userMessage },
@@ -936,7 +937,7 @@ export class CodingOrchestrator {
 
     for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
       try {
-        this.config.onAgentThinkingStart?.(persona);
+        this.config.onAgentThinkingStart?.(persona, Date.now());
         const response = await this.config.invokeAgent(invocation, persona);
         this.config.onAgentThinkingEnd?.(persona);
         return response;

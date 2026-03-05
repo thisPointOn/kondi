@@ -3,7 +3,7 @@
  * Replaces CouncilView when mode === 'deliberation'
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import type {
   Council,
@@ -16,7 +16,7 @@ import type {
 import { councilStore, createPersonaFromTemplate, allTemplates, templateCategories } from '../../council';
 import { localToolsService } from '../../services/localTools';
 import { ledgerStore, getAllEntries } from '../../council/ledger-store';
-import { contextStore, getCurrentContext, getPendingPatches, getDecision, getPlan, getDirective, getLatestOutput, getAllOutputs, deleteAllArtifacts } from '../../council/context-store';
+import { contextStore, getCurrentContext, getPendingPatches, getPlan, getAllOutputs, deleteAllArtifacts } from '../../council/context-store';
 import PhaseIndicator from './PhaseIndicator';
 import LedgerEntryCard from './LedgerEntryCard';
 import RoleAssignment from './RoleAssignment';
@@ -81,9 +81,19 @@ export default function DeliberationView({
     'openai-api': true,
     deepseek: true
   },
-  thinkingPersonas = [],
+  thinkingPersonas: rawThinkingPersonas = [],
 }: DeliberationViewProps) {
   const [council, setCouncil] = useState<Council | null>(null);
+
+  // Filter thinking personas to only show those belonging to THIS council.
+  // Read directly from store (not React state) to avoid timing gaps where
+  // council is null during first render but thinking has already started.
+  const thinkingPersonas = (() => {
+    const c = council || councilStore.get(councilId);
+    if (!c) return rawThinkingPersonas;
+    const personaIds = new Set(c.personas.map(p => p.id));
+    return rawThinkingPersonas.filter(tp => personaIds.has(tp.id));
+  })();
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [context, setContext] = useState<ContextArtifact | null>(null);
   const [pendingPatches, setPendingPatches] = useState<ContextPatch[]>([]);
@@ -97,7 +107,6 @@ export default function DeliberationView({
     const phase = c?.deliberationState?.currentPhase || 'created';
     return phase === 'created' ? 'setup' : null;
   });
-  const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [pausedUserInput, setPausedUserInput] = useState('');
   const [workingDirectory, setWorkingDirectory] = useState(council?.deliberation?.workingDirectory || '');
   const [directoryConstrained, setDirectoryConstrained] = useState(council?.deliberation?.directoryConstrained ?? true);
@@ -137,7 +146,27 @@ export default function DeliberationView({
   const [editingPersona, setEditingPersona] = useState<Persona | null>(null);
   const [stagedComment, setStagedComment] = useState('');
   const [stagedCommentInput, setStagedCommentInput] = useState('');
+  const [deliberationError, setDeliberationError] = useState<string | null>(null);
   const ledgerEndRef = useRef<HTMLDivElement>(null);
+
+  // Tick counter for elapsed time display on thinking indicators
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (thinkingPersonas.length === 0) return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [thinkingPersonas.length]);
+
+  // Format elapsed seconds into "Xm Ys" or "Xs"
+  const formatElapsed = useCallback((startedAt: number | undefined) => {
+    if (!startedAt) return '';
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    if (secs < 1) return '';
+    if (secs < 60) return `${secs}s`;
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  }, []);
 
   // Detect if any deferred-save fields differ from what's persisted in the council store
   // These fields are only written to the store when RoleAssignment's "Save" button is clicked
@@ -152,48 +181,15 @@ export default function DeliberationView({
     return false;
   })();
 
-  // Clean JSON from display strings (for manager evaluation reasoning, etc.)
-  const cleanJsonForDisplay = (text: string): string => {
-    if (!text || typeof text !== 'string') return text;
-    const trimmed = text.trim();
-
-    // Extract JSON from raw or markdown-wrapped content
-    let jsonStr: string | null = null;
-    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-      jsonStr = trimmed;
-    } else {
-      const match = trimmed.match(/```(?:json)?\s*\n?(\{[\s\S]*?\})\s*\n?```/);
-      if (match) jsonStr = match[1];
-    }
-
-    if (jsonStr) {
-      try {
-        const parsed = JSON.parse(jsonStr);
-        // Structured responses first
-        if (parsed.action || parsed.verdict) {
-          const parts: string[] = [];
-          if (parsed.verdict) parts.push(`Verdict: ${parsed.verdict}`);
-          if (parsed.action) parts.push(`Action: ${parsed.action}`);
-          if (parsed.reasoning) parts.push(parsed.reasoning);
-          if (parsed.feedback) parts.push(`Feedback: ${parsed.feedback}`);
-          if (parts.length > 0) return parts.join('\n\n');
-        }
-        // Text field extraction
-        const textFields = ['reasoning', 'content', 'message', 'summary', 'analysis', 'feedback'];
-        for (const field of textFields) {
-          if (parsed[field] && typeof parsed[field] === 'string') {
-            return parsed[field];
-          }
-        }
-      } catch {
-        // Not JSON
-      }
-    }
-    return text;
-  };
+  // Track whether the initial settings load has happened so we don't
+  // overwrite unsaved local state on subsequent store notifications
+  // (e.g. when addPersona triggers a subscription callback).
+  const initialSettingsLoaded = useRef(false);
 
   // Load council and subscribe to updates
   useEffect(() => {
+    initialSettingsLoaded.current = false;
+
     const loadCouncil = () => {
       const c = councilStore.get(councilId);
       setCouncil(c);
@@ -201,28 +197,35 @@ export default function DeliberationView({
       if (c?.name && !councilName) {
         setCouncilName(c.name);
       }
-      // Note: problemInput, expectedOutput, and taskSaved are initialized from councilStore
-      // in useState initializers, so we don't need to load them here
-      // Load directory settings - prefer council setting, fall back to local tools
-      if (c?.deliberation?.workingDirectory !== undefined) {
-        setWorkingDirectory(c.deliberation.workingDirectory);
-      } else if (!workingDirectory) {
-        // Fall back to global working directory, then local tools service
-        const globalDir = localStorage.getItem('kondi-global-working-directory');
-        if (globalDir) {
-          setWorkingDirectory(globalDir);
-        } else {
-          const localDir = localToolsService.getWorkingDirectory();
-          if (localDir) {
-            setWorkingDirectory(localDir);
+
+      // Only populate deferred-save settings (workingDirectory, directoryConstrained,
+      // bootstrapContext) on INITIAL load. After that, they live in local React state
+      // and are only persisted when the user clicks "Save Setup".
+      // Without this guard, addPersona/removePersona store updates overwrite
+      // the user's unsaved changes.
+      if (!initialSettingsLoaded.current) {
+        initialSettingsLoaded.current = true;
+
+        // Load directory settings - prefer council setting, fall back to local tools
+        if (c?.deliberation?.workingDirectory !== undefined) {
+          setWorkingDirectory(c.deliberation.workingDirectory);
+        } else if (!workingDirectory) {
+          const globalDir = localStorage.getItem('kondi-global-working-directory');
+          if (globalDir) {
+            setWorkingDirectory(globalDir);
+          } else {
+            const localDir = localToolsService.getWorkingDirectory();
+            if (localDir) {
+              setWorkingDirectory(localDir);
+            }
           }
         }
-      }
-      if (c?.deliberation?.directoryConstrained !== undefined) {
-        setDirectoryConstrained(c.deliberation.directoryConstrained);
-      }
-      if (c?.deliberation?.bootstrapContext !== undefined) {
-        setBootstrapContext(c.deliberation.bootstrapContext);
+        if (c?.deliberation?.directoryConstrained !== undefined) {
+          setDirectoryConstrained(c.deliberation.directoryConstrained);
+        }
+        if (c?.deliberation?.bootstrapContext !== undefined) {
+          setBootstrapContext(c.deliberation.bootstrapContext);
+        }
       }
     };
 
@@ -369,7 +372,19 @@ export default function DeliberationView({
       return;
     }
     console.log('[DeliberationView] All checks passed, starting...');
+
+    // Always force-reset to a clean state before starting.
+    // This handles the case where a previous failed attempt left the phase
+    // stuck at 'problem_framing' or any other intermediate state.
+    ledgerStore.clear(councilId);
+    deleteAllArtifacts(councilId);
+    councilStore.update(councilId, {
+      deliberationState: undefined,
+      status: 'active',
+    });
+
     setIsGenerating(true);
+    setDeliberationError(null);
     try {
       console.log('[DeliberationView] Calling onFrameProblem...');
       await onFrameProblem(council, problemInput.trim());
@@ -377,6 +392,8 @@ export default function DeliberationView({
       setProblemInput('');
     } catch (error) {
       console.error('[DeliberationView] Error framing problem:', error);
+      const msg = error instanceof Error ? error.message : String(error);
+      setDeliberationError(`Deliberation error: ${msg}`);
     } finally {
       setIsGenerating(false);
     }
@@ -399,6 +416,18 @@ export default function DeliberationView({
       deliberationState: undefined,
       status: 'active',
     });
+
+    // Clear any error state from previous run
+    setDeliberationError(null);
+
+    // Restore problem input from savedProblem so the Start button is enabled
+    const saved = councilStore.get(councilId)?.deliberation?.savedProblem;
+    if (saved && !problemInput.trim()) {
+      setProblemInput(saved);
+    }
+
+    // Switch to the deliberation panel so the Start button is visible
+    setActivePanel('deliberation');
   };
 
   // Restart deliberation - clear results and start fresh
@@ -411,10 +440,13 @@ export default function DeliberationView({
 
     // Start fresh deliberation
     setIsGenerating(true);
+    setDeliberationError(null);
     try {
       await onFrameProblem(council, problemInput.trim());
     } catch (error) {
       console.error('[DeliberationView] Error restarting deliberation:', error);
+      const msg = error instanceof Error ? error.message : String(error);
+      setDeliberationError(`Deliberation error: ${msg}`);
     } finally {
       setIsGenerating(false);
     }
@@ -424,6 +456,7 @@ export default function DeliberationView({
   const handlePhaseAction = async () => {
     if (!council) return;
     setIsGenerating(true);
+    setDeliberationError(null);
 
     try {
       switch (currentPhase) {
@@ -533,195 +566,6 @@ export default function DeliberationView({
         }}
         activeStep={activePanel}
       />
-
-      {/* Inline Phase Panel - shown below timeline for Deliberation/Decision/Execution */}
-      {activePanel && activePanel !== 'setup' && (() => {
-        const decision = getDecision(councilId);
-        const directive = getDirective(councilId);
-        const latestOutput = getLatestOutput(councilId);
-        const roundSummaries = council.deliberationState?.roundSummaries || {};
-        const managerEval = council.deliberationState?.managerLastEvaluation;
-        const completionSummary = council.deliberationState?.completionSummary;
-
-        return (
-          <div className={`inline-phase-panel ${panelCollapsed ? 'collapsed' : ''}`}>
-            <div className="inline-phase-header">
-              <h4>
-                {activePanel === 'deliberation' && 'Deliberation'}
-                {activePanel === 'output' && 'Output'}
-              </h4>
-              <button
-                className="collapse-inline-btn"
-                onClick={() => setPanelCollapsed(!panelCollapsed)}
-                title={panelCollapsed ? 'Expand' : 'Collapse'}
-              >
-                {panelCollapsed ? '▼' : '▲'}
-              </button>
-            </div>
-            {!panelCollapsed && <div className="inline-phase-content">
-              {/* === DELIBERATION PANEL === */}
-              {activePanel === 'deliberation' && (
-                <div className="inline-deliberation-status">
-                  {entries.length > 0 ? (
-                    <>
-                      <div className="settings-section">
-                        <h4>Status</h4>
-                        <div className="settings-grid">
-                          <div className="setting-item">
-                            <span className="setting-label">Round</span>
-                            <span className="setting-value">{currentRound} / {maxRounds}</span>
-                          </div>
-                          <div className="setting-item">
-                            <span className="setting-label">Phase</span>
-                            <span className="setting-value">{currentPhase}</span>
-                          </div>
-                          <div className="setting-item">
-                            <span className="setting-label">Entries</span>
-                            <span className="setting-value">{entries.length}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Manager's Last Evaluation */}
-                      {managerEval && (
-                        <div className="settings-section">
-                          <h4>Manager Evaluation</h4>
-                          <div className="panel-content-block">
-                            <div className="eval-action">
-                              Action: <strong>{managerEval.action}</strong>
-                              {managerEval.confidence != null && (
-                                <span className="eval-confidence"> ({Math.round(managerEval.confidence * 100)}% confidence)</span>
-                              )}
-                            </div>
-                            <div className="eval-reasoning">{cleanJsonForDisplay(managerEval.reasoning)}</div>
-                            {managerEval.missingInformation && managerEval.missingInformation.length > 0 && (
-                              <div className="eval-missing">
-                                <strong>Missing info:</strong> {managerEval.missingInformation.join(', ')}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Round Summaries */}
-                      {Object.keys(roundSummaries).length > 0 && (
-                        <div className="settings-section">
-                          <h4>Round Summaries</h4>
-                          {Object.entries(roundSummaries).map(([round, summary]) => (
-                            <div key={round} className="round-summary-item">
-                              <span className="round-summary-label">Round {round}</span>
-                              <div className="panel-content-block">{summary}</div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Completion Summary */}
-                      {completionSummary && (
-                        <div className="settings-section">
-                          <h4>Summary</h4>
-                          <div className="panel-content-block">{completionSummary}</div>
-                        </div>
-                      )}
-
-                      <div className="deliberation-actions">
-                        {currentPhase === 'completed' || currentPhase === 'cancelled' || currentPhase === 'failed' ? (
-                          <button
-                            className="deliberation-restart-btn"
-                            onClick={handleClearResults}
-                          >
-                            Clear Results
-                          </button>
-                        ) : (
-                          <button
-                            className="deliberation-restart-btn"
-                            onClick={handleRestartDeliberation}
-                            disabled={!problemInput.trim() || isGenerating || !canStart}
-                          >
-                            {isGenerating ? 'Running...' : 'Restart'}
-                          </button>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <p className="deliberation-prompt">
-                        {canStart && problemInput.trim()
-                          ? 'Ready to start. The council will deliberate on your task.'
-                          : 'Complete Setup first — define instructions and assign roles.'}
-                      </p>
-                      <div className="deliberation-actions">
-                        <button
-                          className="deliberation-start-btn"
-                          onClick={handleFrameProblem}
-                          disabled={!problemInput.trim() || isGenerating || !canStart}
-                        >
-                          {isGenerating ? 'Starting...' : 'Start'}
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* === OUTPUT PANEL === */}
-              {activePanel === 'output' && (
-                <div className="inline-deliberation-status">
-                  {/* Deliberation Summary (display-only, not passed on) */}
-                  {(completionSummary || Object.keys(roundSummaries).length > 0) && (
-                    <div className="settings-section">
-                      <h4>Deliberation Summary</h4>
-                      {completionSummary && (
-                        <div className="panel-content-block">{completionSummary}</div>
-                      )}
-                      {!completionSummary && Object.keys(roundSummaries).length > 0 && (
-                        <>
-                          {Object.entries(roundSummaries).map(([round, summary]) => (
-                            <div key={round} className="round-summary-item">
-                              <span className="round-summary-label">Round {round}</span>
-                              <div className="panel-content-block">{summary}</div>
-                            </div>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Decision */}
-                  {decision && (
-                    <div className="settings-section">
-                      <h4>Decision</h4>
-                      <div className="panel-content-block">{decision.content}</div>
-                    </div>
-                  )}
-
-                  {/* Work Directive */}
-                  {directive && (
-                    <div className="settings-section">
-                      <h4>Directive</h4>
-                      <div className="panel-content-block">{directive.content}</div>
-                    </div>
-                  )}
-
-                  {/* Final Output — what gets passed to the next step */}
-                  {latestOutput && (
-                    <div className="settings-section">
-                      <h4>Final Output {latestOutput.isRevision && `(Revision ${latestOutput.version})`}</h4>
-                      <div className="panel-content-block">{latestOutput.content}</div>
-                    </div>
-                  )}
-
-                  {!decision && !directive && !latestOutput && !completionSummary && Object.keys(roundSummaries).length === 0 && (
-                    <p className="deliberation-prompt">
-                      Output will appear here once the council completes deliberation.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>}
-          </div>
-        );
-      })()}
 
       {/* Main Content */}
       <div className="deliberation-main">
@@ -1166,9 +1010,9 @@ export default function DeliberationView({
             </div>
           ) : (
             <>
-              {entries.length === 0 && thinkingPersonas.length === 0 ? (
+              {entries.length === 0 && thinkingPersonas.length === 0 && !deliberationError ? (
                 <div className="deliberation-empty">
-                  <p>No entries yet. The deliberation is starting...</p>
+                  <p>{isGenerating ? 'Starting deliberation...' : 'No entries yet. Click Start to begin.'}</p>
                 </div>
               ) : (
                 entries.map((entry) => (
@@ -1183,22 +1027,58 @@ export default function DeliberationView({
               {/* Thinking Indicators - show which personas are currently generating */}
               {thinkingPersonas.length > 0 && (
                 <div className="thinking-indicators">
-                  {thinkingPersonas.map((persona) => (
-                    <div key={persona.id} className="thinking-indicator">
-                      <span
-                        className="thinking-avatar"
-                        style={{ backgroundColor: persona.color + '30', color: persona.color }}
-                      >
-                        {persona.avatar || '🤖'}
-                      </span>
-                      <span className="thinking-name">{persona.name}</span>
-                      <span className="thinking-dots">
-                        <span className="dot" />
-                        <span className="dot" />
-                        <span className="dot" />
-                      </span>
-                    </div>
-                  ))}
+                  {thinkingPersonas.map((persona) => {
+                    const elapsed = formatElapsed((persona as any).thinkingStartedAt);
+                    return (
+                      <div key={persona.id} className="thinking-indicator">
+                        <span
+                          className="thinking-avatar"
+                          style={{ backgroundColor: persona.color + '30', color: persona.color }}
+                        >
+                          {persona.avatar || '🤖'}
+                        </span>
+                        <span className="thinking-name">{persona.name}</span>
+                        {elapsed && <span className="thinking-elapsed">{elapsed}</span>}
+                        <span className="thinking-dots">
+                          <span className="dot" />
+                          <span className="dot" />
+                          <span className="dot" />
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {/* Error Banner */}
+              {deliberationError && (
+                <div className="deliberation-error-banner" style={{
+                  background: '#2a1a1a',
+                  border: '1px solid #6b2020',
+                  borderRadius: '8px',
+                  padding: '12px 16px',
+                  margin: '8px 0',
+                  color: '#f5a0a0',
+                  fontSize: '13px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'flex-start',
+                  gap: '12px',
+                }}>
+                  <span>{deliberationError}</span>
+                  <button
+                    onClick={() => setDeliberationError(null)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#f5a0a0',
+                      cursor: 'pointer',
+                      padding: '0 4px',
+                      fontSize: '16px',
+                      flexShrink: 0,
+                    }}
+                  >
+                    x
+                  </button>
                 </div>
               )}
               <div ref={ledgerEndRef} />

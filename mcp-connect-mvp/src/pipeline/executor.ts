@@ -50,7 +50,7 @@ export interface PipelineExecutorCallbacks {
   onStepError?: (stepId: string, error: string) => void;
   onGateWaiting?: (stepId: string, prompt: string) => Promise<boolean>;
   onCouncilCreated?: (stepId: string, councilId: string) => void;
-  onAgentThinkingStart?: (persona: Persona) => void;
+  onAgentThinkingStart?: (persona: Persona, startedAt: number) => void;
   onAgentThinkingEnd?: (persona: Persona) => void;
 }
 
@@ -598,7 +598,7 @@ export class PipelineExecutor {
             try {
               const safeName = config.councilSetup.name
                 .toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_').slice(0, 50);
-              const suffix = config.type === 'coding' ? '_code.md' : config.type === 'review-docs' ? '_review.md' : config.type === 'enrichment' ? '_enrichment.md' : '_plan.md';
+              const suffix = config.type === 'coding' ? '_code.md' : config.type === 'review' ? '_review.md' : config.type === 'enrich' ? '_enrichment.md' : '_plan.md';
               workerOutputPath = `${effectiveDir.replace(/\/$/, '')}/${safeName}${suffix}`;
               await this.platform.writeFile(workerOutputPath, workerOutput.content);
               console.log(`[Pipeline:Council] Saved worker output to: ${workerOutputPath}`);
@@ -622,7 +622,7 @@ export class PipelineExecutor {
       stepType: config.type,
     };
 
-    if (config.type === 'decisioning') {
+    if (config.type === 'analysis') {
       const decision = getDecision(council.id);
       content = decision?.content || 'No decision was made.';
       artifactType = 'decision';
