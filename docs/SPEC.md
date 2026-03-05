@@ -134,17 +134,18 @@ Additional entry types: `decomposition`, `module_directive`, `module_output`, `c
 
 | Type | Orchestrator | Default Personas | Output | Notes |
 |------|-------------|-----------------|--------|-------|
-| `planning` | Deliberation | Manager + Consultant(s) + Worker | Plan document | Worker saves `_plan.md` |
+| `council` | Deliberation | Manager + Consultant(s) + Worker | General output | Open deliberation, full tools, worker saves `_output.md` |
+| `code_planning` | Deliberation | Manager + Consultant(s) + Worker | Plan document | Planning prompts, PLAN_TOOLS only, worker saves `_plan.md` |
 | `coding` | Coding | Manager + Worker + Reviewer | Code files | Worker saves `_code.md`, has testCommand, maxDebugCycles |
-| `review-docs` | Deliberation | Manager + Consultant(s) + Worker | Review document | Worker saves `_review.md` |
-| `enrichment` | Deliberation | Manager + Consultant(s) + Worker | Enriched content | Worker saves `_enrichment.md` |
-| `decisioning` | Deliberation (lightweight) | Single Manager persona | Decision artifact | 0 rounds, 0 revisions, suppressPersona=true |
-| `execution` | Deliberation (lightweight) | Single Worker persona | Output artifact | 0 rounds, 0 revisions, suppressPersona=true |
+| `review` | Deliberation | Manager + Consultant(s) + Worker | Review document | Worker saves `_review.md` |
+| `enrich` | Deliberation | Manager + Consultant(s) + Worker | Enriched content | Worker saves `_enrichment.md` |
+| `analysis` | Deliberation (lightweight) | Single Manager persona | Decision artifact | 0 rounds, 0 revisions, suppressPersona=true |
+| `agent` | Deliberation (lightweight) | Single Worker persona | Output artifact | 0 rounds, 0 revisions, suppressPersona=true |
 | `gate` | None | None | Approval | Pauses for user confirmation |
 | `script` | None | None | stdout | Runs a shell command, captures stdout as artifact |
 | `condition` | None | None | Evaluation result | Evaluates expression against input; actions: continue, skip_next_stage, stop |
 
-`PipelineStepType = 'planning' | 'decisioning' | 'execution' | 'coding' | 'review-docs' | 'enrichment' | 'gate' | 'script' | 'condition'`
+`PipelineStepType = 'council' | 'code_planning' | 'analysis' | 'agent' | 'coding' | 'review' | 'enrich' | 'gate' | 'script' | 'condition'`
 
 ### 5a-1. OutputType
 

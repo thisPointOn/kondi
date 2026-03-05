@@ -351,14 +351,35 @@ interface StepConfigPanelProps {
 /** Default provider availability when no configuredProviders is passed */
 const DEFAULT_AVAIL: Record<string, boolean> = { 'anthropic-cli': true, 'anthropic-api': false, 'openai-cli': true, 'openai-api': false, deepseek: false };
 
-function defaultPlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
+function defaultCouncilConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   const consultant = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
   const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
-    type: 'planning',
+    type: 'council',
     councilSetup: {
-      name: 'Planning Council',
+      name: 'Council',
+      personas: [
+        { name: 'Council Lead', role: 'manager', model: manager.model, provider: manager.provider, avatar: '\uD83C\uDFDB\uFE0F', color: '#6366f1', suppressPersona: false, traits: ['analytical', 'strategic'] },
+        { name: 'Domain Expert', role: 'consultant', model: consultant.model, provider: consultant.provider, avatar: '\uD83C\uDF93', color: '#16a34a', traits: ['insightful', 'collaborative'] },
+        { name: 'Executor', role: 'worker', model: worker.model, provider: worker.provider, avatar: '\uD83D\uDEE0\uFE0F', color: '#f59e0b', suppressPersona: false, traits: ['thorough', 'detail-oriented'], saveOutput: true },
+      ],
+      maxRounds: 4,
+      maxRevisions: 3,
+    },
+    inputTemplate: '{{input}}',
+    outputType: 'string',
+  };
+}
+
+function defaultCodePlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
+  const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
+  const consultant = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
+  const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
+  return {
+    type: 'code_planning',
+    councilSetup: {
+      name: 'Code Planning',
       personas: [
         { name: 'Planning Lead', role: 'manager', model: manager.model, provider: manager.provider, avatar: '\uD83D\uDCCB', color: '#6366f1', suppressPersona: false, traits: ['analytical', 'strategic'] },
         { name: 'Domain Expert', role: 'consultant', model: consultant.model, provider: consultant.provider, avatar: '\uD83C\uDF93', color: '#16a34a', traits: ['insightful', 'collaborative'] },
@@ -373,12 +394,12 @@ function defaultPlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): 
   };
 }
 
-function defaultDecisioningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
+function defaultAnalysisConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const m = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
-    type: 'decisioning',
+    type: 'analysis',
     councilSetup: {
-      name: 'Decisioning',
+      name: 'Analysis',
       personas: [{
         name: 'Analyst',
         role: 'manager',
@@ -398,12 +419,12 @@ function defaultDecisioningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL
   };
 }
 
-function defaultExecutionConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
+function defaultAgentConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const m = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
-    type: 'execution',
+    type: 'agent',
     councilSetup: {
-      name: 'Execution',
+      name: 'Agent',
       personas: [{
         name: 'Executor',
         role: 'worker',
@@ -458,12 +479,12 @@ function defaultCodingConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): Co
   };
 }
 
-function defaultReviewDocsConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
+function defaultReviewConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   const consultant = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
   const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
-    type: 'review-docs',
+    type: 'review',
     councilSetup: {
       name: 'Review & Documentation',
       personas: [
@@ -480,12 +501,12 @@ function defaultReviewDocsConfig(avail: Record<string, boolean> = DEFAULT_AVAIL)
   };
 }
 
-function defaultEnrichmentConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
+function defaultEnrichConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   const consultant = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
   const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
-    type: 'enrichment',
+    type: 'enrich',
     councilSetup: {
       name: 'Enrichment Council',
       personas: [
@@ -531,12 +552,13 @@ function defaultConditionConfig(): ConditionStepConfig {
 
 export function getDefaultConfigForType(type: PipelineStepType, avail?: Record<string, boolean>): StepConfig {
   switch (type) {
-    case 'planning': return defaultPlanningConfig(avail);
-    case 'decisioning': return defaultDecisioningConfig(avail);
-    case 'execution': return defaultExecutionConfig(avail);
+    case 'council': return defaultCouncilConfig(avail);
+    case 'code_planning': return defaultCodePlanningConfig(avail);
+    case 'analysis': return defaultAnalysisConfig(avail);
+    case 'agent': return defaultAgentConfig(avail);
     case 'coding': return defaultCodingConfig(avail);
-    case 'review-docs': return defaultReviewDocsConfig(avail);
-    case 'enrichment': return defaultEnrichmentConfig(avail);
+    case 'review': return defaultReviewConfig(avail);
+    case 'enrich': return defaultEnrichConfig(avail);
     case 'gate': return defaultGateConfig();
     case 'script': return defaultScriptConfig();
     case 'condition': return defaultConditionConfig();
@@ -605,12 +627,12 @@ export default function StepConfigPanel({
             value={step.config.type}
             onChange={(e) => handleTypeChange(e.target.value as PipelineStepType)}
           >
-            <option value="planning">Planning</option>
-            <option value="decisioning">Decisioning</option>
-            <option value="execution">Execution</option>
+            <option value="council">Council</option>
+            <option value="analysis">Analysis</option>
+            <option value="agent">Agent</option>
             <option value="coding">Coding</option>
-            <option value="review-docs">Review & Docs</option>
-            <option value="enrichment">Enrichment</option>
+            <option value="review">Review</option>
+            <option value="enrich">Enrich</option>
             <option value="script">Script</option>
             <option value="condition">Condition</option>
             <option value="gate">Gate</option>
@@ -775,16 +797,16 @@ function CouncilConfig({
   const isRequiredRole = (persona: PipelinePersona): boolean => {
     const countRole = (role: string) => config.councilSetup.personas.filter(p => p.role === role).length;
 
-    if (config.type === 'decisioning') {
-      // Decisioning: must have at least 1 manager
+    if (config.type === 'analysis') {
+      // Analysis: must have at least 1 manager
       return persona.role === 'manager' && countRole('manager') <= 1;
     }
-    if (config.type === 'execution') {
-      // Execution: must have at least 1 worker
+    if (config.type === 'agent') {
+      // Agent: must have at least 1 worker
       return persona.role === 'worker' && countRole('worker') <= 1;
     }
-    if (config.type === 'coding' || config.type === 'review-docs' || config.type === 'enrichment') {
-      // Coding / Review & Docs: must have at least 1 manager, 1 worker
+    if (config.type === 'coding' || config.type === 'review' || config.type === 'enrich') {
+      // Coding / Review / Enrich: must have at least 1 manager, 1 worker
       if (persona.role === 'manager') return countRole('manager') <= 1;
       if (persona.role === 'worker') return countRole('worker') <= 1;
       return false;

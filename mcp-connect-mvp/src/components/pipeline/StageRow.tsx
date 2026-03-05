@@ -19,12 +19,13 @@ interface StageRowProps {
 
 function getStepIcon(type: StepConfig['type']): string {
   switch (type) {
-    case 'planning': return '\uD83D\uDCCB';
-    case 'decisioning': return '\uD83E\uDD14';
-    case 'execution': return '\uD83E\uDD16';
+    case 'council': return '\uD83C\uDFDB\uFE0F';
+    case 'code_planning': return '\uD83D\uDCCB';
+    case 'analysis': return '\uD83E\uDD14';
+    case 'agent': return '\uD83E\uDD16';
     case 'coding': return '\uD83D\uDCBB';
-    case 'review-docs': return '\uD83D\uDCDD';
-    case 'enrichment': return '\uD83D\uDCA1';
+    case 'review': return '\uD83D\uDCDD';
+    case 'enrich': return '\uD83D\uDCA1';
     case 'gate': return '\uD83D\uDEA7';
     case 'script': return '\u26A1';
     case 'condition': return '\uD83D\uDD00';

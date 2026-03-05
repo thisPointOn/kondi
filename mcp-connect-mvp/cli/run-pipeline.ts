@@ -247,7 +247,8 @@ function printPipelineStructure(pipeline: Pipeline) {
     for (const step of stage.steps) {
       const typeColor = step.config.type === 'gate' ? C.yellow :
                         step.config.type === 'coding' ? C.magenta :
-                        step.config.type === 'planning' ? C.blue :
+                        step.config.type === 'code_planning' ? C.blue :
+                        step.config.type === 'council' ? C.yellow :
                         step.config.type === 'script' ? C.cyan :
                         step.config.type === 'condition' ? C.yellow : C.green;
       console.log(`    ${typeColor}[${step.config.type}]${C.reset} ${step.name}`);
@@ -289,8 +290,8 @@ function printPipelineStructure(pipeline: Pipeline) {
         console.log(`      ${C.dim}If TRUE: ${config.trueAction}, If FALSE: ${config.falseAction}${C.reset}`);
       }
 
-      // Show model for lightweight council steps (decisioning/execution)
-      if (step.config.type === 'decisioning' || step.config.type === 'execution') {
+      // Show model for lightweight council steps (analysis/agent)
+      if (step.config.type === 'analysis' || step.config.type === 'agent') {
         if ('councilSetup' in step.config) {
           const config = step.config as CouncilStepConfig;
           for (const p of config.councilSetup.personas) {
@@ -399,8 +400,8 @@ function saveExecutionReport(
           }
         }
 
-        // Lightweight council step details (decisioning/execution)
-        if (step.config.type === 'decisioning' || step.config.type === 'execution') {
+        // Lightweight council step details (analysis/agent)
+        if (step.config.type === 'analysis' || step.config.type === 'agent') {
           if ('councilSetup' in step.config) {
             const config = step.config as CouncilStepConfig;
             stepReport.council = {
@@ -593,7 +594,7 @@ async function main() {
         }));
       }
 
-      if (step && (step.config.type === 'decisioning' || step.config.type === 'execution')) {
+      if (step && (step.config.type === 'analysis' || step.config.type === 'agent')) {
         if ('councilSetup' in step.config) {
           const config = step.config as CouncilStepConfig;
           record.inputTemplate = config.inputTemplate;

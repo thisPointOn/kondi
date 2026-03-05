@@ -8,12 +8,26 @@
 // ============================================================================
 
 /** All pipeline step types. Gate, script, and condition are non-council types. */
-export const PIPELINE_STEP_TYPES = ['planning', 'decisioning', 'execution', 'coding', 'review-docs', 'enrichment', 'gate', 'script', 'condition'] as const;
+export const PIPELINE_STEP_TYPES = ['council', 'code_planning', 'analysis', 'agent', 'coding', 'review', 'enrich', 'gate', 'script', 'condition'] as const;
 export type PipelineStepType = (typeof PIPELINE_STEP_TYPES)[number];
 
 /** Council-based step types (excludes gate, script, condition). */
-export const COUNCIL_STEP_TYPES = ['planning', 'decisioning', 'execution', 'coding', 'review-docs', 'enrichment'] as const;
+export const COUNCIL_STEP_TYPES = ['council', 'code_planning', 'analysis', 'agent', 'coding', 'review', 'enrich'] as const;
 export type CouncilStepType = (typeof COUNCIL_STEP_TYPES)[number];
+
+/** Human-readable labels for each step type */
+export const STEP_TYPE_LABELS: Record<PipelineStepType, string> = {
+  council: 'Council',
+  code_planning: 'Code Planning',
+  analysis: 'Analysis',
+  agent: 'Agent',
+  coding: 'Coding',
+  review: 'Review',
+  enrich: 'Enrich',
+  gate: 'Gate',
+  script: 'Script',
+  condition: 'Condition',
+};
 
 /** What kind of data a step produces for downstream consumption */
 export type OutputType = 'string' | 'file' | 'directory' | 'json';
@@ -119,7 +133,7 @@ export interface CouncilStepConfig {
 }
 
 export interface LlmStepConfig {
-  type: 'decisioning' | 'execution';
+  type: 'analysis' | 'agent';
   model: string;
   provider: string;
   systemPrompt: string;
@@ -175,7 +189,7 @@ export function isCouncilType(type: PipelineStepType): boolean {
 
 /** Helper: is this a lightweight council (single-agent, 0-round)? */
 export function isLightweightCouncilType(type: PipelineStepType): boolean {
-  return type === 'decisioning' || type === 'execution';
+  return type === 'analysis' || type === 'agent';
 }
 
 /**
@@ -183,23 +197,23 @@ export function isLightweightCouncilType(type: PipelineStepType): boolean {
  * Kept for backwards compatibility with existing code.
  */
 export function isLlmType(type: PipelineStepType): boolean {
-  return type === 'decisioning' || type === 'execution';
+  return type === 'analysis' || type === 'agent';
 }
 
 /**
  * Migrate legacy LlmStepConfig to CouncilStepConfig.
- * Old pipelines may have { type: 'decisioning'|'execution', model, provider, systemPrompt, ... }
+ * Old pipelines may have { type: 'analysis'|'agent', model, provider, systemPrompt, ... }
  * without a councilSetup. This creates one from the flat fields.
  */
 export function migrateLlmConfig(config: LlmStepConfig): CouncilStepConfig {
-  const isDecisioning = config.type === 'decisioning';
+  const isAnalysis = config.type === 'analysis';
   return {
     type: config.type,
     councilSetup: {
-      name: isDecisioning ? 'Decisioning' : 'Execution',
+      name: isAnalysis ? 'Analysis' : 'Agent',
       personas: [{
-        name: isDecisioning ? 'Analyst' : 'Executor',
-        role: isDecisioning ? 'manager' : 'worker',
+        name: isAnalysis ? 'Analyst' : 'Executor',
+        role: isAnalysis ? 'manager' : 'worker',
         model: config.model,
         provider: config.provider,
         systemPrompt: config.systemPrompt,

@@ -75,19 +75,85 @@ function migrateV2toV3(data: StorageData): StorageData {
   return data;
 }
 
+/**
+ * v3 → v4: Rename step types to broader names.
+ * planning→council, decisioning→analysis, execution→agent, review-docs→review, enrichment→enrich.
+ */
+function migrateV3toV4(data: StorageData): StorageData {
+  if (data.version >= 4) return data;
+
+  const typeMap: Record<string, string> = {
+    planning: 'council',
+    decisioning: 'analysis',
+    execution: 'agent',
+    'review-docs': 'review',
+    enrichment: 'enrich',
+  };
+
+  let migrated = 0;
+  for (const pipeline of data.pipelines) {
+    for (const stage of pipeline.stages) {
+      for (const step of stage.steps) {
+        const config = step.config as { type: string };
+        const newType = typeMap[config.type];
+        if (newType) {
+          config.type = newType;
+          migrated++;
+        }
+      }
+    }
+  }
+
+  if (migrated > 0) {
+    console.log(`[PipelineStore] Migrating v3 → v4: renamed ${migrated} step type(s)`);
+  }
+  data.version = 4;
+  return data;
+}
+
+/**
+ * v4 → v5: Rename 'council' → 'code_planning'.
+ * The old 'council' type was specifically for code planning (PLAN_TOOLS, planning prompts).
+ * Now 'council' is a new open-ended deliberation type, and old council steps become 'code_planning'.
+ */
+function migrateV4toV5(data: StorageData): StorageData {
+  if (data.version >= 5) return data;
+
+  let migrated = 0;
+  for (const pipeline of data.pipelines) {
+    for (const stage of pipeline.stages) {
+      for (const step of stage.steps) {
+        const config = step.config as { type: string };
+        if (config.type === 'council') {
+          config.type = 'code_planning';
+          migrated++;
+        }
+      }
+    }
+  }
+
+  if (migrated > 0) {
+    console.log(`[PipelineStore] Migrating v4 → v5: renamed ${migrated} 'council' step(s) to 'code_planning'`);
+  }
+  data.version = 5;
+  return data;
+}
+
 function loadFromStorage(): StorageData {
   try {
     const raw = councilDataStore.getItem(STORAGE_KEY);
     if (!raw) {
-      return { version: 3, pipelines: [], lastUpdated: new Date().toISOString() };
+      return { version: 5, pipelines: [], lastUpdated: new Date().toISOString() };
     }
     let data = JSON.parse(raw) as StorageData;
     data = migrateV1toV2(data);
     data = migrateV2toV3(data);
+    data = migrateV3toV4(data);
+    data = migrateV4toV5(data);
     return data;
   } catch (error) {
     console.error('[PipelineStore] Failed to load from storage:', error);
-    return { version: 3, pipelines: [], lastUpdated: new Date().toISOString() };
+    return { version: 5, pipelines: [], lastUpdated: new Date().toISOString() };
   }
 }
 
@@ -128,8 +194,8 @@ resetStaleExecutionStates();
 
 function saveToStorage(data: StorageData): void {
   data.lastUpdated = new Date().toISOString();
-  // In-memory store never throws on quota — localStorage is best-effort cache
-  councilDataStore.setItem(STORAGE_KEY, JSON.stringify(data));
+  // Use persistent save — pipeline configs MUST survive app restarts
+  councilDataStore.setItemPersistent(STORAGE_KEY, JSON.stringify(data));
 }
 
 // ============================================================================

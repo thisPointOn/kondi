@@ -50,7 +50,7 @@ export interface PipelineExecutorCallbacks {
   onStepError?: (stepId: string, error: string) => void;
   onGateWaiting?: (stepId: string, prompt: string) => Promise<boolean>;
   onCouncilCreated?: (stepId: string, councilId: string) => void;
-  onAgentThinkingStart?: (persona: Persona, startedAt: number) => void;
+  onAgentThinkingStart?: (persona: Persona, startedAt: number, prompt?: string) => void;
   onAgentThinkingEnd?: (persona: Persona) => void;
 }
 
@@ -419,13 +419,8 @@ export class PipelineExecutor {
     pipelineStore.setStepStatus(pipelineId, step.id, 'running');
     this.callbacks.onStepStart?.(step.id);
 
-    // Track council ID so we can link to the deliberation even if the step fails
-    let stepCouncilId: string | null = null;
-    const origOnCouncilCreated = this.callbacks.onCouncilCreated;
-    this.callbacks.onCouncilCreated = (stepId, councilId) => {
-      stepCouncilId = councilId;
-      origOnCouncilCreated?.(stepId, councilId);
-    };
+    // Per-step context — avoids mutating shared this.callbacks (race-safe for parallel steps)
+    const stepCtx = { councilId: null as string | null };
 
     try {
       let artifact: StepArtifact;
@@ -439,7 +434,7 @@ export class PipelineExecutor {
       } else {
         // Convert LLM steps (decisioning/execution) to lightweight council configs
         const councilStep = this.normalizeToCouncilStep(step);
-        artifact = await this.runCouncilStep(pipelineId, councilStep, previousArtifacts, pipelineSettings);
+        artifact = await this.runCouncilStep(pipelineId, councilStep, previousArtifacts, pipelineSettings, stepCtx);
       }
 
       pipelineStore.setStepArtifact(pipelineId, step.id, artifact);
@@ -450,12 +445,12 @@ export class PipelineExecutor {
 
       // For steps that created a council before failing, write a partial
       // artifact so the UI can still link to the deliberation ledger
-      if (stepCouncilId) {
+      if (stepCtx.councilId) {
         pipelineStore.setStepArtifact(pipelineId, step.id, {
           stepId: step.id,
           content: `Step failed: ${message}`,
           artifactType: 'output',
-          metadata: { councilId: stepCouncilId, stepName: step.name, stepType: step.config.type },
+          metadata: { councilId: stepCtx.councilId, stepName: step.name, stepType: step.config.type },
           createdAt: new Date().toISOString(),
         });
       }
@@ -463,8 +458,6 @@ export class PipelineExecutor {
       pipelineStore.setStepStatus(pipelineId, step.id, 'failed', message);
       this.callbacks.onStepError?.(step.id, message);
       throw error;
-    } finally {
-      this.callbacks.onCouncilCreated = origOnCouncilCreated;
     }
   }
 
@@ -494,7 +487,8 @@ export class PipelineExecutor {
     pipelineId: string,
     step: PipelineStep,
     previousArtifacts: StepArtifact[],
-    pipelineSettings: Pipeline['settings']
+    pipelineSettings: Pipeline['settings'],
+    stepCtx: { councilId: string | null }
   ): Promise<StepArtifact> {
     const config = step.config as CouncilStepConfig;
 
@@ -535,13 +529,8 @@ export class PipelineExecutor {
       pipelineId: pipelineId,
     });
 
+    stepCtx.councilId = council.id;
     this.callbacks.onCouncilCreated?.(step.id, council.id);
-
-    // Set working directory so Claude operates in the pipeline's directory
-    const previousDir = this.platform.getWorkingDir();
-    if (effectiveDir) {
-      this.platform.setWorkingDir(effectiveDir);
-    }
 
     // Branch: coding steps use CodingOrchestrator, planning uses DeliberationOrchestrator
     const orchestratorCallbacks = {
@@ -554,21 +543,16 @@ export class PipelineExecutor {
       onAgentThinkingEnd: this.callbacks.onAgentThinkingEnd,
     };
 
-    try {
-      if (config.type === 'coding') {
-        const codingOrchestrator = new CodingOrchestrator({
-          ...orchestratorCallbacks,
-          runCommand: this.platform.runCommand,
-          readFile: this.platform.readFile,
-        });
-        await codingOrchestrator.runCodingWorkflow(council, rawProblem);
-      } else {
-        const deliberator = new DeliberationOrchestrator(orchestratorCallbacks);
-        await deliberator.runFullDeliberation(council, rawProblem);
-      }
-    } finally {
-      // Restore previous working directory so other callers (chat UI) aren't affected
-      this.platform.setWorkingDir(previousDir);
+    if (config.type === 'coding') {
+      const codingOrchestrator = new CodingOrchestrator({
+        ...orchestratorCallbacks,
+        runCommand: this.platform.runCommand,
+        readFile: this.platform.readFile,
+      });
+      await codingOrchestrator.runCodingWorkflow(council, rawProblem);
+    } else {
+      const deliberator = new DeliberationOrchestrator(orchestratorCallbacks);
+      await deliberator.runFullDeliberation(council, rawProblem);
     }
 
     // Generate summary and save to disk (normally done by React useEffect, but
@@ -598,7 +582,7 @@ export class PipelineExecutor {
             try {
               const safeName = config.councilSetup.name
                 .toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_').slice(0, 50);
-              const suffix = config.type === 'coding' ? '_code.md' : config.type === 'review' ? '_review.md' : config.type === 'enrich' ? '_enrichment.md' : '_plan.md';
+              const suffix = config.type === 'coding' ? '_code.md' : config.type === 'review' ? '_review.md' : config.type === 'enrich' ? '_enrichment.md' : config.type === 'code_planning' ? '_plan.md' : '_output.md';
               workerOutputPath = `${effectiveDir.replace(/\/$/, '')}/${safeName}${suffix}`;
               await this.platform.writeFile(workerOutputPath, workerOutput.content);
               console.log(`[Pipeline:Council] Saved worker output to: ${workerOutputPath}`);

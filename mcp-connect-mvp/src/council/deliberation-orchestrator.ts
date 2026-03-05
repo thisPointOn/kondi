@@ -64,6 +64,8 @@ import {
 } from './store';
 
 import { bootstrapDirectoryContext } from './context-bootstrap';
+import { buildContextInspection } from './context-inspection';
+import type { ContextInspection } from './types';
 
 import {
   buildManagerFramingPrompt,
@@ -94,6 +96,8 @@ export interface AgentInvocation {
   userMessage: string;
   /** When true, the invoker should NOT pass MCP tools (avoids slow MCP connections) */
   skipTools?: boolean;
+  /** Restrict to specific tool names (e.g. ['Read', 'Write', 'Bash']) */
+  allowedTools?: string[];
   /** MCP servers this invocation can access (undefined = all servers) */
   allowedServerIds?: string[];
   /** Working directory override for local tool calls (bypasses singleton) */
@@ -116,8 +120,8 @@ export interface OrchestratorConfig {
   onPhaseChange?: (from: DeliberationPhase, to: DeliberationPhase) => void;
   onEntryAdded?: (entry: LedgerEntry) => void;
   onError?: (error: Error, context: string) => void;
-  /** Called when a persona starts thinking (startedAt = Date.now() timestamp) */
-  onAgentThinkingStart?: (persona: Persona, startedAt: number) => void;
+  /** Called when a persona starts thinking (startedAt = Date.now() timestamp, prompt = user message sent) */
+  onAgentThinkingStart?: (persona: Persona, startedAt: number, prompt?: string) => void;
   /** Called when a persona finishes thinking */
   onAgentThinkingEnd?: (persona: Persona) => void;
   /** Called when an agent times out (before retry). Enables UI timeout warnings. */
@@ -175,6 +179,7 @@ export class DeliberationOrchestrator {
    * Frames the problem then hands off to continueDeliberation.
    */
   async runFullDeliberation(council: Council, rawProblem: string): Promise<void> {
+    const deliberationStart = Date.now();
     console.log('[Orchestrator] Starting full deliberation...');
     this.activeCouncilId = council.id;
 
@@ -252,10 +257,12 @@ export class DeliberationOrchestrator {
     }
 
     // Phase 1: Frame the problem
+    const t0 = Date.now();
     await this.frameProblem(council, rawProblem);
+    console.log(`[Orchestrator:Timing] frameProblem took ${((Date.now() - t0) / 1000).toFixed(1)}s (elapsed: ${((Date.now() - deliberationStart) / 1000).toFixed(0)}s)`);
 
     // Continue through all remaining phases automatically
-    await this.continueDeliberation(council.id);
+    await this.continueDeliberation(council.id, deliberationStart);
   }
 
   /**
@@ -263,8 +270,9 @@ export class DeliberationOrchestrator {
    * Used after initial start (runFullDeliberation) and after resume from pause.
    * Runs fully automatically — no manual step-by-step buttons needed.
    */
-  async continueDeliberation(councilId: string): Promise<void> {
+  async continueDeliberation(councilId: string, startTime?: number): Promise<void> {
     this.activeCouncilId = councilId;
+    const elapsed = () => startTime ? ` (elapsed: ${((Date.now() - startTime) / 1000).toFixed(0)}s)` : '';
     let council = councilStore.get(councilId)!;
 
     // Phase 2: Deliberation rounds
@@ -290,9 +298,11 @@ export class DeliberationOrchestrator {
       }
 
       try {
+        const phaseStart = Date.now();
         if (phase === 'round_independent') {
           console.log(`[Orchestrator] Running independent round...`);
           await this.runIndependentRound(council);
+          console.log(`[Orchestrator:Timing] round_independent took ${((Date.now() - phaseStart) / 1000).toFixed(1)}s${elapsed()}`);
           // Fallback: if phase didn't advance (isRoundComplete returned false), force it
           const afterPhase = councilStore.get(councilId)?.deliberationState?.currentPhase;
           if (afterPhase === 'round_independent') {
@@ -302,9 +312,11 @@ export class DeliberationOrchestrator {
         } else if (phase === 'round_waiting_for_manager') {
           console.log('[Orchestrator] Manager evaluating...');
           await this.managerEvaluate(council);
+          console.log(`[Orchestrator:Timing] managerEvaluate took ${((Date.now() - phaseStart) / 1000).toFixed(1)}s${elapsed()}`);
         } else if (phase === 'round_interactive') {
           console.log('[Orchestrator] Running interactive round...');
           await this.runInteractiveRound(council);
+          console.log(`[Orchestrator:Timing] round_interactive took ${((Date.now() - phaseStart) / 1000).toFixed(1)}s${elapsed()}`);
           // Fallback: if phase didn't advance, force it
           const afterPhase = councilStore.get(councilId)?.deliberationState?.currentPhase;
           if (afterPhase === 'round_interactive') {
@@ -384,8 +396,10 @@ export class DeliberationOrchestrator {
       if (phase === 'paused' || phase === 'failed') return;
 
       if (phase === 'deciding') {
+        const t = Date.now();
         console.log('[Orchestrator] Making decision...');
         await this.makeDecision(council);
+        console.log(`[Orchestrator:Timing] makeDecision took ${((Date.now() - t) / 1000).toFixed(1)}s${elapsed()}`);
         council = councilStore.get(councilId)!;
         phase = council.deliberationState?.currentPhase;
       }
@@ -393,8 +407,10 @@ export class DeliberationOrchestrator {
       if (phase === 'paused' || phase === 'failed') return;
 
       if (phase === 'planning') {
+        const t = Date.now();
         console.log('[Orchestrator] Creating plan...');
         await this.createPlan(council);
+        console.log(`[Orchestrator:Timing] createPlan took ${((Date.now() - t) / 1000).toFixed(1)}s${elapsed()}`);
         council = councilStore.get(councilId)!;
         phase = council.deliberationState?.currentPhase;
       }
@@ -402,8 +418,10 @@ export class DeliberationOrchestrator {
       if (phase === 'paused' || phase === 'failed') return;
 
       if (phase === 'directing') {
+        const t = Date.now();
         console.log('[Orchestrator] Issuing directive...');
         await this.issueDirective(council);
+        console.log(`[Orchestrator:Timing] issueDirective took ${((Date.now() - t) / 1000).toFixed(1)}s${elapsed()}`);
         council = councilStore.get(councilId)!;
         phase = council.deliberationState?.currentPhase;
       }
@@ -422,11 +440,15 @@ export class DeliberationOrchestrator {
         }
 
         if (phase === 'executing') {
+          const t = Date.now();
           console.log('[Orchestrator] Executing work...');
           await this.executeWork(council);
+          console.log(`[Orchestrator:Timing] executeWork took ${((Date.now() - t) / 1000).toFixed(1)}s${elapsed()}`);
         } else if (phase === 'reviewing') {
+          const t = Date.now();
           console.log('[Orchestrator] Reviewing work...');
           const { review } = await this.reviewWork(council);
+          console.log(`[Orchestrator:Timing] reviewWork took ${((Date.now() - t) / 1000).toFixed(1)}s${elapsed()}`);
 
           if (review.verdict === 'accept') {
             console.log('[Orchestrator] Work approved!');
@@ -514,7 +536,7 @@ export class DeliberationOrchestrator {
     }
     } // end phase-level retry loop
 
-    console.log('[Orchestrator] Auto-run finished');
+    console.log(`[Orchestrator] Auto-run finished${elapsed()}`);
   }
 
   // ==========================================================================
@@ -532,7 +554,7 @@ export class DeliberationOrchestrator {
     this.transitionPhase(council.id, 'problem_framing');
 
     // Show manager as thinking immediately (before bootstrap, which can be slow)
-    this.config.onAgentThinkingStart?.(manager, Date.now());
+    this.config.onAgentThinkingStart?.(manager, Date.now(), rawProblem);
 
     // Bootstrap directory context if enabled
     let enrichedProblem = rawProblem;
@@ -578,7 +600,9 @@ export class DeliberationOrchestrator {
       response.content,
       response.tokensUsed,
       response.latencyMs,
-      [{ artifactType: 'context', artifactId: context.id, version: 1 }]
+      [{ artifactType: 'context', artifactId: context.id, version: 1 }],
+      undefined,
+      response.structured
     );
 
     // Check if consultants exist — skip deliberation rounds if none
@@ -655,7 +679,8 @@ export class DeliberationOrchestrator {
         response.tokensUsed,
         response.latencyMs,
         undefined,
-        council.deliberationState?.currentRound
+        council.deliberationState?.currentRound,
+        response.structured
       );
 
       councilStore.recordSubmission(council.id, consultant.id);
@@ -753,7 +778,8 @@ export class DeliberationOrchestrator {
       response.tokensUsed,
       response.latencyMs,
       undefined,
-      council.deliberationState?.currentRound
+      council.deliberationState?.currentRound,
+      response.structured
     );
 
     // Record submission
@@ -981,7 +1007,8 @@ export class DeliberationOrchestrator {
           response.tokensUsed,
           response.latencyMs,
           undefined,
-          currentRound
+          currentRound,
+          response.structured
         );
       }
 
@@ -1009,6 +1036,7 @@ export class DeliberationOrchestrator {
     let summaryContent: string;
     let tokensUsed = 0;
     let latencyMs = 0;
+    let summaryStructured: Record<string, unknown> | undefined;
 
     const summaryMode = council.deliberation?.summaryMode || 'manager';
     const summarizeAfterRound = council.deliberation?.summarizeAfterRound || 2;
@@ -1033,6 +1061,7 @@ export class DeliberationOrchestrator {
       summaryContent = response.content;
       tokensUsed = response.tokensUsed;
       latencyMs = response.latencyMs;
+      summaryStructured = response.structured;
     }
 
     // Store summary
@@ -1049,7 +1078,8 @@ export class DeliberationOrchestrator {
       tokensUsed,
       latencyMs,
       undefined,
-      currentRound
+      currentRound,
+      summaryStructured
     );
   }
 
@@ -1070,7 +1100,7 @@ export class DeliberationOrchestrator {
       const systemPrompt = consultant.predisposition.systemPrompt;
       const userMessage = buildConsultantFinalPositionPrompt(consultant, focusArea, contextContent);
 
-      this.config.onAgentThinkingStart?.(consultant, Date.now());
+      this.config.onAgentThinkingStart?.(consultant, Date.now(), userMessage);
       const response = await this.invokeAgentSafe(
         { personaId: consultant.id, systemPrompt, userMessage },
         consultant,
@@ -1082,7 +1112,7 @@ export class DeliberationOrchestrator {
 
       this.createEntry(council.id, 'consultant', consultant.id, 'response', 'deciding',
         response.content, response.tokensUsed, response.latencyMs, undefined,
-        council.deliberationState?.currentRound);
+        council.deliberationState?.currentRound, response.structured);
     }
 
     return positions.join('\n\n');
@@ -1145,7 +1175,9 @@ export class DeliberationOrchestrator {
       response.content,
       response.tokensUsed,
       response.latencyMs,
-      [{ artifactType: 'decision', artifactId: decision.id }]
+      [{ artifactType: 'decision', artifactId: decision.id }],
+      undefined,
+      response.structured
     );
 
     // Check if workers exist — if not, decision IS the output
@@ -1200,7 +1232,9 @@ export class DeliberationOrchestrator {
       response.content,
       response.tokensUsed,
       response.latencyMs,
-      [{ artifactType: 'plan', artifactId: plan.id }]
+      [{ artifactType: 'plan', artifactId: plan.id }],
+      undefined,
+      response.structured
     );
 
     this.transitionPhase(council.id, 'directing');
@@ -1261,7 +1295,9 @@ export class DeliberationOrchestrator {
       response.content,
       response.tokensUsed,
       response.latencyMs,
-      [{ artifactType: 'directive', artifactId: directive.id }]
+      [{ artifactType: 'directive', artifactId: directive.id }],
+      undefined,
+      response.structured
     );
 
     this.transitionPhase(council.id, 'executing');
@@ -1325,7 +1361,9 @@ export class DeliberationOrchestrator {
       response.content,
       response.tokensUsed,
       response.latencyMs,
-      [{ artifactType: 'output', artifactId: output.id, version: output.version }]
+      [{ artifactType: 'output', artifactId: output.id, version: output.version }],
+      undefined,
+      response.structured
     );
 
     this.transitionPhase(council.id, 'reviewing');
@@ -1345,9 +1383,9 @@ export class DeliberationOrchestrator {
     if (!output || !directive) return '';
 
     const expectedOutput = council.deliberation?.expectedOutput;
-    const reviews: string[] = [];
 
-    for (const consultant of consultants) {
+    // Run consultant reviews in parallel to reduce total time
+    const reviewOne = async (consultant: Persona): Promise<string> => {
       const assignment = getRoleAssignment(council, consultant.id);
       const focusArea = assignment?.focusArea || consultant.predisposition.domain || 'general';
       const systemPrompt = consultant.predisposition.systemPrompt;
@@ -1355,19 +1393,28 @@ export class DeliberationOrchestrator {
         consultant, focusArea, output.content, directive.content, expectedOutput
       );
 
-      this.config.onAgentThinkingStart?.(consultant, Date.now());
       const response = await this.invokeAgentSafe(
         { personaId: consultant.id, systemPrompt, userMessage },
         consultant,
-        'deliberation_response'  // READ_ONLY_TOOLS — can read files, search web
+        'consultant_review'
       );
-      this.config.onAgentThinkingEnd?.(consultant);
-
-      reviews.push(`[${consultant.name} - ${focusArea}]: ${response.content}`);
 
       this.createEntry(council.id, 'consultant', consultant.id, 'review', 'reviewing',
         response.content, response.tokensUsed, response.latencyMs, undefined,
-        council.deliberationState?.currentRound);
+        council.deliberationState?.currentRound, response.structured);
+
+      return `[${consultant.name} - ${focusArea}]: ${response.content}`;
+    };
+
+    const results = await Promise.allSettled(consultants.map(c => reviewOne(c)));
+
+    const reviews: string[] = [];
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        reviews.push(result.value);
+      } else {
+        console.warn('[Orchestrator] Consultant review failed:', result.reason);
+      }
     }
 
     return reviews.join('\n\n');
@@ -1434,6 +1481,7 @@ export class DeliberationOrchestrator {
       response.latencyMs,
       undefined,
       undefined,
+      response.structured,
       undefined,
       review.verdict
     );
@@ -1576,7 +1624,9 @@ export class DeliberationOrchestrator {
       response.content,
       response.tokensUsed,
       response.latencyMs,
-      [{ artifactType: 'output', artifactId: output.id, version: output.version }]
+      [{ artifactType: 'output', artifactId: output.id, version: output.version }],
+      undefined,
+      response.structured
     );
 
     this.transitionPhase(council.id, 'reviewing');
@@ -1666,7 +1716,9 @@ export class DeliberationOrchestrator {
       response.content,
       response.tokensUsed,
       response.latencyMs,
-      [{ artifactType: 'output', artifactId: output.id, version: output.version }]
+      [{ artifactType: 'output', artifactId: output.id, version: output.version }],
+      undefined,
+      response.structured
     );
 
     // No review — first output is accepted
@@ -1760,7 +1812,9 @@ export class DeliberationOrchestrator {
       response.content,
       response.tokensUsed,
       response.latencyMs,
-      [{ artifactType: 'decision', artifactId: decision.id }]
+      [{ artifactType: 'decision', artifactId: decision.id }],
+      undefined,
+      response.structured
     );
 
     // Continue with normal flow
@@ -2160,7 +2214,7 @@ export class DeliberationOrchestrator {
     if (workerToolPhases.includes(context)) {
       // Planning workers get limited tools (no Edit, Bash, Grep — prevents code writing)
       // Coding/other workers get full tools
-      if (stepType === 'council') {
+      if (stepType === 'code_planning') {
         invocation = { ...invocation, allowedTools: PLAN_TOOLS };
       } else {
         invocation = { ...invocation, allowedTools: FULL_TOOLS };
@@ -2244,18 +2298,57 @@ export class DeliberationOrchestrator {
     };
     invocation = { ...invocation, timeoutMs: invocation.timeoutMs ?? DEFAULT_TIMEOUTS[context] ?? 600_000 };
 
+    // Build context inspection for this call
+    const toolScope: ContextInspection['toolScope'] = invocation.skipTools ? 'none'
+      : invocation.allowedTools === FULL_TOOLS ? 'full'
+      : invocation.allowedTools === PLAN_TOOLS ? 'plan'
+      : invocation.allowedTools === READ_ONLY_TOOLS ? 'read_only'
+      : invocation.allowedTools === MANAGER_TOOLS ? 'manager'
+      : invocation.allowedTools ? 'read_only' // custom list after override
+      : 'none';
+
+    const systemPromptSource = workerToolPhases.includes(context) ? 'minimal_worker'
+      : readOnlyToolPhases.includes(context) && context === 'code_review' ? 'reviewer'
+      : readOnlyToolPhases.includes(context) ? 'persona_predisposition'
+      : 'persona_predisposition';
+
+    const inspection = buildContextInspection({
+      systemPrompt: invocation.systemPrompt,
+      systemPromptSource,
+      userMessage: invocation.userMessage,
+      toolScope,
+      toolNames: invocation.allowedTools,
+      effectiveServerIds: invocation.allowedServerIds,
+      wordLimitApplied: wordLimit && wordLimit > 0 ? wordLimit : undefined,
+      contextTokenBudget: council?.deliberation?.contextTokenBudget,
+      timeoutMs: invocation.timeoutMs,
+    });
+
     // Retry transient errors (rate limits, overload) with exponential backoff.
     // This covers ALL roles (manager, consultant, worker) uniformly.
     // Timeout errors get 1 retry (no backoff — the timeout itself was the wait).
     const MAX_TRANSIENT_RETRIES = 5;
     const BASE_DELAY_MS = 15_000; // 15 seconds
 
+    const sysPromptKB = (invocation.systemPrompt.length / 1024).toFixed(1);
+    const userMsgKB = (invocation.userMessage.length / 1024).toFixed(1);
+    const toolCount = invocation.allowedTools?.length || 0;
+    console.log(
+      `[Orchestrator:Call] ${persona.name} (${context}) — ` +
+      `system: ${sysPromptKB}KB, user: ${userMsgKB}KB, tools: ${toolCount}, ` +
+      `timeout: ${Math.round((invocation.timeoutMs || 0) / 1000)}s`
+    );
+
     for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
       try {
         const startedAt = Date.now();
-        this.config.onAgentThinkingStart?.(persona, startedAt);
+        this.config.onAgentThinkingStart?.(persona, startedAt, invocation.userMessage);
         const response = await this.config.invokeAgent(invocation, persona);
         this.config.onAgentThinkingEnd?.(persona);
+        const callDuration = ((Date.now() - startedAt) / 1000).toFixed(1);
+        console.log(`[Orchestrator:Call] ${persona.name} (${context}) completed in ${callDuration}s — ${response.tokensUsed} tokens`);
+        // Attach context inspection to the response
+        response.structured = { ...response.structured, contextInspection: inspection };
         return response;
       } catch (error) {
         this.config.onAgentThinkingEnd?.(persona);
@@ -2397,6 +2490,7 @@ export class DeliberationOrchestrator {
     latencyMs: number,
     artifactRefs?: ArtifactRef[],
     roundNumber?: number,
+    structured?: Record<string, unknown>,
     referencedEntries?: string[],
     reviewOutcome?: 'accept' | 'revise' | 're_deliberate'
   ): LedgerEntry {
@@ -2417,6 +2511,7 @@ export class DeliberationOrchestrator {
       roundNumber,
       referencedEntries,
       reviewOutcome,
+      structured,
     };
 
     // Use ledgerStore.append to notify subscribers (enables real-time UI updates)

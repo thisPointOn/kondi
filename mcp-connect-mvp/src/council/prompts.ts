@@ -4,6 +4,7 @@
  */
 
 import type { Council, Persona, CouncilMessage, TurnContext, CouncilMode, LedgerEntry, ContextPatch } from './types';
+import type { CouncilStepType } from '../pipeline/types';
 
 /**
  * Get interaction instruction based on council mode and persona stance
@@ -337,7 +338,32 @@ export interface WorkerPermissions {
   directoryConstrained?: boolean;
 }
 
-export function getMinimalWorkerSystemPrompt(permissions?: WorkerPermissions, stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment'): string {
+export function getMinimalWorkerSystemPrompt(permissions?: WorkerPermissions, stepType?: CouncilStepType): string {
+  if (stepType === 'agent' || stepType === 'analysis') {
+    const saveNote = permissions?.workingDirectory
+      ? `\nIf you need to save output, you may write files to: ${permissions.workingDirectory}`
+      : '';
+    return `You are an execution agent. Your job is to PERFORM the task using your available tools — not to write code, not to plan, not to describe what should be done.
+
+You have MCP tools available to you. USE THEM DIRECTLY to accomplish the task.
+For example, if told to collect data from an API, call the API tools yourself and return the results.
+If told to search for information, use search tools yourself and return what you found.
+
+CRITICAL RULES:
+- DO NOT write code or scripts that would perform the task — perform it yourself using your tools
+- DO NOT create implementation plans, documentation, or mock data
+- DO NOT describe what tools you would use — actually call them
+- ACTUALLY EXECUTE the task and return the real results
+- If a tool call fails, report the error and try an alternative approach
+- Your response should contain the ACTUAL DATA or RESULTS from executing the task${saveNote}
+
+When DONE, end with:
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**What was done:** 1-3 sentence description of what you actually executed
+**Known issues:** [None | list any issues]`;
+  }
+
   if (permissions?.writePermissions) {
     const scopeNote = permissions.workingDirectory
       ? (permissions.directoryConstrained
@@ -349,7 +375,7 @@ You may write to any location on the system.`)
       : `You have WRITE PERMISSIONS to the file system.
 You may read and write files as needed.`;
 
-    if (stepType === 'review-docs') {
+    if (stepType === 'review') {
       return `You are the Worker agent — a documentation specialist. Your job is to review the codebase for quality and produce THREE documentation deliverables.
 
 ${scopeNote}
@@ -371,7 +397,7 @@ CRITICAL RULES:
 - When DONE, you MUST end with a ## COMPLETION SUMMARY section (status, files created, what was produced, known issues)`;
     }
 
-    if (stepType === 'enrichment') {
+    if (stepType === 'enrich') {
       return `You are the Worker agent — an innovation specialist. Your job is to research the codebase and market landscape, then brainstorm creative feature ideas that extend beyond the original spec.
 
 ${scopeNote}
@@ -393,7 +419,7 @@ CRITICAL RULES:
 - When DONE, you MUST end with a ## COMPLETION SUMMARY section (status, files created, what was produced, known issues)`;
     }
 
-    if (stepType === 'planning') {
+    if (stepType === 'code_planning') {
       return `You are the Worker agent — a planning specialist. Your job is to produce a DETAILED PLAN DOCUMENT, NOT code.
 
 ${scopeNote}
@@ -545,7 +571,7 @@ export function buildManagerDecisionPrompt(
   ledgerContext: string,
   decisionCriteria?: string[],
   expectedOutput?: string,
-  stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment'
+  stepType?: CouncilStepType
 ): string {
   const criteriaBlock = decisionCriteria?.length
     ? `\n---\n\nDECISION CRITERIA (evaluate against these):\n${decisionCriteria.map((c) => `- ${c}`).join('\n')}`
@@ -555,20 +581,20 @@ export function buildManagerDecisionPrompt(
     ? `\n---\n\nEXPECTED OUTPUT (the final deliverable MUST satisfy this):\n${expectedOutput}`
     : '';
 
-  const stepTypeNote = stepType === 'enrichment'
+  const stepTypeNote = stepType === 'enrich'
     ? `\n\nCRITICAL: This is an ENRICHMENT step. Your decision must direct the worker to produce a creative enrichment document that goes BEYOND the original spec. The worker should:
 1. Research the codebase thoroughly to understand what exists and what gaps/opportunities are present
 2. Analyze the market context — competitive landscape, user needs, and industry trends
 3. Brainstorm new features and enhancements with user value, feasibility, effort, and priority assessments
 4. Write a structured enrichment document to disk using file tools
 The worker must NOT modify any source code — only create the enrichment document.`
-    : stepType === 'review-docs'
+    : stepType === 'review'
     ? `\n\nCRITICAL: This is a REVIEW & DOCUMENTATION step. Your decision must direct the worker to produce THREE documentation artifacts:
 1. README.md — Project overview, setup, usage, and architecture summary
 2. docs/ folder — Detailed documentation files (API reference, architecture decisions, guides)
 3. review.md — Code quality review with spec adherence evaluation, issues found, and recommendations
 The worker must NOT modify any source code. The worker should read the codebase thoroughly, evaluate quality against the spec, then write all three documentation deliverables using file tools.`
-    : stepType === 'planning'
+    : stepType === 'code_planning'
     ? `\n\nCRITICAL: This is a PLANNING step. Your decision must direct the worker to produce a DETAILED PLAN DOCUMENT — NOT code or implementation. The worker output should be a comprehensive specification covering architecture, dependencies, step-by-step implementation instructions, data flows, edge cases, and acceptance criteria. Think of it as a product/engineering spec that another developer could follow to implement the feature without ambiguity. Do NOT ask the worker to write code, create files, or implement anything.`
     : '';
 
@@ -599,13 +625,13 @@ the strongest reasoning.`;
  */
 export function buildManagerForcedDecisionPrompt(
   ledgerContext: string,
-  stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment'
+  stepType?: CouncilStepType
 ): string {
-  const stepTypeNote = stepType === 'enrichment'
+  const stepTypeNote = stepType === 'enrich'
     ? `\n\nCRITICAL: This is an ENRICHMENT step. Your decision must direct the worker to research the codebase and market landscape, then produce a creative enrichment document with new feature ideas, feasibility assessments, and priorities. The worker must NOT modify source code.`
-    : stepType === 'review-docs'
+    : stepType === 'review'
     ? `\n\nCRITICAL: This is a REVIEW & DOCUMENTATION step. Your decision must direct the worker to produce three documentation artifacts: README.md, docs/ folder, and review.md. The worker must NOT modify source code.`
-    : stepType === 'planning'
+    : stepType === 'code_planning'
     ? `\n\nCRITICAL: This is a PLANNING step. Your decision must direct the worker to produce a DETAILED PLAN DOCUMENT — NOT code. The output should be a comprehensive specification, not implementation.`
     : '';
 
@@ -646,11 +672,11 @@ Keep the plan concrete and actionable.`;
 /**
  * Manager issues work directive - Section 9.6
  */
-export function buildWorkDirectivePrompt(decision: string, plan?: string, hasWritePermissions?: boolean, stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment'): string {
+export function buildWorkDirectivePrompt(decision: string, plan?: string, hasWritePermissions?: boolean, stepType?: CouncilStepType): string {
   const planSection = plan ? `\nPLAN:\n${plan}\n` : '';
 
   let outputNote = '';
-  if (stepType === 'enrichment') {
+  if (stepType === 'enrich') {
     outputNote = `\nCRITICAL: This is an ENRICHMENT step. The worker must produce a structured enrichment document that:
 1. Analyzes the existing codebase — architecture, patterns, gaps, and opportunities
 2. Researches market context — competitive landscape, user needs, industry trends
@@ -658,14 +684,14 @@ export function buildWorkDirectivePrompt(decision: string, plan?: string, hasWri
 4. Assesses each idea for: user value, technical feasibility, implementation effort, and priority
 The worker has file tools and MUST use them to write the enrichment document to disk (e.g., enrichment.md).
 The worker must NOT modify any source code files — only create the enrichment document.\n`;
-  } else if (stepType === 'review-docs') {
+  } else if (stepType === 'review') {
     outputNote = `\nCRITICAL: This is a REVIEW & DOCUMENTATION step. The worker must produce exactly THREE deliverables:
 1. README.md — Project overview, setup instructions, usage guide, architecture summary
 2. docs/ folder — Detailed documentation (API reference, architecture decisions, guides)
 3. review.md — Code quality review: spec adherence, issues found, recommendations
 The worker has file tools and MUST use them to write these files to disk.
 The worker must NOT modify any source code files — only create documentation.\n`;
-  } else if (stepType === 'planning') {
+  } else if (stepType === 'code_planning') {
     outputNote = `\nCRITICAL: This is a PLANNING step. The worker must produce a DETAILED PLAN — NOT code.
 The output should be a structured, actionable plan document with:
 - Clear steps and phases
@@ -717,7 +743,7 @@ export function buildManagerReviewPrompt(
   acceptanceCriteria?: string,
   expectedOutput?: string,
   hasWritePermissions?: boolean,
-  stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment',
+  stepType?: CouncilStepType,
   consultantReviews?: string,
 ): string {
   const criteriaSection = acceptanceCriteria
@@ -728,7 +754,7 @@ export function buildManagerReviewPrompt(
     ? `\nEXPECTED OUTPUT (the deliverable MUST match this):\n${expectedOutput}\n`
     : '';
 
-  const implementationNote = stepType === 'enrichment'
+  const implementationNote = stepType === 'enrich'
     ? `\nNOTE: This is an ENRICHMENT step. The worker was expected to produce an enrichment document covering:
 1. Codebase analysis — existing architecture, patterns, gaps, and opportunities
 2. Market research — competitive landscape, user needs, industry trends
@@ -737,14 +763,14 @@ export function buildManagerReviewPrompt(
 Verify the enrichment document was created via file-writing tool calls and covers all four areas.
 The worker must NOT have modified any source code files.
 If the document is missing areas or lacks depth, use REVISE with specific instructions on what to expand.\n`
-    : stepType === 'review-docs'
+    : stepType === 'review'
     ? `\nNOTE: This is a REVIEW & DOCUMENTATION step. The worker was expected to produce THREE documentation artifacts:
 1. README.md — Project overview, setup, usage, architecture
 2. docs/ folder — Detailed documentation files
 3. review.md — Code quality review and recommendations
 Verify that ALL THREE artifacts were created via file-writing tool calls. The worker must NOT have modified any source code files.
 If any artifact is missing or incomplete, use REVISE with specific instructions on what to add.\n`
-    : stepType === 'planning'
+    : stepType === 'code_planning'
     ? `\nNOTE: This is a PLANNING step. The worker was expected to produce a detailed PLAN document,
 NOT code or implementation. Evaluate whether the plan is thorough, actionable, and covers all requirements.
 The plan MUST include a ## STRUCTURED SPEC section with a JSON code block containing: features (name,
@@ -960,9 +986,27 @@ Be concise — 3-5 sentences max. Focus on actionable feedback, not style prefer
 /**
  * Worker execution - Section 9.7
  */
-export function buildWorkerExecutionPrompt(directive: string, permissions?: WorkerPermissions, stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment'): string {
+export function buildWorkerExecutionPrompt(directive: string, permissions?: WorkerPermissions, stepType?: CouncilStepType): string {
+  if (stepType === 'agent' || stepType === 'analysis') {
+    const saveNote = permissions?.writePermissions && permissions?.workingDirectory
+      ? `\nIf you need to save output to a file, use write_file to save to: ${permissions.workingDirectory}`
+      : '';
+    return `TASK:
+${directive}
+
+---
+EXECUTE THIS TASK NOW using your available tools. Do NOT write code, scripts, or plans.
+Call the tools directly to perform the work and return the actual results.${saveNote}
+
+When DONE, end with:
+## COMPLETION SUMMARY
+**Status:** [Complete | Partial — explain what's missing]
+**What was done:** 1-3 sentence description of what you actually executed
+**Known issues:** [None | list any issues]`;
+  }
+
   if (permissions?.writePermissions) {
-    if (stepType === 'enrichment') {
+    if (stepType === 'enrich') {
       return `DIRECTIVE:
 ${directive}
 
@@ -1006,7 +1050,7 @@ in EXACTLY this format:
 **Known issues:** [None | list any issues]`;
     }
 
-    if (stepType === 'review-docs') {
+    if (stepType === 'review') {
       return `DIRECTIVE:
 ${directive}
 
@@ -1046,7 +1090,7 @@ in EXACTLY this format:
 This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT skip it.`;
     }
 
-    if (stepType === 'planning') {
+    if (stepType === 'code_planning') {
       return `DIRECTIVE:
 ${directive}
 
@@ -1169,10 +1213,10 @@ export function buildWorkerRevisionPrompt(
   previousOutput: string,
   feedback: string,
   permissions?: WorkerPermissions,
-  stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment',
+  stepType?: CouncilStepType,
 ): string {
   if (permissions?.writePermissions) {
-    if (stepType === 'enrichment') {
+    if (stepType === 'enrich') {
       return `DIRECTIVE:
 ${directive}
 
@@ -1203,7 +1247,7 @@ in EXACTLY this format:
 **Known issues:** [None | list any issues]`;
     }
 
-    if (stepType === 'review-docs') {
+    if (stepType === 'review') {
       return `DIRECTIVE:
 ${directive}
 
@@ -1237,7 +1281,7 @@ in EXACTLY this format:
 This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT skip it.`;
     }
 
-    if (stepType === 'planning') {
+    if (stepType === 'code_planning') {
       return `DIRECTIVE:
 ${directive}
 
