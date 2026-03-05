@@ -395,22 +395,36 @@ function defaultCodePlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAI
 }
 
 function defaultAnalysisConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
-  const m = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
+  const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
+  const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'analysis',
     councilSetup: {
       name: 'Analysis',
-      personas: [{
-        name: 'Analyst',
-        role: 'manager',
-        model: m.model,
-        provider: m.provider,
-        avatar: '\uD83E\uDD14',
-        color: '#6366f1',
-        systemPrompt: 'You are a decision-making agent. Analyze the input, weigh the options, and provide a clear decision with rationale. Structure your response as: Decision, Rationale, Risks, and Next Steps.',
-        suppressPersona: true,
-        traits: ['analytical', 'decisive'],
-      }],
+      personas: [
+        {
+          name: 'Analyst',
+          role: 'manager',
+          model: manager.model,
+          provider: manager.provider,
+          avatar: '\uD83E\uDD14',
+          color: '#6366f1',
+          systemPrompt: 'You are a decision-making agent. Analyze the input, weigh the options, and provide a clear decision with rationale. Structure your response as: Decision, Rationale, Risks, and Next Steps.',
+          suppressPersona: true,
+          traits: ['analytical', 'decisive'],
+        },
+        {
+          name: 'Executor',
+          role: 'worker',
+          model: worker.model,
+          provider: worker.provider,
+          avatar: '\uD83E\uDD16',
+          color: '#f59e0b',
+          suppressPersona: true,
+          traits: ['thorough', 'detail-oriented'],
+          saveOutput: true,
+        },
+      ],
       maxRounds: 0,
       maxRevisions: 0,
     },

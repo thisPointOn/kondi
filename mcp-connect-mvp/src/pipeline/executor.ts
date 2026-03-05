@@ -608,9 +608,17 @@ export class PipelineExecutor {
 
     if (config.type === 'analysis') {
       const decision = getDecision(council.id);
-      content = decision?.content || 'No decision was made.';
-      artifactType = 'decision';
-      metadata.decisionId = decision?.id;
+      if (decision?.content) {
+        content = decision.content;
+        artifactType = 'decision';
+        metadata.decisionId = decision.id;
+      } else {
+        // Lightweight analysis goes through runDirectExecution → worker output
+        const output = getLatestOutput(council.id);
+        content = output?.content || 'No decision or output was produced.';
+        artifactType = 'output';
+        metadata.outputId = output?.id;
+      }
     } else {
       const output = getLatestOutput(council.id);
       content = output?.content || 'No output was produced.';
