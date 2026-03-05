@@ -593,7 +593,17 @@ export default function StepConfigPanel({
 
   const handleTypeChange = (newType: PipelineStepType) => {
     if (newType === step.config.type) return;
-    onConfigUpdate(getDefaultConfigForType(newType, configuredProviders));
+    const newConfig = getDefaultConfigForType(newType, configuredProviders);
+    // Preserve user-customized fields when switching between council types
+    const old = step.config as CouncilStepConfig;
+    if (isCouncilType(step.config.type) && isCouncilType(newType) && 'councilSetup' in newConfig) {
+      const nc = newConfig as CouncilStepConfig;
+      if (old.task) nc.task = old.task;
+      if (old.inputTemplate && old.inputTemplate !== '{{input}}') nc.inputTemplate = old.inputTemplate;
+      if (old.outputType && old.outputType !== 'string') nc.outputType = old.outputType;
+      if (old.includePipelineInput) nc.includePipelineInput = old.includePipelineInput;
+    }
+    onConfigUpdate(newConfig);
   };
 
   const handleNameBlur = () => {
