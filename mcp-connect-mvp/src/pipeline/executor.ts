@@ -29,6 +29,8 @@ import { stripCompletedCouncil } from '../council/storage-cleanup';
 import { buildAbbreviatedSummary } from '../services/deliberationSummary';
 import type { Persona } from '../council/types';
 import type { AgentInvocation, AgentResponse } from '../council/deliberation-orchestrator';
+import type { MCPTool } from '../types/mcp';
+import { verifyRequiredTools } from '../utils/filterTools';
 
 // ============================================================================
 // Callback Types
@@ -37,6 +39,9 @@ import type { AgentInvocation, AgentResponse } from '../council/deliberation-orc
 export interface PipelineExecutorCallbacks {
   /** Same invokeAgent used by DeliberationOrchestrator */
   invokeAgent: (invocation: AgentInvocation, persona: Persona) => Promise<AgentResponse>;
+
+  /** Returns all currently available MCP tools (for pre-flight tool checks) */
+  getAvailableTools?: () => Map<string, { serverId: string; tools: MCPTool[] }>;
 
   onStageStart?: (stageIndex: number) => void;
   onStageComplete?: (stageIndex: number) => void;
@@ -126,6 +131,9 @@ function renderInputTemplate(
   template: string,
   previousArtifacts: StepArtifact[]
 ): string {
+  // "none" means no input from previous steps — step only sees its task
+  if (template === 'none') return '';
+
   if (!template || template === '{{input}}') {
     return previousArtifacts.map((a) => formatArtifactForInput(a)).join('\n\n---\n\n');
   }
@@ -425,9 +433,9 @@ export class PipelineExecutor {
       if (step.config.type === 'gate') {
         artifact = await this.runGateStep(pipelineId, step);
       } else if (step.config.type === 'script') {
-        artifact = await this.runScriptStep(step, previousArtifacts);
+        artifact = await this.runScriptStep(pipelineId, step, previousArtifacts);
       } else if (step.config.type === 'condition') {
-        artifact = await this.runConditionStep(step, previousArtifacts);
+        artifact = await this.runConditionStep(pipelineId, step, previousArtifacts);
       } else {
         // Convert LLM steps (decisioning/execution) to lightweight council configs
         const councilStep = this.normalizeToCouncilStep(step);
@@ -490,11 +498,22 @@ export class PipelineExecutor {
   ): Promise<StepArtifact> {
     const config = step.config as CouncilStepConfig;
 
-    // Build the problem: task (instructions) + input (context from previous steps)
+    // Build the problem: task (instructions) + pipeline input (optional) + input (context from previous steps)
     const inputContext = renderInputTemplate(config.inputTemplate, previousArtifacts);
-    const rawProblem = config.task
-      ? `${config.task}\n\n---\n\nInput:\n${inputContext}`
-      : inputContext;
+    const pipelineInput = config.includePipelineInput
+      ? pipelineStore.get(pipelineId)?.initialInput || ''
+      : '';
+    const parts = [config.task, pipelineInput, inputContext].filter(Boolean);
+    const rawProblem = parts.join('\n\n---\n\n');
+
+    // Pre-flight: verify MCP tools referenced in step prompts are actually available
+    if (this.callbacks.getAvailableTools) {
+      const promptText = [
+        config.task || '',
+        ...config.councilSetup.personas.map(p => p.systemPrompt || ''),
+      ].join('\n');
+      verifyRequiredTools(this.callbacks.getAvailableTools(), promptText, step.name);
+    }
 
     // Resolve effective working directory with inheritance (default: constrained)
     const isConstrained = pipelineSettings.directoryConstrained !== false;
@@ -639,6 +658,7 @@ export class PipelineExecutor {
   // --------------------------------------------------------------------------
 
   private async runScriptStep(
+    pipelineId: string,
     step: PipelineStep,
     previousArtifacts: StepArtifact[]
   ): Promise<StepArtifact> {
@@ -654,7 +674,11 @@ export class PipelineExecutor {
 
     // Render input from previous steps and export as $KONDI_INPUT env var.
     // The input is shell-escaped and passed via env var to avoid injection.
-    const inputContext = renderInputTemplate(config.inputTemplate, previousArtifacts);
+    const stepInput = renderInputTemplate(config.inputTemplate, previousArtifacts);
+    const pipelineInput = config.includePipelineInput
+      ? pipelineStore.get(pipelineId)?.initialInput || ''
+      : '';
+    const inputContext = [pipelineInput, stepInput].filter(Boolean).join('\n\n---\n\n');
     const escaped = inputContext.replace(/'/g, "'\\''");
     const command = `export KONDI_INPUT='${escaped}'\n${config.command}`;
 
@@ -684,6 +708,7 @@ export class PipelineExecutor {
   // --------------------------------------------------------------------------
 
   private async runConditionStep(
+    pipelineId: string,
     step: PipelineStep,
     previousArtifacts: StepArtifact[]
   ): Promise<StepArtifact> {
@@ -693,7 +718,11 @@ export class PipelineExecutor {
       throw new Error('Condition step has no expression configured');
     }
 
-    const inputContext = renderInputTemplate(config.inputTemplate, previousArtifacts);
+    const stepInput = renderInputTemplate(config.inputTemplate, previousArtifacts);
+    const pipelineInput = config.includePipelineInput
+      ? pipelineStore.get(pipelineId)?.initialInput || ''
+      : '';
+    const inputContext = [pipelineInput, stepInput].filter(Boolean).join('\n\n---\n\n');
 
     // Evaluate the condition
     let matches = false;

@@ -81,6 +81,7 @@ function InputSourcePicker({
 
   // Detect current mode from template value
   const detectMode = (template: string): string => {
+    if (template === 'none') return 'none';
     if (!template || template === '{{input}}') return 'all';
     const match = template.match(/^\{\{input\[(\d+)\]\}\}$/);
     if (match && hasStepOptions) {
@@ -104,7 +105,9 @@ function InputSourcePicker({
 
   const handleModeChange = (newMode: string) => {
     setMode(newMode);
-    if (newMode === 'all') {
+    if (newMode === 'none') {
+      onChange('none');
+    } else if (newMode === 'all') {
       onChange('{{input}}');
     } else if (newMode.startsWith('step-')) {
       const idx = newMode.replace('step-', '');
@@ -125,6 +128,7 @@ function InputSourcePicker({
         value={mode}
         onChange={(e) => handleModeChange(e.target.value)}
       >
+        <option value="none">None (task only, no input from other steps)</option>
         <option value="all">{allLabel}</option>
         {hasStepOptions && availableInputSteps!.map((entry) => (
           <option key={entry.step.id} value={`step-${entry.artifactIndex}`}>
@@ -1050,6 +1054,17 @@ function CouncilConfig({
           availableInputSteps={availableInputSteps}
         />
         <div className="config-field">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={config.includePipelineInput || false}
+              onChange={(e) => update({ includePipelineInput: e.target.checked })}
+            />
+            Include pipeline initial input
+          </label>
+          <span className="hint">Also passes the pipeline&rsquo;s initial input as context, in addition to the selected input source above</span>
+        </div>
+        <div className="config-field">
           <label>Output Type</label>
           <select
             value={config.outputType || 'string'}
@@ -1200,6 +1215,17 @@ function ScriptConfig({
           availableInputSteps={availableInputSteps}
         />
         <div className="config-field">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={config.includePipelineInput || false}
+              onChange={(e) => update({ includePipelineInput: e.target.checked })}
+            />
+            Include pipeline initial input
+          </label>
+          <span className="hint">Also passes the pipeline&rsquo;s initial input as context via <code>$KONDI_INPUT</code></span>
+        </div>
+        <div className="config-field">
           <label>Output Type</label>
           <select
             value={config.outputType || 'string'}
@@ -1293,6 +1319,17 @@ function ConditionConfig({
           onChange={(v) => update({ inputTemplate: v })}
           availableInputSteps={availableInputSteps}
         />
+        <div className="config-field">
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={config.includePipelineInput || false}
+              onChange={(e) => update({ includePipelineInput: e.target.checked })}
+            />
+            Include pipeline initial input
+          </label>
+          <span className="hint">Also passes the pipeline&rsquo;s initial input as context for condition evaluation</span>
+        </div>
       </div>
     </>
   );

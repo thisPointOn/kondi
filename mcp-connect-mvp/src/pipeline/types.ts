@@ -7,7 +7,13 @@
 // Step & Pipeline Status
 // ============================================================================
 
-export type PipelineStepType = 'planning' | 'decisioning' | 'execution' | 'coding' | 'review-docs' | 'enrichment' | 'gate' | 'script' | 'condition';
+/** All pipeline step types. Gate, script, and condition are non-council types. */
+export const PIPELINE_STEP_TYPES = ['planning', 'decisioning', 'execution', 'coding', 'review-docs', 'enrichment', 'gate', 'script', 'condition'] as const;
+export type PipelineStepType = (typeof PIPELINE_STEP_TYPES)[number];
+
+/** Council-based step types (excludes gate, script, condition). */
+export const COUNCIL_STEP_TYPES = ['planning', 'decisioning', 'execution', 'coding', 'review-docs', 'enrichment'] as const;
+export type CouncilStepType = (typeof COUNCIL_STEP_TYPES)[number];
 
 /** What kind of data a step produces for downstream consumption */
 export type OutputType = 'string' | 'file' | 'directory' | 'json';
@@ -85,7 +91,7 @@ export interface PipelinePersona {
 // ============================================================================
 
 export interface CouncilStepConfig {
-  type: 'planning' | 'coding' | 'review-docs' | 'enrichment' | 'decisioning' | 'execution';
+  type: CouncilStepType;
   councilSetup: {
     name: string;
     personas: PipelinePersona[];
@@ -108,6 +114,8 @@ export interface CouncilStepConfig {
   inputTemplate: string;
   /** What kind of data this step produces (default: 'string') */
   outputType?: OutputType;
+  /** Include pipeline's initial input as additional context, regardless of stage */
+  includePipelineInput?: boolean;
 }
 
 export interface LlmStepConfig {
@@ -135,6 +143,8 @@ export interface ScriptStepConfig {
   inputTemplate: string;
   /** What kind of data this step produces (default: 'string') */
   outputType?: OutputType;
+  /** Include pipeline's initial input as additional context, regardless of stage */
+  includePipelineInput?: boolean;
 }
 
 export type ConditionMode = 'contains' | 'regex' | 'equals';
@@ -152,6 +162,8 @@ export interface ConditionStepConfig {
   trueAction: ConditionAction;
   /** Action when expression does not match */
   falseAction: ConditionAction;
+  /** Include pipeline's initial input as additional context, regardless of stage */
+  includePipelineInput?: boolean;
 }
 
 export type StepConfig = CouncilStepConfig | LlmStepConfig | GateStepConfig | ScriptStepConfig | ConditionStepConfig;
