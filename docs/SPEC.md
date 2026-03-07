@@ -3,7 +3,7 @@
 > Machine-readable living spec. Single source of truth for current types, defaults, keys, and flags.
 > For architectural rationale and deep "why" explanations, see `ARCHITECTURE.md`.
 >
-> **Last updated:** 2026-02-28
+> **Last updated:** 2026-03-06
 
 ---
 
@@ -29,7 +29,7 @@ mcp-connect-mvp/
     pipeline/
       types.ts                   # PipelineStepType, step configs, Pipeline schema
       executor.ts                # PipelineExecutor — stage/step dispatch, artifact flow
-      store.ts                   # Pipeline localStorage store (key: mcp-pipelines, version 3)
+      store.ts                   # Pipeline localStorage store (key: mcp-pipelines, version 5)
       output-parsers.ts          # isOpenAIModel(), stream-json parsing
     council/
       types.ts                   # Phases, entry types, roles, modes, artifacts
@@ -139,7 +139,7 @@ Additional entry types: `decomposition`, `module_directive`, `module_output`, `c
 | `coding` | Coding | Manager + Worker + Reviewer | Code files | Worker saves `_code.md`, has testCommand, maxDebugCycles |
 | `review` | Deliberation | Manager + Consultant(s) + Worker | Review document | Worker saves `_review.md` |
 | `enrich` | Deliberation | Manager + Consultant(s) + Worker | Enriched content | Worker saves `_enrichment.md` |
-| `analysis` | Deliberation (lightweight) | Single Manager persona | Decision artifact | 0 rounds, 0 revisions, suppressPersona=true |
+| `analysis` | Deliberation (lightweight) | Manager + Worker personas | Decision or output artifact | 0 rounds, 0 revisions, suppressPersona=true |
 | `agent` | Deliberation (lightweight) | Single Worker persona | Output artifact | 0 rounds, 0 revisions, suppressPersona=true |
 | `gate` | None | None | Approval | Pauses for user confirmation |
 | `script` | None | None | stdout | Runs a shell command, captures stdout as artifact |
@@ -228,7 +228,7 @@ When a condition step triggers `skip_next_stage`, the executor skips the immedia
 
 ### 5b. Pipeline Store Schema
 
-Key: `mcp-pipelines` — version 3.
+Key: `mcp-pipelines` — version 5.
 
 Step configs: `CouncilStepConfig | LlmStepConfig | GateStepConfig | ScriptStepConfig | ConditionStepConfig`
 
@@ -312,7 +312,7 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 
 | Key Pattern | Store | Contents |
 |-------------|-------|----------|
-| `mcp-pipelines` | pipeline/store.ts | Pipeline[] (version 3) |
+| `mcp-pipelines` | pipeline/store.ts | Pipeline[] (version 5) |
 | `mcp-councils` | council/store.ts | Council[] |
 | `mcp-servers` | hooks/useServers.ts | Server configs |
 | `mcp-api-keys` | hooks/useProviderConfig.ts | Encrypted API keys |

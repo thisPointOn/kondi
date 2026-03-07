@@ -622,10 +622,15 @@ A pipeline consists of **stages**, and each stage contains **steps**. Stages run
 
 | Type | What It Does |
 |------|-------------|
-| **planning** | Full deliberation council — research, analyze, decide |
+| **council** | Open deliberation council — full tools, general output |
+| **code_planning** | Planning council — PLAN_TOOLS only, produces plan documents |
 | **coding** | Coding orchestrator — implement, review, test, debug |
-| **decisioning** | Single LLM call for reasoning/analysis |
-| **execution** | Single LLM call for action/writing |
+| **analysis** | Lightweight analysis — manager + worker, 0 rounds |
+| **agent** | Lightweight agent — single worker execution |
+| **review** | Review & documentation — code review + doc generation |
+| **enrich** | Enrichment — research, brainstorm, prioritize features |
+| **script** | Runs a shell command, captures stdout as artifact |
+| **condition** | Evaluates expression against input — can skip stages or stop |
 | **gate** | Pauses for human approval before continuing |
 
 ### Building a Pipeline
@@ -635,11 +640,13 @@ A pipeline consists of **stages**, and each stage contains **steps**. Stages run
 3. The pipeline builder opens with a visual editor.
 4. **Add stages** — sequential phases of the workflow.
 5. **Add steps** within each stage:
-   - For council steps: configure personas, models, rounds, decision criteria
-   - For LLM steps: choose a model, write a system prompt
+   - For council steps (council, code_planning, coding, review, enrich): configure personas, models, rounds, decision criteria
+   - For lightweight steps (analysis, agent): choose a model and write a system prompt
+   - For script steps: write a shell command
+   - For condition steps: set an expression, mode, and actions
    - For gates: write an approval prompt
 6. **Configure input templates** — how each step receives context from previous steps.
-7. **Set output types** — string, file, or directory.
+7. **Set output types** — string, file, directory, or json.
 8. **Save** the pipeline.
 
 ### Artifact Flow
@@ -649,11 +656,13 @@ Steps produce **artifacts** — the output of each step. Artifacts flow to downs
 - `{{input}}` — all previous artifacts, joined with provenance headers
 - `{{input[0]}}` — the first previous artifact
 - `{{input[1]}}` — the second previous artifact
+- `{{input.fieldName}}` — access a JSON field (when output type is `json`)
+- `{{input[N].fieldName}}` — JSON field from a specific artifact
 
 Provenance headers tell downstream steps where each artifact came from:
 
 ```
-[Source: Research Council (planning)]
+[Source: Architecture Plan (code_planning)]
 [Output type: string]
 The council recommended approach A because...
 ```
@@ -682,10 +691,10 @@ Approving continues the pipeline. Rejecting marks the pipeline as failed.
 ### Example Pipeline: Feature Development
 
 ```
-Stage 1: Research
-  - Step: "Research Council" (planning)
-    Personas: Pragmatist, Security Hawk, Customer Voice
-    Task: Analyze the feature request and recommend an approach
+Stage 1: Planning
+  - Step: "Architecture Plan" (code_planning)
+    Personas: Planning Lead, Domain Expert, Plan Author
+    Task: Analyze the feature request and produce a detailed implementation plan
 
 Stage 2: Approval
   - Step: "Architecture Gate" (gate)
@@ -693,12 +702,12 @@ Stage 2: Approval
 
 Stage 3: Implementation
   - Step: "Coding" (coding)
-    Personas: Manager, Worker, Reviewer
-    Task: Implement the approved approach
+    Personas: Tech Lead, Developer, Code Reviewer
+    Task: Implement the approved plan
 
 Stage 4: Final Review
-  - Step: "Review Council" (planning)
-    Personas: Security Hawk, Performance Nerd
+  - Step: "Security Review" (review)
+    Personas: Code Reviewer, Domain Expert, Documentation Writer
     Task: Review the implementation for security and performance issues
 ```
 
@@ -784,13 +793,15 @@ Accessible from **LLM Providers** in the sidebar (see [Section 2](#2-configuring
 
 ### Data Storage
 
+All council, pipeline, ledger, and context data routes through an in-memory `CouncilDataStore` (unlimited size). Browser `localStorage` is used only as a best-effort cache — quota errors are silently ignored. No deliberation data is ever destroyed during a session.
+
 | Data | Location |
 |------|----------|
 | Chat history | Tauri app data directory (primary), localStorage (backup) |
-| Council state | localStorage (`kondi-councils-*`) |
-| Pipeline definitions | localStorage (`kondi-pipelines`) |
-| Ledger entries | localStorage (`kondi-ledger-*`) |
-| Context artifacts | localStorage (`kondi-context-*`) |
+| Council state | In-memory CouncilDataStore + localStorage cache (`mcp-councils`) |
+| Pipeline definitions | In-memory CouncilDataStore + localStorage cache (`mcp-pipelines`, version 5) |
+| Ledger entries | In-memory CouncilDataStore + localStorage cache (`kondi-ledger-*`) |
+| Context artifacts | In-memory CouncilDataStore + localStorage cache (`kondi-context-*`) |
 | Per-chat working dirs | localStorage (`kondi-chat-working-dirs`) |
 | Provider config | localStorage (`kondi-provider-*`) |
 | OAuth tokens | `~/.local/share/kondi/proxies/{id}.json` |
@@ -798,12 +809,7 @@ Accessible from **LLM Providers** in the sidebar (see [Section 2](#2-configuring
 
 ### Quota Recovery
 
-If localStorage approaches its ~5 MB limit during multi-council sessions, Kondi automatically:
-1. Cleans up old council artifacts
-2. Trims ledger entries
-3. Retries the failed operation
-
-This prevents "quota exceeded" crashes without losing active data.
+The in-memory `CouncilDataStore` prevents localStorage's ~5 MB limit from crashing pipelines. After each pipeline step completes, `stripCompletedCouncil()` trims only the localStorage copy of council metadata to keep the cache small. The authoritative data remains accessible in memory for the rest of the session.
 
 ---
 

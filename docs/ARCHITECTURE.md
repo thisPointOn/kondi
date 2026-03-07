@@ -399,22 +399,25 @@ interface PipelineStage {
 interface PipelineStep {
   id: string;
   name: string;
-  type: 'planning' | 'coding' | 'decisioning' | 'execution' | 'gate';
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'waiting_approval';
-  config: StepConfig;
-  artifacts: StepArtifact[];
+  config: StepConfig;  // StepConfig.type determines the step type
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'waiting_approval' | 'skipped';
+  artifact?: StepArtifact;
 }
+
+// Step types: 'council' | 'code_planning' | 'analysis' | 'agent' | 'coding' | 'review' | 'enrich' | 'gate' | 'script' | 'condition'
 
 interface StepArtifact {
   stepId: string;
   content: string;
   artifactType: 'decision' | 'output' | 'llm_response' | 'approval';
-  metadata: {
-    outputType: 'string' | 'file' | 'directory';
+  metadata?: {
+    outputType?: 'string' | 'file' | 'directory' | 'json';
     outputPath?: string;
     councilId?: string;
     model?: string;
     tokensUsed?: number;
+    stepName?: string;
+    stepType?: string;
   };
 }
 ```
@@ -425,12 +428,17 @@ interface StepArtifact {
 PipelineExecutor.run(pipeline):
   for each stage (sequential):
     for each step in stage (parallel where independent):
-      switch step.type:
-        'planning':  create council, run deliberation orchestrator
-        'coding':    create council, run coding orchestrator
-        'decisioning': single LLM call with input template
-        'execution':   single LLM call with input template
-        'gate':        pause, wait for human approval
+      switch step.config.type:
+        'council':       create council, run deliberation orchestrator (full tools)
+        'code_planning': create council, run deliberation orchestrator (PLAN_TOOLS)
+        'coding':        create council, run coding orchestrator
+        'review':        create council, run deliberation orchestrator
+        'enrich':        create council, run deliberation orchestrator
+        'analysis':      create council, run deliberation orchestrator (lightweight)
+        'agent':         create council, run deliberation orchestrator (lightweight)
+        'gate':          pause, wait for human approval
+        'script':        run shell command, capture stdout
+        'condition':     evaluate expression, skip/stop/continue
 
       store artifact with provenance
       render input template for downstream steps
@@ -464,33 +472,34 @@ Provenance header format:
 
 ## 8. Storage Architecture
 
+### CouncilDataStore (`council/storage-cleanup.ts`)
+
+All council, pipeline, ledger, and context data routes through `CouncilDataStore` — an in-memory `Map<string,string>` with no size limit. Browser `localStorage` is used only as a best-effort cache; quota errors are silently ignored. The CLI uses the same pattern via `localStorage-shim.ts`.
+
+- `getItem(key)`: checks in-memory Map first, falls back to localStorage (promotes to Map on hit)
+- `setItem(key, value)`: always succeeds in Map; localStorage write is try/catch silenced
+- `setItemPersistent(key, value)`: same as setItem but ensures localStorage write for data that must survive restarts (pipeline configs)
+- `removeItem(key)`: removes from both Map and localStorage
+
+**Stores using `councilDataStore`**: `context-store.ts`, `ledger-store.ts`, `council/store.ts`, `pipeline/store.ts`, `session-import.ts`.
+
 ### Primary Stores
 
 | Store | Backend | Key Pattern | Notes |
 |-------|---------|-------------|-------|
 | Chat history | Tauri file + localStorage | `mcp-chats` | Tauri primary, localStorage backup |
-| Council definitions | localStorage | `kondi-councils-v2` | JSON array of council objects |
-| Ledger entries | localStorage | `kondi-ledger-{councilId}` | Append-only, per-council |
-| Context artifacts | localStorage | `kondi-context-{councilId}` | Versioned, per-council |
-| Pipeline definitions | localStorage | `kondi-pipelines` | JSON array of pipeline objects |
+| Council definitions | CouncilDataStore | `mcp-councils` | JSON array of council objects |
+| Ledger entries | CouncilDataStore | `kondi-ledger-{councilId}` | Append-only, per-council, chunked |
+| Context artifacts | CouncilDataStore | `kondi-context-{councilId}` | Versioned, per-council |
+| Pipeline definitions | CouncilDataStore (persistent) | `mcp-pipelines` (version 5) | JSON array of pipeline objects |
 | Provider config | localStorage | `kondi-provider-*` | Keys, models, defaults |
 | Chat working dirs | localStorage | `kondi-chat-working-dirs` | JSON object: chatId -> path |
 | MCP servers | localStorage | (MCPClient internal) | Server configs with metadata |
 | OAuth tokens | Filesystem | `~/.local/share/kondi/proxies/{id}.json` | Per-proxy config files |
 
-### Quota Recovery
+### Quota Management
 
-localStorage has a ~5 MB limit. When a write fails with `QuotaExceededError`:
-
-```
-1. Identify the store that failed (context-store, ledger-store, or council store)
-2. Find old council IDs (not in active use)
-3. Delete their artifacts and ledger entries
-4. Retry the write
-5. If still failing, trim more aggressively
-```
-
-This happens transparently — the user sees no error.
+The in-memory CouncilDataStore prevents localStorage's ~5 MB limit from crashing pipelines. After each pipeline step completes, `stripCompletedCouncil(councilId)` trims only the localStorage copy of the `mcp-councils` entry. The authoritative data (ledger, context, decisions) remains in memory for the rest of the session. No deliberation data is ever destroyed.
 
 ### Chat Persistence
 
