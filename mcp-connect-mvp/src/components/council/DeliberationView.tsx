@@ -25,8 +25,15 @@ import ArtifactPanel from './ArtifactPanel';
 import AddPersonaModal from './AddPersonaModal';
 import { acceptPatch, rejectPatch } from '../../council/context-store';
 import { buildAbbreviatedSummary, saveDeliberationOutput } from '../../services/deliberationSaveService';
-import type { PresetPersona } from '../../council/types';
+import type { PresetPersona, DeliberationPhase } from '../../council/types';
 import './DeliberationView.css';
+
+/** Phases where Force Decision makes sense */
+const FORCE_DECISION_PHASES: Set<DeliberationPhase> = new Set([
+  'round_independent',
+  'round_interactive',
+  'round_waiting_for_manager',
+]);
 
 interface DeliberationViewProps {
   councilId: string;
@@ -320,6 +327,8 @@ export default function DeliberationView({
 
   const lastResponder = getLastResponder();
   const isPaused = council?.deliberationState?.currentPhase === 'paused';
+  const isTerminal = ['completed', 'cancelled', 'failed', 'created'].includes(currentPhase);
+  const isRunning = !isPaused && !isTerminal;
 
   // Handle user message during pause
   const handlePausedUserMessage = async () => {
@@ -525,6 +534,49 @@ export default function DeliberationView({
           </div>
         </div>
         <div className="deliberation-header-right">
+          {/* Deliberation controls — inline in header */}
+          {isRunning && (
+            <>
+              {FORCE_DECISION_PHASES.has(currentPhase) && (
+                <button
+                  className="header-control-btn force-btn"
+                  onClick={() => {
+                    setIsGenerating(true);
+                    onForceDecision?.(council).finally(() => setIsGenerating(false));
+                  }}
+                  disabled={isGenerating}
+                  title="Skip remaining rounds and force a decision"
+                >
+                  Force Decision
+                </button>
+              )}
+              <button
+                className="header-control-btn pause-btn"
+                onClick={() => onPause?.(council)}
+                title="Pause deliberation after current step completes"
+              >
+                Pause
+              </button>
+            </>
+          )}
+          {isPaused && (
+            <>
+              <button
+                className="header-control-btn resume-btn"
+                onClick={() => onResume?.(council)}
+                disabled={isGenerating}
+              >
+                Resume
+              </button>
+              <button
+                className="header-control-btn abort-btn"
+                onClick={() => onAbort?.(council)}
+                disabled={isGenerating}
+              >
+                Abort
+              </button>
+            </>
+          )}
           <span className="deliberation-mode">Deliberation Mode</span>
           <button
             className="deliberation-artifacts-btn"
