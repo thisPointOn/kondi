@@ -40,16 +40,17 @@ interface PipelineExecutionViewProps {
 
 function getStepIcon(type: string): string {
   switch (type) {
-    case 'planning': return '\uD83D\uDCCB';
-    case 'decisioning': return '\uD83E\uDD14';
-    case 'execution': return '\uD83E\uDD16';
+    case 'council': return '\uD83C\uDFDB\uFE0F';
+    case 'code_planning': return '\uD83D\uDCCB';
+    case 'analysis': return '\uD83E\uDD14';
+    case 'agent': return '\uD83E\uDD16';
     case 'coding': return '\uD83D\uDCBB';
-    case 'review-docs': return '\uD83D\uDCDD';
-    case 'enrichment': return '\uD83D\uDCA1';
+    case 'review': return '\uD83D\uDCDD';
+    case 'enrich': return '\uD83D\uDCA1';
     case 'gate': return '\uD83D\uDEA7';
     case 'script': return '\u26A1';
     case 'condition': return '\uD83D\uDD00';
-    default: return '\u2753';
+    default: return '\uD83C\uDFDB\uFE0F';
   }
 }
 
@@ -185,14 +186,6 @@ export default function PipelineExecutionView({
   const displayCouncilId = selectedCouncilId || activeCouncilId;
   const isRunning = pipeline.status === 'running';
 
-  // Find the step that produced the displayed council (for showing its artifact)
-  const displayedStep = displayCouncilId
-    ? pipeline.stages.flatMap((s) => s.steps).find(
-        (s) => s.artifact?.metadata?.councilId === displayCouncilId
-          || (s.status === 'running' && s.config.type !== 'gate'
-              && activeCouncilId === displayCouncilId)
-      )
-    : null;
 
   return (
     <div className="pipeline-execution">
@@ -302,10 +295,8 @@ export default function PipelineExecutionView({
             onForceDecision={onForceDecision}
             onAbort={onAbortDeliberation}
             onUserMessage={onUserMessage}
+            hideControls
           />
-          {displayedStep && (
-            <StepOutputPanel step={displayedStep} />
-          )}
         </div>
       ) : selectedStepId ? (
         <StepOutputViewer pipeline={pipeline} stepId={selectedStepId} />
@@ -513,51 +504,3 @@ function StepOutputViewer({
 // Displays the explicit artifact that downstream steps consume.
 // ============================================================================
 
-function StepOutputPanel({ step }: { step: PipelineStep }) {
-  const [collapsed, setCollapsed] = useState(false);
-  const artifact = step.artifact;
-  const isRunning = step.status === 'running';
-
-  // Determine output label based on artifact content
-  const outputPath = artifact?.metadata?.outputPath;
-  const artifactLabel = artifact?.artifactType === 'decision' ? 'Decision'
-    : artifact?.artifactType === 'approval' ? 'Approval'
-    : outputPath ? 'File Output'
-    : 'Output';
-
-  return (
-    <div className="step-output-panel">
-      <button
-        className="step-output-panel-header"
-        onClick={() => setCollapsed(!collapsed)}
-      >
-        <span className={`collapse-arrow ${collapsed ? 'collapsed' : ''}`}>&#9662;</span>
-        <span className="step-output-panel-icon">{getStepIcon(step.config.type)}</span>
-        <span className="step-output-panel-title">Step Output</span>
-        <span className="step-output-panel-label">{step.name}</span>
-        <span className="step-output-panel-type">{artifactLabel}</span>
-        {step.status === 'completed' && <span className="step-output-panel-check">&#10003;</span>}
-        {isRunning && !artifact && <span className="step-output-panel-running">Running...</span>}
-      </button>
-
-      {!collapsed && (
-        <div className="step-output-panel-body">
-          {outputPath && (
-            <div className="step-output-panel-path">
-              <span className="path-label">File:</span>
-              <code className="path-value">{outputPath}</code>
-            </div>
-          )}
-
-          {artifact ? (
-            <pre className="step-output-panel-content">{artifact.content}</pre>
-          ) : isRunning ? (
-            <div className="step-output-panel-pending">Output will appear when the step completes.</div>
-          ) : (
-            <div className="step-output-panel-pending">No output yet.</div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}

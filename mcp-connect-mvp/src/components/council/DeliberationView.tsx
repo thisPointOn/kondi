@@ -56,6 +56,8 @@ interface DeliberationViewProps {
   };
   /** Personas currently thinking/generating responses */
   thinkingPersonas?: Persona[];
+  /** Hide the controls bar (used when embedded in pipeline view) */
+  hideControls?: boolean;
 }
 
 export default function DeliberationView({
@@ -82,6 +84,7 @@ export default function DeliberationView({
     deepseek: true
   },
   thinkingPersonas: rawThinkingPersonas = [],
+  hideControls = false,
 }: DeliberationViewProps) {
   const [council, setCouncil] = useState<Council | null>(null);
 
@@ -1222,8 +1225,8 @@ export default function DeliberationView({
         </div>
       )}
 
-      {/* Controls */}
-      {currentPhase !== 'created' && (
+      {/* Controls — hidden when embedded in pipeline view */}
+      {!hideControls && currentPhase !== 'created' && (
         <DeliberationControls
           council={council}
           currentPhase={currentPhase}
