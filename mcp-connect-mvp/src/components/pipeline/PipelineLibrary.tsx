@@ -3,6 +3,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { ask } from '@tauri-apps/plugin-dialog';
 import type { Pipeline } from '../../pipeline/types';
 import { pipelineStore } from '../../pipeline/store';
 import CliSessionImportModal from './CliSessionImportModal';
@@ -51,8 +52,12 @@ export default function PipelineLibrary({
     onPipelineCreate(pipeline);
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm('Delete this pipeline? This cannot be undone.')) {
+  const handleDelete = async (id: string) => {
+    const ok = await ask('Delete this pipeline? This cannot be undone.', {
+      title: 'Delete Pipeline',
+      kind: 'warning',
+    });
+    if (ok) {
       pipelineStore.delete(id);
     }
   };

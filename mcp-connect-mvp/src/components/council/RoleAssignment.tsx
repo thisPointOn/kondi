@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { ask } from '@tauri-apps/plugin-dialog';
 import type { Council, Persona, DeliberationRole, DeliberationRoleAssignment } from '../../council/types';
 import {
   ANTHROPIC_CLI_MODELS,
@@ -603,9 +604,10 @@ export default function RoleAssignment({
                   className="remove-persona-btn"
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (confirm(`Remove ${persona.name} from this council?`)) {
-                      onRemovePersona(persona.id);
-                    }
+                    ask(`Remove ${persona.name} from this council?`, {
+                      title: 'Remove Persona',
+                      kind: 'warning',
+                    }).then((ok) => { if (ok) onRemovePersona(persona.id); });
                   }}
                   title="Remove persona"
                 >

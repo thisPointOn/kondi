@@ -3,6 +3,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { ask } from '@tauri-apps/plugin-dialog';
 import type { Council } from '../../council/types';
 import { councilStore, suggestedCombinations, getTemplateByName, createPersonaFromTemplate } from '../../council';
 import { createCouncilFromSetup } from '../../council/factory';
@@ -115,8 +116,12 @@ export default function CouncilLibrary({
     onCouncilCreate(council);
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm('Delete this council? This cannot be undone.')) {
+  const handleDelete = async (id: string) => {
+    const ok = await ask('Delete this council? This cannot be undone.', {
+      title: 'Delete Council',
+      kind: 'warning',
+    });
+    if (ok) {
       councilStore.delete(id);
     }
   };

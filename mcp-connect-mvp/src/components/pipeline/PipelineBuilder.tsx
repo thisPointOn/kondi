@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, ask } from '@tauri-apps/plugin-dialog';
 import type { Pipeline, PipelineStep, StepConfig, PipelineSchedule } from '../../pipeline/types';
 import { pipelineStore } from '../../pipeline/store';
 import { buildScheduledOutputDir } from '../../pipeline/scheduler';
@@ -99,8 +99,12 @@ export default function PipelineBuilder({
     pipelineStore.addStage(pipelineId);
   };
 
-  const handleRemoveStage = (stageId: string) => {
-    if (confirm('Remove this stage and all its steps?')) {
+  const handleRemoveStage = async (stageId: string) => {
+    const ok = await ask('Remove this stage and all its steps?', {
+      title: 'Remove Stage',
+      kind: 'warning',
+    });
+    if (ok) {
       pipelineStore.removeStage(pipelineId, stageId);
       setSelectedStepId(null);
     }

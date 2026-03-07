@@ -3,6 +3,7 @@
  */
 
 import { useMemo } from 'react';
+import { ask } from '@tauri-apps/plugin-dialog';
 import type { Persona, CouncilMessage } from '../../council/types';
 import './PersonaSidebar.css';
 
@@ -160,9 +161,10 @@ export default function PersonaSidebar({
                   className="persona-action-btn persona-remove-btn"
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (confirm(`Remove ${persona.name} from this council?`)) {
-                      onRemovePersona(persona.id);
-                    }
+                    ask(`Remove ${persona.name} from this council?`, {
+                      title: 'Remove Persona',
+                      kind: 'warning',
+                    }).then((ok) => { if (ok) onRemovePersona(persona.id); });
                   }}
                   title="Remove"
                 >
