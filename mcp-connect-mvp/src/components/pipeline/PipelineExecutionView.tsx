@@ -295,7 +295,6 @@ export default function PipelineExecutionView({
             onForceDecision={onForceDecision}
             onAbort={onAbortDeliberation}
             onUserMessage={onUserMessage}
-            hideControls
           />
         </div>
       ) : selectedStepId ? (

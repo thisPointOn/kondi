@@ -20,7 +20,6 @@ import { contextStore, getCurrentContext, getPendingPatches, getPlan, getAllOutp
 import PhaseIndicator from './PhaseIndicator';
 import LedgerEntryCard from './LedgerEntryCard';
 import RoleAssignment from './RoleAssignment';
-import DeliberationControls from './DeliberationControls';
 import PatchReviewPanel from './PatchReviewPanel';
 import ArtifactPanel from './ArtifactPanel';
 import AddPersonaModal from './AddPersonaModal';
@@ -56,8 +55,6 @@ interface DeliberationViewProps {
   };
   /** Personas currently thinking/generating responses */
   thinkingPersonas?: Persona[];
-  /** Hide the controls bar (used when embedded in pipeline view) */
-  hideControls?: boolean;
 }
 
 export default function DeliberationView({
@@ -84,7 +81,6 @@ export default function DeliberationView({
     deepseek: true
   },
   thinkingPersonas: rawThinkingPersonas = [],
-  hideControls = false,
 }: DeliberationViewProps) {
   const [council, setCouncil] = useState<Council | null>(null);
 
@@ -1225,22 +1221,6 @@ export default function DeliberationView({
         </div>
       )}
 
-      {/* Controls — hidden when embedded in pipeline view */}
-      {!hideControls && currentPhase !== 'created' && (
-        <DeliberationControls
-          council={council}
-          currentPhase={currentPhase}
-          isGenerating={isGenerating}
-          onPhaseAction={handlePhaseAction}
-          onPause={() => onPause?.(council)}
-          onResume={() => onResume?.(council)}
-          onForceDecision={() => {
-            setIsGenerating(true);
-            onForceDecision?.(council).finally(() => setIsGenerating(false));
-          }}
-          onAbort={() => onAbort?.(council)}
-        />
-      )}
 
       {/* Patch Review Panel */}
       {showPatchReview && (
