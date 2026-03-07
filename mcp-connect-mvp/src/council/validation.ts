@@ -455,7 +455,7 @@ export const deliberationConfigSchema = z.object({
   saveDeliberation: z.boolean().optional(),
   saveDeliberationMode: z.enum(['full', 'abbreviated']).optional(),
   maxWordsPerResponse: z.number().optional(),
-  stepType: z.enum(['planning', 'coding', 'review-docs', 'enrichment']).optional(),
+  stepType: z.enum(['council', 'code_planning', 'analysis', 'agent', 'coding', 'review', 'enrich']).optional(),
   testCommand: z.string().optional(),
   maxDebugCycles: z.number().int().optional(),
   maxReviewCycles: z.number().int().optional(),

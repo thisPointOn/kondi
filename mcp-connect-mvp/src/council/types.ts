@@ -718,7 +718,7 @@ export interface DeliberationConfig {
   maxWordsPerResponse?: number;
 
   // Pipeline step type (informs prompt behavior)
-  stepType?: 'planning' | 'coding' | 'review-docs' | 'enrichment';
+  stepType?: 'council' | 'code_planning' | 'analysis' | 'agent' | 'coding' | 'review' | 'enrich';
 
   // Coding orchestrator configuration
   testCommand?: string;
