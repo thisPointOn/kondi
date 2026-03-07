@@ -71,6 +71,66 @@ export interface StepArtifact {
 }
 
 // ============================================================================
+// Memory Entry (persistent across scheduled runs)
+// ============================================================================
+
+export interface MemoryEntry {
+  runNumber: number;
+  runDate: string;
+  /** Captured artifacts from designated steps, keyed by sanitized step name */
+  captures: Record<string, string>;
+  /** True if this entry is a compressed summary of multiple older entries */
+  compressed?: boolean;
+}
+
+// ============================================================================
+// Output Isolation Config
+// ============================================================================
+
+export interface PipelineOutputConfig {
+  /** Enable structured output directories (default: true for new pipelines) */
+  enabled: boolean;
+  /** Max runs to keep on disk before pruning oldest (default: 50, 0 = unlimited) */
+  maxRetainedRuns?: number;
+  /** What to save per step */
+  stepOutput: 'artifact_only' | 'artifact_and_deliberation';
+}
+
+/** Run manifest written to _manifest.json */
+export interface RunManifest {
+  runNumber: number;
+  pipelineId: string;
+  pipelineName: string;
+  startedAt: string;
+  completedAt: string;
+  status: 'completed' | 'failed';
+  initialInput: string;
+  stageCount: number;
+  stepCount: number;
+  totalTokens: number;
+  totalDurationMs: number;
+  /** Whether memory was updated from this run */
+  memoryUpdated: boolean;
+}
+
+/** Step metadata written to _meta.json */
+export interface StepMeta {
+  stepId: string;
+  stepName: string;
+  stepType: string;
+  stageIndex: number;
+  stepIndex: number;
+  startedAt?: string;
+  completedAt?: string;
+  status: PipelineStepStatus;
+  outputType: OutputType;
+  councilId?: string;
+  model?: string;
+  tokensUsed?: number;
+  durationMs?: number;
+}
+
+// ============================================================================
 // Pipeline Persona (full-featured, matches council persona capabilities)
 // ============================================================================
 
@@ -278,6 +338,13 @@ export interface PipelineSchedule {
   dayOfWeek?: number;
   /** ISO timestamp of the last scheduled run (to avoid double-fires) */
   lastRunAt?: string;
+  /** Maintain memory across scheduled runs */
+  maintainMemory?: boolean;
+  /** Max detailed entries before older ones get compressed (default: 30) */
+  maxDetailedEntries?: number;
+  /** Which steps' artifacts to capture into memory (step IDs).
+   *  If empty/undefined, captures only the last completed step. */
+  captureStepIds?: string[];
 }
 
 export interface Pipeline {
@@ -291,6 +358,7 @@ export interface Pipeline {
     directoryConstrained?: boolean;
     failurePolicy: 'stop' | 'skip_step';
     schedule?: PipelineSchedule;
+    outputConfig?: PipelineOutputConfig;
   };
   status: PipelineStatus;
   currentStageIndex: number;

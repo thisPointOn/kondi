@@ -11,6 +11,8 @@ import type {
   PipelineStage,
   PipelineStep,
   StepArtifact,
+  StepMeta,
+  RunManifest,
   CouncilStepConfig,
   LlmStepConfig,
   GateStepConfig,
@@ -31,6 +33,18 @@ import type { Persona } from '../council/types';
 import type { AgentInvocation, AgentResponse } from '../council/deliberation-orchestrator';
 import type { MCPTool } from '../types/mcp';
 import { verifyRequiredTools } from '../utils/filterTools';
+
+import type { MemoryContext } from './memory-store';
+import { buildMemoryContext, appendEntry, getNextRunNumber } from './memory-store';
+import { sanitizeFolderName } from './run-output';
+import {
+  buildRunDirName,
+  getRunsBaseDir,
+  buildStepOutputDir,
+  writeStepOutput,
+  writeRunManifest,
+  pruneOldRuns,
+} from './run-output';
 
 // ============================================================================
 // Callback Types
@@ -129,7 +143,8 @@ function resolveJsonPath(content: string, dotPath: string): string {
 
 function renderInputTemplate(
   template: string,
-  previousArtifacts: StepArtifact[]
+  previousArtifacts: StepArtifact[],
+  memoryCtx?: MemoryContext
 ): string {
   // "none" means no input from previous steps — step only sees its task
   if (template === 'none') return '';
@@ -181,6 +196,31 @@ function renderInputTemplate(
     return resolveJsonPath(previousArtifacts[i].content, path);
   });
 
+  // ---- Memory template variables ----
+  if (memoryCtx) {
+    // {{memory}} — all entries
+    result = result.replace(/\{\{memory\}\}/g, memoryCtx.all);
+
+    // {{memory.last_n(N)}} — last N entries (must be before {{memory.last.X}})
+    result = result.replace(/\{\{memory\.last_n\((\d+)\)\}\}/g, (_match, n) => {
+      return memoryCtx.lastN(parseInt(n, 10));
+    });
+
+    // {{memory.last.step_name}} — specific capture from last entry
+    result = result.replace(/\{\{memory\.last\.([a-zA-Z0-9_]+)\}\}/g, (_match, stepName) => {
+      return memoryCtx.lastCapture(stepName);
+    });
+
+    // {{memory.last}} — most recent entry
+    result = result.replace(/\{\{memory\.last\}\}/g, memoryCtx.last);
+
+    // {{memory.patterns}} — compressed pattern summaries
+    result = result.replace(/\{\{memory\.patterns\}\}/g, memoryCtx.patterns);
+  } else {
+    // No memory — resolve all memory templates to empty string
+    result = result.replace(/\{\{memory(?:\.[a-zA-Z0-9_()]+)*\}\}/g, '');
+  }
+
   return result;
 }
 
@@ -197,6 +237,14 @@ export class PipelineExecutor {
   private skipNextStage = false;
   /** Set by condition steps to stop the pipeline (completes, not fails) */
   private stopPipeline = false;
+  /** Memory context loaded at pipeline start (if maintainMemory is enabled) */
+  private memoryCtx: MemoryContext | undefined = undefined;
+  /** Current run directory for output isolation */
+  private currentRunDir: string | null = null;
+  /** Current run number */
+  private currentRunNumber = 0;
+  /** Pipeline start timestamp */
+  private runStartedAt: string | null = null;
 
   constructor(callbacks: PipelineExecutorCallbacks, platform: PlatformAdapter) {
     this.callbacks = callbacks;
@@ -219,7 +267,37 @@ export class PipelineExecutor {
     this.skipNextStage = false;
     this.stopPipeline = false;
     this.runningPipelineId = pipelineId;
+    this.memoryCtx = undefined;
+    this.currentRunDir = null;
+    this.currentRunNumber = 0;
+    this.runStartedAt = new Date().toISOString();
     pipelineStore.setPipelineStatus(pipelineId, 'running');
+
+    const workingDir = pipeline.settings.workingDirectory;
+
+    // Load memory context if maintainMemory is enabled
+    if (workingDir && pipeline.settings.schedule?.maintainMemory) {
+      try {
+        this.memoryCtx = await buildMemoryContext(this.platform, workingDir, pipelineId);
+        console.log('[PipelineExecutor] Loaded memory context for pipeline');
+      } catch (err) {
+        console.warn('[PipelineExecutor] Failed to load memory context:', err);
+      }
+    }
+
+    // Set up run output directory
+    const outputConfig = pipeline.settings.outputConfig;
+    if (workingDir && outputConfig?.enabled !== false) {
+      try {
+        this.currentRunNumber = await getNextRunNumber(this.platform, workingDir, pipelineId);
+        const runDirName = buildRunDirName(this.currentRunNumber, new Date());
+        const runsBase = getRunsBaseDir(workingDir, pipelineId);
+        this.currentRunDir = `${runsBase}/${runDirName}`;
+        console.log(`[PipelineExecutor] Run output: ${this.currentRunDir}`);
+      } catch (err) {
+        console.warn('[PipelineExecutor] Failed to set up run directory:', err);
+      }
+    }
 
     try {
       for (let i = pipeline.currentStageIndex; i < pipeline.stages.length; i++) {
@@ -288,15 +366,65 @@ export class PipelineExecutor {
 
       if (!this.aborted) {
         pipelineStore.setPipelineStatus(pipelineId, 'completed');
+
+        // Post-completion: capture memory and write run manifest
+        const completedPipeline = pipelineStore.get(pipelineId);
+        let memoryUpdated = false;
+
+        if (completedPipeline) {
+          // Capture memory if enabled
+          if (workingDir && completedPipeline.settings.schedule?.maintainMemory) {
+            try {
+              await this.captureMemory(completedPipeline, workingDir);
+              memoryUpdated = true;
+              console.log('[PipelineExecutor] Memory entry captured');
+            } catch (err) {
+              console.warn('[PipelineExecutor] Failed to capture memory:', err);
+            }
+          }
+
+          // Write run manifest
+          if (this.currentRunDir) {
+            try {
+              await this.writeManifest(completedPipeline, 'completed', memoryUpdated);
+            } catch (err) {
+              console.warn('[PipelineExecutor] Failed to write run manifest:', err);
+            }
+          }
+
+          // Prune old runs
+          const maxRetained = completedPipeline.settings.outputConfig?.maxRetainedRuns;
+          if (workingDir && maxRetained && maxRetained > 0) {
+            try {
+              const runsBase = getRunsBaseDir(workingDir, pipelineId);
+              await pruneOldRuns(this.platform, runsBase, maxRetained);
+            } catch (err) {
+              console.warn('[PipelineExecutor] Failed to prune old runs:', err);
+            }
+          }
+        }
       }
     } catch (error) {
       if (this.aborted) return; // don't overwrite 'paused' status on abort
       const message = error instanceof Error ? error.message : String(error);
       console.error('[PipelineExecutor] Pipeline failed:', message);
       pipelineStore.setPipelineStatus(pipelineId, 'failed');
+
+      // Write failed manifest if we have a run directory
+      if (this.currentRunDir) {
+        const failedPipeline = pipelineStore.get(pipelineId);
+        if (failedPipeline) {
+          try {
+            await this.writeManifest(failedPipeline, 'failed', false);
+          } catch { /* best effort */ }
+        }
+      }
+
       throw error;
     } finally {
       this.runningPipelineId = null;
+      this.memoryCtx = undefined;
+      this.currentRunDir = null;
     }
   }
 
@@ -439,6 +567,39 @@ export class PipelineExecutor {
 
       pipelineStore.setStepArtifact(pipelineId, step.id, artifact);
       pipelineStore.setStepStatus(pipelineId, step.id, 'completed');
+
+      // Write step output to isolated run directory
+      if (this.currentRunDir) {
+        try {
+          const loc = this.findStepLocation(pipelineId, step.id);
+          if (loc) {
+            const stepDir = buildStepOutputDir(
+              this.currentRunDir, loc.stageIndex, loc.stageName, loc.stepIndex, step.name
+            );
+            const meta: StepMeta = {
+              stepId: step.id,
+              stepName: step.name,
+              stepType: step.config.type,
+              stageIndex: loc.stageIndex,
+              stepIndex: loc.stepIndex,
+              startedAt: step.startedAt,
+              completedAt: step.completedAt,
+              status: 'completed',
+              outputType: (step.config as any).outputType || 'string',
+              councilId: artifact.metadata?.councilId,
+              model: artifact.metadata?.model,
+              tokensUsed: artifact.metadata?.tokensUsed,
+            };
+            const outputPath = await writeStepOutput(this.platform, stepDir, artifact, meta);
+            // Update artifact metadata to point to the isolated output file
+            artifact.metadata = { ...artifact.metadata, outputPath };
+            pipelineStore.setStepArtifact(pipelineId, step.id, artifact);
+          }
+        } catch (err) {
+          console.warn('[PipelineExecutor] Failed to write step output:', err);
+        }
+      }
+
       this.callbacks.onStepComplete?.(step.id, artifact);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -493,7 +654,7 @@ export class PipelineExecutor {
     const config = step.config as CouncilStepConfig;
 
     // Build the problem: task (instructions) + pipeline input (optional) + input (context from previous steps)
-    const inputContext = renderInputTemplate(config.inputTemplate, previousArtifacts);
+    const inputContext = renderInputTemplate(config.inputTemplate, previousArtifacts, this.memoryCtx);
     const pipelineInput = config.includePipelineInput
       ? pipelineStore.get(pipelineId)?.initialInput || ''
       : '';
@@ -666,7 +827,7 @@ export class PipelineExecutor {
 
     // Render input from previous steps and export as $KONDI_INPUT env var.
     // The input is shell-escaped and passed via env var to avoid injection.
-    const stepInput = renderInputTemplate(config.inputTemplate, previousArtifacts);
+    const stepInput = renderInputTemplate(config.inputTemplate, previousArtifacts, this.memoryCtx);
     const pipelineInput = config.includePipelineInput
       ? pipelineStore.get(pipelineId)?.initialInput || ''
       : '';
@@ -710,7 +871,7 @@ export class PipelineExecutor {
       throw new Error('Condition step has no expression configured');
     }
 
-    const stepInput = renderInputTemplate(config.inputTemplate, previousArtifacts);
+    const stepInput = renderInputTemplate(config.inputTemplate, previousArtifacts, this.memoryCtx);
     const pipelineInput = config.includePipelineInput
       ? pipelineStore.get(pipelineId)?.initialInput || ''
       : '';
@@ -781,5 +942,104 @@ export class PipelineExecutor {
       artifactType: 'approval',
       createdAt: new Date().toISOString(),
     };
+  }
+
+  // --------------------------------------------------------------------------
+  // Memory Capture
+  // --------------------------------------------------------------------------
+
+  private async captureMemory(pipeline: Pipeline, workingDir: string): Promise<void> {
+    const schedule = pipeline.settings.schedule;
+    if (!schedule?.maintainMemory) return;
+
+    const allSteps = pipeline.stages.flatMap((s) => s.steps);
+    const captureIds = schedule.captureStepIds;
+
+    // Determine which steps to capture
+    let stepsToCapture: PipelineStep[];
+    if (captureIds && captureIds.length > 0) {
+      stepsToCapture = captureIds
+        .map((id) => allSteps.find((s) => s.id === id))
+        .filter((s): s is PipelineStep => s !== undefined && s.artifact !== undefined);
+    } else {
+      // Default: capture last completed step
+      const lastCompleted = [...allSteps].reverse().find((s) => s.status === 'completed' && s.artifact);
+      stepsToCapture = lastCompleted ? [lastCompleted] : [];
+    }
+
+    if (stepsToCapture.length === 0) return;
+
+    // Build captures map keyed by sanitized step name
+    const captures: Record<string, string> = {};
+    for (const step of stepsToCapture) {
+      const key = sanitizeFolderName(step.name);
+      captures[key] = step.artifact!.content;
+    }
+
+    const runNumber = this.currentRunNumber || await getNextRunNumber(this.platform, workingDir, pipeline.id);
+
+    await appendEntry(this.platform, workingDir, pipeline.id, {
+      runNumber,
+      runDate: new Date().toISOString(),
+      captures,
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Run Manifest
+  // --------------------------------------------------------------------------
+
+  private async writeManifest(
+    pipeline: Pipeline,
+    status: 'completed' | 'failed',
+    memoryUpdated: boolean
+  ): Promise<void> {
+    if (!this.currentRunDir) return;
+
+    const allSteps = pipeline.stages.flatMap((s) => s.steps);
+    const totalTokens = allSteps.reduce(
+      (sum, s) => sum + (s.artifact?.metadata?.tokensUsed || 0), 0
+    );
+    const startMs = this.runStartedAt ? new Date(this.runStartedAt).getTime() : Date.now();
+
+    const manifest: RunManifest = {
+      runNumber: this.currentRunNumber,
+      pipelineId: pipeline.id,
+      pipelineName: pipeline.name,
+      startedAt: this.runStartedAt || new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      status,
+      initialInput: pipeline.initialInput,
+      stageCount: pipeline.stages.length,
+      stepCount: allSteps.length,
+      totalTokens,
+      totalDurationMs: Date.now() - startMs,
+      memoryUpdated,
+    };
+
+    await writeRunManifest(this.platform, this.currentRunDir, manifest);
+  }
+
+  // --------------------------------------------------------------------------
+  // Step Location Helper
+  // --------------------------------------------------------------------------
+
+  private findStepLocation(pipelineId: string, stepId: string): {
+    stageIndex: number;
+    stageName: string;
+    stepIndex: number;
+  } | null {
+    const pipeline = pipelineStore.get(pipelineId);
+    if (!pipeline) return null;
+
+    for (let si = 0; si < pipeline.stages.length; si++) {
+      const stage = pipeline.stages[si];
+      for (let sti = 0; sti < stage.steps.length; sti++) {
+        if (stage.steps[sti].id === stepId) {
+          return { stageIndex: si, stageName: stage.name, stepIndex: sti };
+        }
+      }
+    }
+    return null;
   }
 }

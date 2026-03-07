@@ -470,13 +470,71 @@ function SchedulerSection({ pipeline, pipelineId }: { pipeline: Pipeline; pipeli
             <div className="scheduler-output-info">
               Output will be saved to:
               <code className="scheduler-output-path">
-                {pipeline.settings.workingDirectory}/{previewDir}
+                {pipeline.settings.workingDirectory}/.kondi/runs/
               </code>
             </div>
           ) : (
             <div className="scheduler-output-warning">
               Set a working directory above to enable scheduled output saving.
             </div>
+          )}
+
+          {/* Memory toggle */}
+          <div className="scheduler-row">
+            <input
+              type="checkbox"
+              id="pipeline-memory-enabled"
+              checked={schedule?.maintainMemory ?? false}
+              onChange={(e) => updateSchedule({ maintainMemory: e.target.checked })}
+            />
+            <label htmlFor="pipeline-memory-enabled" className="scheduler-toggle-label">
+              Maintain memory across runs
+            </label>
+          </div>
+
+          {schedule?.maintainMemory && (
+            <>
+              <div className="scheduler-row scheduler-memory-detail">
+                <label className="scheduler-label">Max entries</label>
+                <input
+                  type="number"
+                  className="scheduler-number-input"
+                  value={schedule?.maxDetailedEntries ?? 30}
+                  min={5}
+                  max={200}
+                  onChange={(e) => updateSchedule({ maxDetailedEntries: parseInt(e.target.value) || 30 })}
+                />
+                <span className="scheduler-hint">Older entries are compressed into patterns</span>
+              </div>
+
+              {/* Step capture selection */}
+              {pipeline.stages.flatMap(s => s.steps).length > 0 && (
+                <div className="scheduler-row scheduler-memory-capture">
+                  <label className="scheduler-label">Capture steps</label>
+                  <div className="scheduler-capture-list">
+                    {pipeline.stages.flatMap(stage => stage.steps).map(step => (
+                      <label key={step.id} className="scheduler-capture-item">
+                        <input
+                          type="checkbox"
+                          checked={(schedule?.captureStepIds || []).includes(step.id)}
+                          onChange={(e) => {
+                            const current = schedule?.captureStepIds || [];
+                            const updated = e.target.checked
+                              ? [...current, step.id]
+                              : current.filter((id: string) => id !== step.id);
+                            updateSchedule({ captureStepIds: updated });
+                          }}
+                        />
+                        {step.name}
+                      </label>
+                    ))}
+                  </div>
+                  <span className="scheduler-hint">
+                    Select which steps to remember. If none selected, captures last step only.
+                  </span>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
