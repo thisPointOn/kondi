@@ -735,10 +735,7 @@
 }
 
 .directory-hint {
-  display: block;
-  font-size: 0.6875rem;
-  color: var(--text-secondary, #666);
-  margin-top: 0.25rem;
+  display: none;
   line-height: 1.4;
 }
 
@@ -758,23 +755,37 @@
    Scheduler
    ============================================================================ */
 
-.scheduler-toggle {
+.scheduler-option-row {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
-  margin-bottom: 8px;
-}
-.scheduler-toggle input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-}
-.scheduler-toggle-label {
+  width: 100%;
   font-size: 13px;
-  color: #ccc;
+  color: var(--text-secondary, #ccc);
+}
+
+.scheduler-option-row input[type="checkbox"] {
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--accent-color, #3b82f6);
   cursor: pointer;
 }
-.light-theme .scheduler-toggle-label {
+
+.scheduler-option-row label {
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-secondary, #ccc);
+}
+
+.light-theme .scheduler-option-row label {
   color: #555;
+}
+
+.scheduler-capture-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .scheduler-config {

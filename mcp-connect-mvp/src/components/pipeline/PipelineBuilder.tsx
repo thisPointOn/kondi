@@ -277,14 +277,11 @@ export default function PipelineBuilder({
                 htmlFor="pipeline-dir-constrained"
                 className={`constraint-label ${pipeline.settings.directoryConstrained !== false ? 'constrained' : 'unconstrained'}`}
               >
-                {pipeline.settings.directoryConstrained !== false ? 'Constrained' : 'Unconstrained'}
+                {pipeline.settings.directoryConstrained !== false
+                  ? 'Constrained — All steps use this directory. Agents are restricted to it.'
+                  : 'Unconstrained — Steps inherit this directory but can override it.'}
               </label>
             </div>
-            <span className="directory-hint">
-              {pipeline.settings.directoryConstrained !== false
-                ? 'All steps will use this directory. Agents are restricted to it.'
-                : 'Steps inherit this directory by default but can override it. Agents can access files outside it.'}
-            </span>
           </div>
 
           {/* Scheduler */}
@@ -389,16 +386,18 @@ function SchedulerSection({ pipeline, pipelineId }: { pipeline: Pipeline; pipeli
 
   return (
     <div className="meta-field">
-      <label>Schedule</label>
-      <div className="scheduler-toggle">
+      <div className="constraint-toggle">
         <input
           type="checkbox"
           id="pipeline-schedule-enabled"
           checked={enabled}
           onChange={(e) => updateSchedule({ enabled: e.target.checked })}
         />
-        <label htmlFor="pipeline-schedule-enabled" className="scheduler-toggle-label">
-          {enabled ? 'Scheduled' : 'No schedule'}
+        <label
+          htmlFor="pipeline-schedule-enabled"
+          className={`constraint-label ${enabled ? 'constrained' : 'unconstrained'}`}
+        >
+          {enabled ? 'Scheduled' : 'Not Scheduled'}
         </label>
       </div>
 
@@ -472,10 +471,7 @@ function SchedulerSection({ pipeline, pipelineId }: { pipeline: Pipeline; pipeli
           {/* Output directory info */}
           {pipeline.settings.workingDirectory ? (
             <div className="scheduler-output-info">
-              Output will be saved to:
-              <code className="scheduler-output-path">
-                {pipeline.settings.workingDirectory}/.kondi/runs/
-              </code>
+              Output: <code className="scheduler-output-path">{pipeline.settings.workingDirectory}/.kondi/runs/</code>
             </div>
           ) : (
             <div className="scheduler-output-warning">
@@ -483,22 +479,25 @@ function SchedulerSection({ pipeline, pipelineId }: { pipeline: Pipeline; pipeli
             </div>
           )}
 
-          {/* Memory toggle */}
-          <div className="scheduler-row">
+          {/* Memory */}
+          <div className="constraint-toggle" style={{ marginTop: '4px' }}>
             <input
               type="checkbox"
               id="pipeline-memory-enabled"
               checked={schedule?.maintainMemory ?? false}
               onChange={(e) => updateSchedule({ maintainMemory: e.target.checked })}
             />
-            <label htmlFor="pipeline-memory-enabled" className="scheduler-toggle-label">
-              Maintain memory across runs
+            <label
+              htmlFor="pipeline-memory-enabled"
+              className={`constraint-label ${schedule?.maintainMemory ? 'constrained' : 'unconstrained'}`}
+            >
+              {schedule?.maintainMemory ? 'Memory — Persists state across scheduled runs' : 'No Memory'}
             </label>
           </div>
 
           {schedule?.maintainMemory && (
-            <>
-              <div className="scheduler-row scheduler-memory-detail">
+            <div className="scheduler-config" style={{ marginTop: '6px', padding: '8px 12px' }}>
+              <div className="scheduler-row">
                 <label className="scheduler-label">Max entries</label>
                 <input
                   type="number"
@@ -508,37 +507,40 @@ function SchedulerSection({ pipeline, pipelineId }: { pipeline: Pipeline; pipeli
                   max={200}
                   onChange={(e) => updateSchedule({ maxDetailedEntries: parseInt(e.target.value) || 30 })}
                 />
-                <span className="scheduler-hint">Older entries are compressed into patterns</span>
+                <span className="scheduler-hint">older entries compressed into patterns</span>
               </div>
 
               {/* Step capture selection */}
               {pipeline.stages.flatMap(s => s.steps).length > 0 && (
-                <div className="scheduler-row scheduler-memory-capture">
-                  <label className="scheduler-label">Capture steps</label>
-                  <div className="scheduler-capture-list">
-                    {pipeline.stages.flatMap(stage => stage.steps).map(step => (
-                      <label key={step.id} className="scheduler-capture-item">
-                        <input
-                          type="checkbox"
-                          checked={(schedule?.captureStepIds || []).includes(step.id)}
-                          onChange={(e) => {
-                            const current = schedule?.captureStepIds || [];
-                            const updated = e.target.checked
-                              ? [...current, step.id]
-                              : current.filter((id: string) => id !== step.id);
-                            updateSchedule({ captureStepIds: updated });
-                          }}
-                        />
+                <>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Capture steps
+                  </div>
+                  {pipeline.stages.flatMap(stage => stage.steps).map(step => (
+                    <div key={step.id} className="constraint-toggle" style={{ marginTop: 0 }}>
+                      <input
+                        type="checkbox"
+                        id={`capture-${step.id}`}
+                        checked={(schedule?.captureStepIds || []).includes(step.id)}
+                        onChange={(e) => {
+                          const current = schedule?.captureStepIds || [];
+                          const updated = e.target.checked
+                            ? [...current, step.id]
+                            : current.filter((id: string) => id !== step.id);
+                          updateSchedule({ captureStepIds: updated });
+                        }}
+                      />
+                      <label htmlFor={`capture-${step.id}`} className="constraint-label unconstrained">
                         {step.name}
                       </label>
-                    ))}
-                  </div>
-                  <span className="scheduler-hint">
-                    Select which steps to remember. If none selected, captures last step only.
+                    </div>
+                  ))}
+                  <span className="scheduler-hint" style={{ marginLeft: 0 }}>
+                    If none selected, captures last step only.
                   </span>
-                </div>
+                </>
               )}
-            </>
+            </div>
           )}
         </div>
       )}
