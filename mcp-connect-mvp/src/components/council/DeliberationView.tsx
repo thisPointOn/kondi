@@ -327,8 +327,6 @@ export default function DeliberationView({
 
   const lastResponder = getLastResponder();
   const isPaused = council?.deliberationState?.currentPhase === 'paused';
-  const isTerminal = ['completed', 'cancelled', 'failed', 'created'].includes(currentPhase);
-  const isRunning = !isPaused && !isTerminal;
 
   // Handle user message during pause
   const handlePausedUserMessage = async () => {
@@ -348,6 +346,8 @@ export default function DeliberationView({
   // Get current phase
   const currentPhase = council?.deliberationState?.currentPhase || 'created';
   const currentRound = council?.deliberationState?.currentRound || 0;
+  const isTerminal = ['completed', 'cancelled', 'failed', 'created'].includes(currentPhase);
+  const isRunning = !isPaused && !isTerminal;
 
   // Check if roles are assigned
   const hasManager = council?.deliberation?.roleAssignments?.some((r) => r.role === 'manager');
