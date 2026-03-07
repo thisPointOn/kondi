@@ -14,3 +14,6 @@ openclaw/
 
 # Local config
 .kondi/
+
+# Product ideas (local only)
+product_ideas/
