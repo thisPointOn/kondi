@@ -61,6 +61,15 @@ class CouncilDataStore {
   }
 
   /**
+   * Persistent save: same as setItem but throws on localStorage failure.
+   * Used for data that MUST survive app restarts (e.g. pipeline definitions).
+   */
+  setItemPersistent(key: string, value: string): void {
+    this.cache.set(key, value);
+    localStorage.setItem(key, value);
+  }
+
+  /**
    * Number of keys in the merged view (in-memory + localStorage).
    * Used by stores that iterate over keys.
    */
