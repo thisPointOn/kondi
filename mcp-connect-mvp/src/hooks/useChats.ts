@@ -381,6 +381,7 @@ export function useChats({
         .map(([id, messages]) => ({
           id,
           title: chatNames[id] || messages[0]?.content?.slice(0, 28) || 'New Chat',
+          isRenamed: !!chatNames[id],
           timestamp: messages[0]?.timestamp
             ? new Date(messages[0].timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : '',

@@ -1,7 +1,7 @@
 /**
  * Pipeline Run Output Isolation
  * Structured per-run/per-stage/per-step output directories.
- * Runs live at {workingDir}/.kondi/runs/{pipelineId}/run_NNN_date_time/
+ * Runs live at {workingDir}/kondi-runs/{pipelineName}_run_NNN_date_time/
  */
 
 import type { StepArtifact, StepMeta, RunManifest, OutputType } from './types';
@@ -24,14 +24,15 @@ export function sanitizeFolderName(name: string): string {
 // Directory Name Builders
 // ============================================================================
 
-export function buildRunDirName(runNumber: number, date: Date): string {
+export function buildRunDirName(pipelineName: string, runNumber: number, date: Date): string {
+  const safeName = sanitizeFolderName(pipelineName);
   const num = String(runNumber).padStart(3, '0');
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   const h = String(date.getHours()).padStart(2, '0');
   const min = String(date.getMinutes()).padStart(2, '0');
-  return `run_${num}_${y}-${m}-${d}_${h}${min}`;
+  return `${safeName}_run_${num}_${y}-${m}-${d}_${h}${min}`;
 }
 
 export function buildStageDirName(stageIndex: number, stageName: string): string {
@@ -42,8 +43,8 @@ export function buildStepDirName(stepIndex: number, stepName: string): string {
   return `step_${stepIndex + 1}_${sanitizeFolderName(stepName)}`;
 }
 
-export function getRunsBaseDir(workingDir: string, pipelineId: string): string {
-  return `${workingDir.replace(/\/$/, '')}/.kondi/runs/${pipelineId}`;
+export function getRunsBaseDir(workingDir: string): string {
+  return `${workingDir.replace(/\/$/, '')}/kondi-runs`;
 }
 
 export function buildStepOutputDir(
@@ -118,16 +119,16 @@ export async function writeRunManifest(
 export async function pruneOldRuns(
   platform: PlatformAdapter,
   runsBaseDir: string,
+  pipelineName: string,
   maxRetained: number
 ): Promise<void> {
   if (maxRetained <= 0 || !platform.runCommand) return;
 
   try {
-    const cwd = runsBaseDir;
-    // List run directories sorted by name (which sorts chronologically due to run_NNN_ prefix)
+    const prefix = sanitizeFolderName(pipelineName);
     const result = await platform.runCommand(
-      `ls -1d run_* 2>/dev/null | sort`,
-      cwd
+      `ls -1d ${prefix}_run_* 2>/dev/null | sort`,
+      runsBaseDir
     );
 
     if (!result.success || !result.stdout.trim()) return;
@@ -137,9 +138,8 @@ export async function pruneOldRuns(
 
     const toDelete = dirs.slice(0, dirs.length - maxRetained);
     for (const dir of toDelete) {
-      // Safety: only delete directories matching run_NNN_ pattern
-      if (/^run_\d{3}_/.test(dir)) {
-        await platform.runCommand(`rm -rf "${dir}"`, cwd);
+      if (new RegExp(`^${prefix}_run_\\d{3}_`).test(dir)) {
+        await platform.runCommand(`rm -rf "${dir}"`, runsBaseDir);
         console.log(`[RunOutput] Pruned old run: ${dir}`);
       }
     }

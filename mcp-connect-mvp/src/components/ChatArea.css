@@ -12,6 +12,67 @@
   background: #ffffff;
 }
 
+/* Context stats bar */
+.chat-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 1rem;
+  font-size: 0.7rem;
+  color: var(--text-secondary, #777);
+  border-bottom: 1px solid var(--border-color, #222);
+  flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
+}
+.chat-context-bar:hover { background: var(--bg-tertiary, #1a1a1a); }
+.ctx-toggle { font-size: 0.6rem; color: #666; }
+.ctx-stat {
+  padding: 0.1rem 0.4rem;
+  background: var(--bg-tertiary, #1a1a1a);
+  border-radius: 9999px;
+  white-space: nowrap;
+}
+.ctx-stat.ctx-cache {
+  color: #10b981;
+}
+.chat-context-detail {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border-color, #222);
+  background: var(--bg-secondary, #111);
+  flex-shrink: 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.ctx-table {
+  width: 100%;
+  font-size: 0.75rem;
+  border-collapse: collapse;
+  color: var(--text-primary, #ccc);
+}
+.ctx-table th {
+  text-align: left;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border-color, #333);
+  color: var(--text-secondary, #888);
+  font-weight: 500;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.ctx-table td {
+  padding: 0.2rem 0.5rem;
+  border-bottom: 1px solid var(--border-color, #1a1a1a);
+}
+.ctx-table td:last-child { text-align: right; font-variant-numeric: tabular-nums; color: #a78bfa; }
+.ctx-mono { font-family: monospace; font-size: 0.65rem; color: var(--text-secondary, #888); max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-indent { padding-left: 1.25rem !important; color: var(--text-secondary, #999); }
+.ctx-section-row td { font-weight: 600; padding-top: 0.4rem; color: var(--text-secondary, #888); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: none; }
+.ctx-total-row td { font-weight: 600; border-top: 1px solid var(--border-color, #333); padding-top: 0.35rem; }
+.ctx-total-row td:last-child { color: #f59e0b; }
+.ctx-model { font-size: 0.65rem; padding: 0.1rem 0.3rem; background: #6366f120; color: #818cf8; border-radius: 3px; margin-right: 0.35rem; }
+.ctx-provider { font-size: 0.65rem; padding: 0.1rem 0.3rem; background: #16a34a20; color: #4ade80; border-radius: 3px; }
+
 .messages-container {
   flex: 1;
   overflow-y: auto;

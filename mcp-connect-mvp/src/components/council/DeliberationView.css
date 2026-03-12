@@ -856,6 +856,38 @@
   color: var(--text-tertiary, #666);
 }
 
+/* Main Output Panel */
+.main-output-panel {
+  padding: 1.5rem;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.main-output-panel h3 {
+  margin: 0 0 1rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary, #e5e5e5);
+}
+.output-empty { color: var(--text-secondary, #999); }
+.output-revision-count {
+  font-size: 0.8rem;
+  color: var(--text-secondary, #999);
+  margin-bottom: 0.5rem;
+}
+.output-content {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--text-primary, #e5e5e5);
+  background: var(--bg-secondary, #1a1a1a);
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #333);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
 /* Main Setup Panel */
 .main-setup-panel,
 .main-task-panel {

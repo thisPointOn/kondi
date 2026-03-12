@@ -237,6 +237,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.chat-title.renamed {
+  color: #a78bfa;
+  font-weight: 600;
+}
 
 .chat-time {
   color: #666;

@@ -168,6 +168,209 @@ const PROVIDER_META: ProviderMeta[] = [
   },
 ];
 
+// ============================================================================
+// Context Breakdown Panel
+// ============================================================================
+
+function formatTokens(n: number): string {
+  return n > 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+function ChatContextBar({
+  messages, servers, availableTools, attachedFiles, workingDir, modelId, providerId,
+}: {
+  messages: Message[];
+  servers: MCPServer[];
+  availableTools: Map<string, { serverId: string; tools: MCPTool[] }>;
+  attachedFiles: AttachedFile[];
+  workingDir?: string;
+  modelId?: string;
+  providerId?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Compute breakdown
+  const sysTokens = 475;
+  const userMsgs = messages.filter(m => m.role === 'user');
+  const asstMsgs = messages.filter(m => m.role === 'assistant');
+  const userChars = userMsgs.reduce((s, m) => s + (m.content?.length || 0), 0);
+  const asstChars = asstMsgs.reduce((s, m) => s + (m.content?.length || 0), 0);
+  const userTokens = Math.round(userChars / 3.5);
+  const asstTokens = Math.round(asstChars / 3.5);
+
+  // Tool calls in messages
+  const totalToolCalls = messages.reduce((s, m) => s + (m.toolCalls?.length || 0), 0);
+  const toolResultChars = messages.reduce((s, m) => {
+    if (!m.toolCalls) return s;
+    return s + m.toolCalls.reduce((ts: number, tc: ToolCall) => ts + (tc.result?.length || 0), 0);
+  }, 0);
+  const toolResultTokens = Math.round(toolResultChars / 3.5);
+
+  // Attached files in current input
+  const fileChars = attachedFiles.reduce((s, f) => s + f.content.length, 0);
+  const fileTokens = Math.round(fileChars / 3.5);
+
+  // File attachments already in messages
+  const msgFileCount = messages.reduce((s, m) => s + (m.attachments?.length || 0), 0);
+
+  // Tool definitions
+  const serverBreakdown: Array<{ name: string; toolCount: number; tokens: number }> = [];
+  let totalToolDefTokens = 0;
+  for (const [displayKey, { tools }] of availableTools) {
+    const tokens = tools.length * 180;
+    serverBreakdown.push({ name: displayKey, toolCount: tools.length, tokens });
+    totalToolDefTokens += tokens;
+  }
+
+  const connectedServers = servers.filter(s => s.status === 'connected').length;
+  const totalTools = serverBreakdown.reduce((s, sb) => s + sb.toolCount, 0);
+
+  // Working directory context
+  const dirTokens = workingDir ? Math.round(workingDir.length / 3.5) + 20 : 0;
+
+  const estimatedTokens = sysTokens + userTokens + asstTokens + toolResultTokens + fileTokens + totalToolDefTokens + dirTokens;
+
+  // Get actual API usage from the latest assistant message (if available)
+  const latestAssistant = [...messages].reverse().find(m => m.role === 'assistant' && m.usage);
+  const apiUsage = latestAssistant?.usage;
+  const hasApiUsage = !!apiUsage;
+
+  // Use actual input tokens when available, otherwise fall back to estimate
+  const displayTokens = hasApiUsage ? (apiUsage!.inputTokens + apiUsage!.outputTokens) : estimatedTokens;
+
+  return (
+    <>
+      <div className="chat-context-bar" onClick={() => setExpanded(!expanded)}>
+        <span className="ctx-toggle">{expanded ? '\u25BE' : '\u25B8'}</span>
+        {hasApiUsage ? (
+          <>
+            <span className="ctx-stat">{formatTokens(apiUsage!.inputTokens)} in</span>
+            <span className="ctx-stat">{formatTokens(apiUsage!.outputTokens)} out</span>
+            {apiUsage!.cacheRead ? <span className="ctx-stat ctx-cache">{formatTokens(apiUsage!.cacheRead)} cached</span> : null}
+          </>
+        ) : (
+          <span className="ctx-stat">~{formatTokens(estimatedTokens)} tokens</span>
+        )}
+        <span className="ctx-stat">{messages.length} msgs</span>
+        {totalTools > 0 && <span className="ctx-stat">{totalTools} tools</span>}
+        {connectedServers > 0 && <span className="ctx-stat">{connectedServers} server{connectedServers !== 1 ? 's' : ''}</span>}
+        {totalToolCalls > 0 && <span className="ctx-stat">{totalToolCalls} tool call{totalToolCalls !== 1 ? 's' : ''}</span>}
+        {attachedFiles.length > 0 && <span className="ctx-stat">{attachedFiles.length} pending file{attachedFiles.length !== 1 ? 's' : ''}</span>}
+      </div>
+      {expanded && (
+        <div className="chat-context-detail">
+          <table className="ctx-table">
+            <thead>
+              <tr><th>Source</th><th>Detail</th><th>{hasApiUsage ? 'Tokens' : 'Est. Tokens'}</th></tr>
+            </thead>
+            <tbody>
+              {hasApiUsage && (
+                <>
+                  <tr className="ctx-section-row"><td colSpan={3}>API Usage (last response)</td></tr>
+                  <tr>
+                    <td>Input tokens</td>
+                    <td>Actual from API</td>
+                    <td>{formatTokens(apiUsage!.inputTokens)}</td>
+                  </tr>
+                  <tr>
+                    <td>Output tokens</td>
+                    <td>Actual from API</td>
+                    <td>{formatTokens(apiUsage!.outputTokens)}</td>
+                  </tr>
+                  {apiUsage!.cacheRead ? (
+                    <tr>
+                      <td>Cache read</td>
+                      <td>Prompt caching</td>
+                      <td>{formatTokens(apiUsage!.cacheRead)}</td>
+                    </tr>
+                  ) : null}
+                  {apiUsage!.cacheCreation ? (
+                    <tr>
+                      <td>Cache creation</td>
+                      <td>Prompt caching</td>
+                      <td>{formatTokens(apiUsage!.cacheCreation)}</td>
+                    </tr>
+                  ) : null}
+                  {apiUsage!.payloadChars ? (
+                    <tr>
+                      <td>Payload size</td>
+                      <td>JSON request body</td>
+                      <td>{(apiUsage!.payloadChars / 1024).toFixed(0)} KB</td>
+                    </tr>
+                  ) : null}
+                  <tr className="ctx-section-row"><td colSpan={3}>Estimated Breakdown</td></tr>
+                </>
+              )}
+              <tr><td>System prompt</td><td>Base instructions</td><td>{formatTokens(sysTokens)}</td></tr>
+              {workingDir && (
+                <tr><td>Working directory</td><td className="ctx-mono">{workingDir}</td><td>{formatTokens(dirTokens)}</td></tr>
+              )}
+              <tr>
+                <td>User messages</td>
+                <td>{userMsgs.length} message{userMsgs.length !== 1 ? 's' : ''}</td>
+                <td>{formatTokens(userTokens)}</td>
+              </tr>
+              <tr>
+                <td>Assistant messages</td>
+                <td>{asstMsgs.length} message{asstMsgs.length !== 1 ? 's' : ''}</td>
+                <td>{formatTokens(asstTokens)}</td>
+              </tr>
+              {totalToolCalls > 0 && (
+                <tr>
+                  <td>Tool results</td>
+                  <td>{totalToolCalls} call{totalToolCalls !== 1 ? 's' : ''}</td>
+                  <td>{formatTokens(toolResultTokens)}</td>
+                </tr>
+              )}
+              {msgFileCount > 0 && (
+                <tr>
+                  <td>Attached files (sent)</td>
+                  <td>{msgFileCount} file{msgFileCount !== 1 ? 's' : ''}</td>
+                  <td>included in msgs</td>
+                </tr>
+              )}
+              {attachedFiles.length > 0 && (
+                <tr>
+                  <td>Pending attachments</td>
+                  <td>{attachedFiles.map(f => f.name).join(', ')}</td>
+                  <td>{formatTokens(fileTokens)}</td>
+                </tr>
+              )}
+              {serverBreakdown.length > 0 && (
+                <>
+                  <tr className="ctx-section-row"><td colSpan={3}>Tool Definitions</td></tr>
+                  {serverBreakdown.map(sb => (
+                    <tr key={sb.name}>
+                      <td className="ctx-indent">{sb.name}</td>
+                      <td>{sb.toolCount} tool{sb.toolCount !== 1 ? 's' : ''}</td>
+                      <td>{formatTokens(sb.tokens)}</td>
+                    </tr>
+                  ))}
+                </>
+              )}
+              <tr className="ctx-total-row">
+                <td>Total context</td>
+                <td>
+                  {modelId && <span className="ctx-model">{modelId}</span>}
+                  {providerId && <span className="ctx-provider">{PROVIDER_META.find(p => p.id === providerId)?.shortLabel || providerId}</span>}
+                </td>
+                <td>{hasApiUsage ? formatTokens(apiUsage!.inputTokens) : `~${formatTokens(estimatedTokens)}`}</td>
+              </tr>
+              {hasApiUsage && (
+                <tr>
+                  <td>Total output</td>
+                  <td>{apiUsage!.apiTurns && apiUsage!.apiTurns > 1 ? `across ${apiUsage!.apiTurns} turns` : ''}</td>
+                  <td>{formatTokens(apiUsage!.outputTokens)}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
 interface ChatAreaProps {
   chatId: string | null;
   messages: Message[];
@@ -748,16 +951,62 @@ const ChatArea: FC<ChatAreaProps> = ({
 
       updateTarget(updatedMessages);
     } catch (error) {
+      const errStr = error instanceof Error ? error.message : typeof error === 'string' ? error : JSON.stringify(error);
+
+      // Detect context overflow and build a diagnostic breakdown
+      let content = 'Error: ' + errStr;
+      if (errStr.includes('prompt is too long') || errStr.includes('too many tokens') || errStr.includes('context length exceeded')) {
+        const tokenMatch = errStr.match(/([\d,]+)\s*tokens?\s*>\s*([\d,]+)\s*max/i);
+        const actualTokens = tokenMatch ? tokenMatch[1] : '?';
+        const maxTokens = tokenMatch ? tokenMatch[2] : '?';
+
+        // Build per-message breakdown
+        const msgBreakdown: string[] = [];
+        let totalContentChars = 0;
+        let totalToolCallChars = 0;
+        let largestMsg = { idx: 0, size: 0, role: '' };
+
+        currentMessages.forEach((m, i) => {
+          const contentLen = m.content?.length || 0;
+          const toolCallsLen = m.toolCalls ? JSON.stringify(m.toolCalls).length : 0;
+          totalContentChars += contentLen;
+          totalToolCallChars += toolCallsLen;
+          const totalSize = contentLen + toolCallsLen;
+          if (totalSize > largestMsg.size) {
+            largestMsg = { idx: i, size: totalSize, role: m.role };
+          }
+          if (contentLen > 2000 || toolCallsLen > 2000) {
+            msgBreakdown.push(`  msg[${i}] ${m.role}: content=${(contentLen / 1024).toFixed(1)} KB, toolCalls=${(toolCallsLen / 1024).toFixed(1)} KB`);
+          }
+        });
+
+        // Tool definitions size
+        let toolDefsChars = 0;
+        const serverSizes: string[] = [];
+        for (const [displayKey, { tools: serverTools }] of availableTools) {
+          const size = JSON.stringify(serverTools.map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }))).length;
+          toolDefsChars += size;
+          serverSizes.push(`  ${displayKey}: ${serverTools.length} tools (${(size / 1024).toFixed(0)} KB)`);
+        }
+
+        const totalChars = totalContentChars + totalToolCallChars + toolDefsChars;
+        const estTokens = Math.round(totalChars / 3.5);
+
+        content = `**Context limit exceeded** — ${actualTokens} tokens sent, max ${maxTokens}\n\n` +
+          `**Breakdown:**\n` +
+          `- Messages: ${currentMessages.length} (content: ${(totalContentChars / 1024).toFixed(0)} KB, tool results: ${(totalToolCallChars / 1024).toFixed(0)} KB)\n` +
+          `- Tool definitions: ${(toolDefsChars / 1024).toFixed(0)} KB across ${availableTools.size} server(s)\n` +
+          `- Estimated total: ~${estTokens.toLocaleString()} tokens\n` +
+          `- Largest message: msg[${largestMsg.idx}] (${largestMsg.role}) — ${(largestMsg.size / 1024).toFixed(1)} KB\n` +
+          (msgBreakdown.length > 0 ? `\n**Large messages (>2 KB):**\n${msgBreakdown.join('\n')}\n` : '') +
+          (serverSizes.length > 0 ? `\n**Tool schemas by server:**\n${serverSizes.join('\n')}\n` : '') +
+          `\n**To reduce:** start a new chat, or disconnect servers with large tool sets.`;
+      }
+
       const errMessage: Message = {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content:
-          'Error: ' +
-          (error instanceof Error
-            ? error.message
-            : typeof error === 'string'
-              ? error
-              : JSON.stringify(error)),
+        content,
         timestamp: new Date(),
         provider: activeProvider || undefined,
       };
@@ -950,6 +1199,17 @@ const ChatArea: FC<ChatAreaProps> = ({
           )}
         </div>
       </div>
+
+      {/* Context stats bar */}
+      {messages.length > 0 && <ChatContextBar
+        messages={messages}
+        servers={servers}
+        availableTools={availableTools}
+        attachedFiles={attachedFiles}
+        workingDir={chatWorkingDir || globalWorkingDirectory}
+        modelId={effectiveModelId}
+        providerId={effectiveProviderId}
+      />}
 
       <div className="messages-container">
         {messages.map((message) => (

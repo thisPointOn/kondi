@@ -290,10 +290,10 @@ export class PipelineExecutor {
     if (workingDir && outputConfig?.enabled !== false) {
       try {
         this.currentRunNumber = await getNextRunNumber(this.platform, workingDir, pipelineId);
-        const runDirName = buildRunDirName(this.currentRunNumber, new Date());
-        const runsBase = getRunsBaseDir(workingDir, pipelineId);
+        const runDirName = buildRunDirName(pipeline.name, this.currentRunNumber, new Date());
+        const runsBase = getRunsBaseDir(workingDir);
         this.currentRunDir = `${runsBase}/${runDirName}`;
-        console.log(`[PipelineExecutor] Run output: ${this.currentRunDir}`);
+        console.log(`[PipelineExecutor] Run output dir: ${this.currentRunDir}`);
       } catch (err) {
         console.warn('[PipelineExecutor] Failed to set up run directory:', err);
       }
@@ -396,8 +396,8 @@ export class PipelineExecutor {
           const maxRetained = completedPipeline.settings.outputConfig?.maxRetainedRuns;
           if (workingDir && maxRetained && maxRetained > 0) {
             try {
-              const runsBase = getRunsBaseDir(workingDir, pipelineId);
-              await pruneOldRuns(this.platform, runsBase, maxRetained);
+              const runsBase = getRunsBaseDir(workingDir);
+              await pruneOldRuns(this.platform, runsBase, completedPipeline.name, maxRetained);
             } catch (err) {
               console.warn('[PipelineExecutor] Failed to prune old runs:', err);
             }
@@ -591,6 +591,7 @@ export class PipelineExecutor {
               tokensUsed: artifact.metadata?.tokensUsed,
             };
             const outputPath = await writeStepOutput(this.platform, stepDir, artifact, meta);
+            console.log(`[PipelineExecutor] Step output: ${outputPath}`);
             // Update artifact metadata to point to the isolated output file
             artifact.metadata = { ...artifact.metadata, outputPath };
             pipelineStore.setStepArtifact(pipelineId, step.id, artifact);
@@ -735,7 +736,8 @@ export class PipelineExecutor {
           console.error('[Pipeline:Council] Failed to save deliberation output:', err);
         }
 
-        // Save worker output to working directory if saveOutput is enabled
+        // Save worker output to run directory root (if output isolation active)
+        // Falls back to working directory if no run directory
         const workerPersona = config.councilSetup.personas.find((p) => p.role === 'worker');
         if (workerPersona && workerPersona.saveOutput !== false) {
           const workerOutput = getLatestOutput(council.id);
@@ -744,7 +746,8 @@ export class PipelineExecutor {
               const safeName = config.councilSetup.name
                 .toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_').slice(0, 50);
               const suffix = config.type === 'coding' ? '_code.md' : config.type === 'review' ? '_review.md' : config.type === 'enrich' ? '_enrichment.md' : config.type === 'code_planning' ? '_plan.md' : '_output.md';
-              workerOutputPath = `${effectiveDir.replace(/\/$/, '')}/${safeName}${suffix}`;
+              const outputBase = this.currentRunDir || effectiveDir.replace(/\/$/, '');
+              workerOutputPath = `${outputBase}/${safeName}${suffix}`;
               await this.platform.writeFile(workerOutputPath, workerOutput.content);
               console.log(`[Pipeline:Council] Saved worker output to: ${workerOutputPath}`);
             } catch (err) {

@@ -314,7 +314,7 @@ const ChatItem: FC<{
     ) : (
       <>
         {isSending && <span className="chat-sending-dot" />}
-        <span className="chat-title">{chat.title}</span>
+        <span className={`chat-title${chat.isRenamed ? ' renamed' : ''}`}>{chat.title}</span>
         <span className="chat-time">{chat.timestamp}</span>
       </>
     )}

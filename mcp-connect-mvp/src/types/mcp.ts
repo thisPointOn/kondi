@@ -44,6 +44,17 @@ export interface MessageAttachment {
   size: number;
 }
 
+export interface MessageUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheRead?: number;
+  cacheCreation?: number;
+  /** Estimated payload size in chars (JSON-serialized request body) */
+  payloadChars?: number;
+  /** Number of API calls (tool loop turns) for this response */
+  apiTurns?: number;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -52,6 +63,8 @@ export interface Message {
   timestamp: Date;
   provider?: string;
   attachments?: MessageAttachment[];
+  /** Token usage from the API response (assistant messages only) */
+  usage?: MessageUsage;
 }
 
 export type CollaborationMode = 'single' | 'collaborate' | 'debate';

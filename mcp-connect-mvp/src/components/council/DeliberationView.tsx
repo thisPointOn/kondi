@@ -1016,6 +1016,25 @@ export default function DeliberationView({
                 />
               </div>
             </div>
+          ) : activePanel === 'output' ? (
+            <div className="main-output-panel">
+              <h3>Output</h3>
+              {(() => {
+                const outputs = getAllOutputs(councilId);
+                const latestOutput = outputs.length > 0 ? outputs[outputs.length - 1] : null;
+                if (!latestOutput) {
+                  return <p className="output-empty">No output yet. The worker has not produced output.</p>;
+                }
+                return (
+                  <div className="output-content-wrapper">
+                    {outputs.length > 1 && (
+                      <p className="output-revision-count">{outputs.length} revision{outputs.length > 1 ? 's' : ''}</p>
+                    )}
+                    <pre className="output-content">{latestOutput.content}</pre>
+                  </div>
+                );
+              })()}
+            </div>
           ) : currentPhase === 'created' && !activePanel ? (
             <div className="deliberation-setup-prompt">
               <h3>Get Started</h3>

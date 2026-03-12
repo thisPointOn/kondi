@@ -200,8 +200,13 @@ class AnthropicClient {
         });
       }) || undefined;
 
-    console.log('[Anthropic] Available tools:', tools);
-    console.log('[Anthropic] Tool map keys:', Array.from(toolMap.keys()));
+    const toolsJson = tools ? JSON.stringify(tools) : '';
+    console.log(`[Anthropic] Tool summary: ${tools?.length || 0} tools, ${(toolsJson.length / 1024).toFixed(0)} KB total schema size`);
+    // Per-server breakdown
+    for (const [displayKey, { serverId, tools: serverTools }] of availableTools) {
+      const schemaSize = JSON.stringify(serverTools.map(t => t.inputSchema)).length;
+      console.log(`[Anthropic]   ${displayKey} (${serverId}): ${serverTools.length} tools, ${(schemaSize / 1024).toFixed(0)} KB schemas`);
+    }
 
     const anthropicMessages: AnthropicMessage[] = messages.map((m) => {
       const text = m.role === 'assistant' && m.toolCalls?.length
@@ -212,6 +217,19 @@ class AnthropicClient {
         content: [{ type: 'text' as const, text }],
       };
     });
+
+    // Log per-message sizes so we can see what's bloating the context
+    console.log(`[Anthropic] Message breakdown (${messages.length} messages):`);
+    messages.forEach((m, i) => {
+      const contentLen = m.content?.length || 0;
+      const toolCallsLen = m.toolCalls ? JSON.stringify(m.toolCalls).length : 0;
+      if (contentLen > 1000 || toolCallsLen > 1000) {
+        console.log(`[Anthropic]   msg[${i}] ${m.role}: content=${(contentLen / 1024).toFixed(1)} KB, toolCalls=${(toolCallsLen / 1024).toFixed(1)} KB`);
+      }
+    });
+    const totalContentChars = messages.reduce((s, m) => s + (m.content?.length || 0), 0);
+    const totalToolCallChars = messages.reduce((s, m) => s + (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0), 0);
+    console.log(`[Anthropic] Total: content=${(totalContentChars / 1024).toFixed(0)} KB, toolCalls=${(totalToolCallChars / 1024).toFixed(0)} KB`);
 
     const systemParts = [
       BASE_SYSTEM_PROMPT,
@@ -232,11 +250,105 @@ class AnthropicClient {
     const allTextParts: string[] = [];
     let currentMessages = [...anthropicMessages];
     let turnCount = 0;
+    let lastUsage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
+    let totalOutputTokens = 0;
+    let lastPayloadChars = 0;
 
     while (turnCount < MAX_TOOL_TURNS) {
       turnCount++;
-      const response = await this.sendMessage(currentMessages, tools, model, system || undefined, preferredProfileId);
-      console.log(`[Anthropic] Turn ${turnCount} response:`, JSON.stringify(response, null, 2));
+      // Estimate payload size before sending
+      const payloadBody = {
+        model: model || 'claude-sonnet-4-5-20250929',
+        messages: currentMessages,
+        tools: tools && tools.length > 0 ? tools : undefined,
+        system: system || undefined,
+      };
+      lastPayloadChars = JSON.stringify(payloadBody).length;
+
+      // Log payload breakdown per turn so bloat sources are visible
+      const toolDefsChars = tools ? JSON.stringify(tools).length : 0;
+      const systemChars = system ? system.length : 0;
+      const msgsChars = JSON.stringify(currentMessages).length;
+      console.log(`[Anthropic] Turn ${turnCount} payload: ${(lastPayloadChars / 1024).toFixed(0)} KB total | msgs: ${(msgsChars / 1024).toFixed(0)} KB (${currentMessages.length} entries) | tools: ${(toolDefsChars / 1024).toFixed(0)} KB | system: ${(systemChars / 1024).toFixed(0)} KB`);
+
+      let response;
+      try {
+        response = await this.sendMessage(currentMessages, tools, model, system || undefined, preferredProfileId);
+      } catch (sendErr) {
+        const errMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+        // If context overflow, build a detailed diagnostic from the actual payload
+        if (errMsg.includes('prompt is too long') || errMsg.includes('too many tokens') || errMsg.includes('context length exceeded')) {
+          const tokenMatch = errMsg.match(/([\d,]+)\s*tokens?\s*>\s*([\d,]+)/i);
+          const actualTokens = tokenMatch ? tokenMatch[1] : '?';
+          const maxTokens = tokenMatch ? tokenMatch[2] : '?';
+          const toolDefsSize = tools ? JSON.stringify(tools).length : 0;
+          const systemSize = system ? system.length : 0;
+
+          // Break down currentMessages by type
+          const msgDetails: string[] = [];
+          let textTotal = 0;
+          let toolUseTotal = 0;
+          let toolResultTotal = 0;
+
+          for (let i = 0; i < currentMessages.length; i++) {
+            const m = currentMessages[i];
+            const parts = Array.isArray(m.content) ? m.content : [m.content];
+            let msgTextSize = 0;
+            let msgToolUseSize = 0;
+            let msgToolResultSize = 0;
+
+            for (const p of parts) {
+              if (typeof p === 'string') {
+                msgTextSize += p.length;
+              } else if (p.type === 'text') {
+                msgTextSize += (p.text || '').length;
+              } else if (p.type === 'tool_use') {
+                msgToolUseSize += JSON.stringify(p.input || {}).length;
+              } else if (p.type === 'tool_result') {
+                const rc = typeof p.content === 'string' ? p.content.length : JSON.stringify(p.content || '').length;
+                msgToolResultSize += rc;
+              }
+            }
+
+            textTotal += msgTextSize;
+            toolUseTotal += msgToolUseSize;
+            toolResultTotal += msgToolResultSize;
+
+            const totalSize = msgTextSize + msgToolUseSize + msgToolResultSize;
+            if (totalSize > 2000) {
+              msgDetails.push(`  [${i}] ${m.role}: text=${(msgTextSize / 1024).toFixed(1)}KB` +
+                (msgToolUseSize > 0 ? ` tool_use=${(msgToolUseSize / 1024).toFixed(1)}KB` : '') +
+                (msgToolResultSize > 0 ? ` tool_result=${(msgToolResultSize / 1024).toFixed(1)}KB` : ''));
+            }
+          }
+
+          const diagnostic =
+            `Context limit exceeded on tool turn ${turnCount} — ${actualTokens} tokens > ${maxTokens} max\n\n` +
+            `**Payload breakdown:**\n` +
+            `- System prompt: ${(systemSize / 1024).toFixed(0)} KB\n` +
+            `- Tool definitions: ${(toolDefsSize / 1024).toFixed(0)} KB (${tools?.length || 0} tools)\n` +
+            `- Message text: ${(textTotal / 1024).toFixed(0)} KB\n` +
+            `- Tool use args: ${(toolUseTotal / 1024).toFixed(0)} KB\n` +
+            `- Tool results: ${(toolResultTotal / 1024).toFixed(0)} KB ← most likely culprit\n` +
+            `- Messages in payload: ${currentMessages.length}\n` +
+            `- Total payload: ${(lastPayloadChars / 1024).toFixed(0)} KB\n` +
+            (msgDetails.length > 0 ? `\n**Large messages (>2KB):**\n${msgDetails.join('\n')}\n` : '') +
+            `\n**This happened because** tool results from turns 1–${turnCount - 1} accumulated in the conversation. ` +
+            `Each tool call's full response stays in context for subsequent turns.`;
+
+          throw new Error(diagnostic);
+        }
+        throw sendErr;
+      }
+
+      // Capture usage from API response
+      if (response.usage) {
+        totalOutputTokens += response.usage.output_tokens || 0;
+        lastUsage = response.usage;
+        console.log(`[Anthropic] Turn ${turnCount} usage: ${response.usage.input_tokens} in / ${response.usage.output_tokens} out` +
+          (response.usage.cache_read_input_tokens ? ` / ${response.usage.cache_read_input_tokens} cache-read` : '') +
+          (response.usage.cache_creation_input_tokens ? ` / ${response.usage.cache_creation_input_tokens} cache-write` : ''));
+      }
 
       // Check for API errors
       if (response.error) {
@@ -295,10 +407,17 @@ class AnthropicClient {
           console.log('[Anthropic] Tool result:', result);
           call.result = result;
           call.status = 'completed';
+          const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+          // Cap individual tool results at 30K chars (~8K tokens) to prevent context explosion.
+          // The model sees the full result on this turn; subsequent turns get the truncated version.
+          const MAX_TOOL_RESULT_CHARS = 30_000;
+          const truncatedResult = resultStr.length > MAX_TOOL_RESULT_CHARS
+            ? resultStr.slice(0, MAX_TOOL_RESULT_CHARS) + `\n\n[... truncated — ${resultStr.length.toLocaleString()} chars total, showing first ${MAX_TOOL_RESULT_CHARS.toLocaleString()}]`
+            : resultStr;
           toolResultsContent.push({
             type: 'tool_result',
             tool_use_id: call.id,
-            content: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+            content: truncatedResult,
           });
         } catch (err) {
           call.error = err instanceof Error ? err.message : 'Unknown error';
@@ -311,6 +430,22 @@ class AnthropicClient {
         }
         toolCalls.push(call);
       }
+
+      // Before appending new results, compress tool results from OLDER turns.
+      // The model already processed them — keep only a short summary to save context.
+      const OLD_RESULT_CAP = 2_000;
+      currentMessages = currentMessages.map(msg => {
+        if (msg.role !== 'user' || !Array.isArray(msg.content)) return msg;
+        const compressed = msg.content.map((part: any) => {
+          if (part.type !== 'tool_result' || typeof part.content !== 'string') return part;
+          if (part.content.length <= OLD_RESULT_CAP) return part;
+          return {
+            ...part,
+            content: part.content.slice(0, OLD_RESULT_CAP) + `\n[... compressed from ${part.content.length.toLocaleString()} chars — see original turn for full result]`,
+          };
+        });
+        return { ...msg, content: compressed };
+      });
 
       // Append assistant response + tool results and loop for next turn
       currentMessages = [
@@ -337,6 +472,14 @@ class AnthropicClient {
         role: 'assistant',
         content: finalContent || '[No content returned - check console for details]',
         timestamp: new Date(),
+        usage: lastUsage ? {
+          inputTokens: lastUsage.input_tokens || 0,
+          outputTokens: totalOutputTokens,  // sum across all tool turns
+          cacheRead: lastUsage.cache_read_input_tokens,
+          cacheCreation: lastUsage.cache_creation_input_tokens,
+          payloadChars: lastPayloadChars,
+          apiTurns: turnCount,
+        } : undefined,
       },
       toolCalls,
     };
