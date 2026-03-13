@@ -205,6 +205,7 @@ export default function LedgerEntryCard({
   defaultCollapsed = false,
 }: LedgerEntryCardProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
+  const [showContextDetail, setShowContextDetail] = useState(false);
   const typeStyle = ENTRY_TYPE_STYLES[entry.entryType] || { icon: '📄', label: entry.entryType, colorClass: 'system' };
   const summary = generateSummary(entry.content, entry.entryType);
   const providerColor = getProviderColor(persona?.provider);
@@ -383,8 +384,51 @@ export default function LedgerEntryCard({
           {entry.latencyMs !== undefined && (
             <span>{(entry.latencyMs / 1000).toFixed(1)}s</span>
           )}
+          {entry.structured?.contextInspection && (
+            <span className="entry-stats-detail-toggle" onClick={(e) => { e.stopPropagation(); setShowContextDetail(!showContextDetail); }}>
+              {showContextDetail ? '▾ context' : '▸ context'}
+            </span>
+          )}
         </div>
       )}
+
+      {showContextDetail && entry.structured?.contextInspection && (() => {
+        const ci = entry.structured.contextInspection as any;
+        return (
+          <div className="entry-context-detail">
+            <div className="ctx-detail-row">
+              <span className="ctx-detail-label">System prompt</span>
+              <span className="ctx-detail-value">{(ci.systemPromptChars / 1024).toFixed(1)} KB ({ci.systemPromptSource})</span>
+            </div>
+            <div className="ctx-detail-row">
+              <span className="ctx-detail-label">User message</span>
+              <span className="ctx-detail-value">{(ci.userMessageChars / 1024).toFixed(1)} KB</span>
+            </div>
+            <div className="ctx-detail-row">
+              <span className="ctx-detail-label">Tools</span>
+              <span className="ctx-detail-value">{ci.toolCount} ({ci.toolScope})</span>
+            </div>
+            {ci.wordLimitApplied && (
+              <div className="ctx-detail-row">
+                <span className="ctx-detail-label">Word limit</span>
+                <span className="ctx-detail-value">{ci.wordLimitApplied}</span>
+              </div>
+            )}
+            {ci.timeoutMs && (
+              <div className="ctx-detail-row">
+                <span className="ctx-detail-label">Timeout</span>
+                <span className="ctx-detail-value">{Math.round(ci.timeoutMs / 1000)}s</span>
+              </div>
+            )}
+            {ci.effectiveServerIds && ci.effectiveServerIds.length > 0 && (
+              <div className="ctx-detail-row">
+                <span className="ctx-detail-label">Servers</span>
+                <span className="ctx-detail-value">{ci.effectiveServerIds.join(', ')}</span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {entry.error && (
         <div className="entry-error">

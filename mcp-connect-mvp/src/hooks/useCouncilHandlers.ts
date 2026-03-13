@@ -23,7 +23,7 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
       const includeThinking = opts?.includeThinking ?? true;
       return new DeliberationOrchestrator({
         invokeAgent: async (invocation, persona) => {
-          console.log('[Council] invokeAgent called', { personaName: persona.name, model: persona.model, skipTools: invocation.skipTools, allowedTools: invocation.allowedTools });
+          console.log('[Council] invokeAgent called', { personaName: persona.name, model: persona.model, skipTools: invocation.skipTools, allowedTools: invocation.allowedTools, timeoutMs: invocation.timeoutMs });
           const mcpTools = invocation.skipTools ? undefined : filterToolsByServerIds(availableTools, invocation.allowedServerIds);
           const result = await callLLM({
             model: persona.model,
@@ -36,8 +36,9 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
             availableTools: mcpTools,
             conversationId: invocation.conversationId,
             workingDirectory: invocation.workingDirectory,
+            timeoutMs: invocation.timeoutMs,
           });
-          console.log('[Council] invokeAgent completed', { personaName: persona.name });
+          console.log('[Council] invokeAgent completed', { personaName: persona.name, tokensUsed: result.tokensUsed });
           return { ...result, sessionId: result.sessionId };
         },
         ...(opts?.includePhaseChange ? {
@@ -129,53 +130,6 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
     }
   }, [makeDeliberator, availableTools]);
 
-  const onRunRound = useCallback(async (council: Council) => {
-    const deliberator = makeDeliberator();
-    const phase = council.deliberationState?.currentPhase;
-    if (phase === 'round_independent') {
-      await deliberator.runIndependentRound(council);
-    } else if (phase === 'round_interactive') {
-      await deliberator.runInteractiveRound(council);
-    }
-    setThinkingPersonas([]);
-  }, [makeDeliberator]);
-
-  const onEvaluateRound = useCallback(async (council: Council) => {
-    const deliberator = makeDeliberator();
-    await deliberator.managerEvaluate(council);
-    setThinkingPersonas([]);
-  }, [makeDeliberator]);
-
-  const onMakeDecision = useCallback(async (council: Council) => {
-    const deliberator = makeDeliberator();
-    await deliberator.makeDecision(council);
-    setThinkingPersonas([]);
-  }, [makeDeliberator]);
-
-  const onCreatePlan = useCallback(async (council: Council) => {
-    const deliberator = makeDeliberator();
-    await deliberator.createPlan(council);
-    setThinkingPersonas([]);
-  }, [makeDeliberator]);
-
-  const onIssueDirective = useCallback(async (council: Council) => {
-    const deliberator = makeDeliberator();
-    await deliberator.issueDirective(council);
-    setThinkingPersonas([]);
-  }, [makeDeliberator]);
-
-  const onExecuteWork = useCallback(async (council: Council) => {
-    const deliberator = makeDeliberator();
-    await deliberator.executeWork(council);
-    setThinkingPersonas([]);
-  }, [makeDeliberator]);
-
-  const onReviewWork = useCallback(async (council: Council) => {
-    const deliberator = makeDeliberator();
-    await deliberator.reviewWork(council);
-    setThinkingPersonas([]);
-  }, [makeDeliberator]);
-
   const onPauseDeliberation = useCallback(async (council: Council) => {
     const deliberator = makeDeliberator({ includeThinking: false });
     await deliberator.pause(council);
@@ -257,13 +211,6 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
     onGenerateSynthesis,
     onResolve,
     onFrameProblem,
-    onRunRound,
-    onEvaluateRound,
-    onMakeDecision,
-    onCreatePlan,
-    onIssueDirective,
-    onExecuteWork,
-    onReviewWork,
     onPauseDeliberation,
     onResumeDeliberation,
     onForceDecision,

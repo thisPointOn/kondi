@@ -39,13 +39,6 @@ interface DeliberationViewProps {
   councilId: string;
   onBack?: () => void;
   onFrameProblem?: (council: Council, rawProblem: string) => Promise<void>;
-  onRunRound?: (council: Council) => Promise<void>;
-  onEvaluateRound?: (council: Council) => Promise<void>;
-  onMakeDecision?: (council: Council) => Promise<void>;
-  onCreatePlan?: (council: Council) => Promise<void>;
-  onIssueDirective?: (council: Council) => Promise<void>;
-  onExecuteWork?: (council: Council) => Promise<void>;
-  onReviewWork?: (council: Council) => Promise<void>;
   onPause?: (council: Council) => Promise<void>;
   onResume?: (council: Council) => Promise<void>;
   onForceDecision?: (council: Council) => Promise<void>;
@@ -68,13 +61,6 @@ export default function DeliberationView({
   councilId,
   onBack,
   onFrameProblem,
-  onRunRound,
-  onEvaluateRound,
-  onMakeDecision,
-  onCreatePlan,
-  onIssueDirective,
-  onExecuteWork,
-  onReviewWork,
   onPause,
   onResume,
   onForceDecision,
@@ -107,6 +93,7 @@ export default function DeliberationView({
   const [showContextPanel, setShowContextPanel] = useState(false);
   const [showPatchReview, setShowPatchReview] = useState(false);
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
+  const [showAgentBreakdown, setShowAgentBreakdown] = useState(false);
   const [activePanel, setActivePanel] = useState<'setup' | 'deliberation' | 'output' | null>(() => {
     // Auto-open setup panel for new councils
     const c = councilStore.get(councilId);
@@ -460,42 +447,6 @@ export default function DeliberationView({
     }
   };
 
-  // Handle action based on current phase
-  const handlePhaseAction = async () => {
-    if (!council) return;
-    setIsGenerating(true);
-    setDeliberationError(null);
-
-    try {
-      switch (currentPhase) {
-        case 'round_independent':
-        case 'round_interactive':
-          await onRunRound?.(council);
-          break;
-        case 'round_waiting_for_manager':
-          await onEvaluateRound?.(council);
-          break;
-        case 'deciding':
-          await onMakeDecision?.(council);
-          break;
-        case 'planning':
-          await onCreatePlan?.(council);
-          break;
-        case 'directing':
-          await onIssueDirective?.(council);
-          break;
-        case 'executing':
-          await onExecuteWork?.(council);
-          break;
-        case 'reviewing':
-          await onReviewWork?.(council);
-          break;
-      }
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
   if (!council) {
     return (
       <div className="deliberation-view deliberation-loading">
@@ -598,11 +549,96 @@ export default function DeliberationView({
               {pendingPatches.length} Patch{pendingPatches.length > 1 ? 'es' : ''}
             </button>
           )}
-          <span className="deliberation-stats">
+          <span
+            className="deliberation-stats clickable"
+            onClick={() => setShowAgentBreakdown(!showAgentBreakdown)}
+            title="Click to show per-agent breakdown"
+          >
             {entries.length} entries
+            {(() => {
+              const totalTokens = entries.reduce((s, e) => s + (e.tokensUsed || 0), 0);
+              const totalLatency = entries.reduce((s, e) => s + (e.latencyMs || 0), 0);
+              const round = council.deliberationState?.currentRound || 0;
+              return (
+                <>
+                  {totalTokens > 0 && <span className="stat-sep">·</span>}
+                  {totalTokens > 0 && <span>{totalTokens > 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : totalTokens} tokens</span>}
+                  {totalLatency > 0 && <span className="stat-sep">·</span>}
+                  {totalLatency > 0 && <span>{(totalLatency / 1000).toFixed(0)}s total</span>}
+                  {round > 0 && <span className="stat-sep">·</span>}
+                  {round > 0 && <span>R{round}</span>}
+                  <span className="stat-sep">·</span>
+                  <span className="breakdown-toggle">{showAgentBreakdown ? '▾' : '▸'}</span>
+                </>
+              );
+            })()}
           </span>
         </div>
       </div>
+
+      {/* Per-Agent Breakdown Panel */}
+      {showAgentBreakdown && entries.length > 0 && (() => {
+        // Aggregate stats per persona
+        const agentStats = new Map<string, { tokens: number; latency: number; calls: number; systemKB: number; userKB: number; toolCount: number }>();
+        for (const e of entries) {
+          const pid = e.authorPersonaId;
+          if (!pid || pid === 'user' || pid === 'system') continue;
+          const existing = agentStats.get(pid) || { tokens: 0, latency: 0, calls: 0, systemKB: 0, userKB: 0, toolCount: 0 };
+          existing.tokens += e.tokensUsed || 0;
+          existing.latency += e.latencyMs || 0;
+          existing.calls += 1;
+          const ci = e.structured?.contextInspection as any;
+          if (ci) {
+            existing.systemKB += ci.systemPromptChars || 0;
+            existing.userKB += ci.userMessageChars || 0;
+            existing.toolCount = Math.max(existing.toolCount, ci.toolCount || 0);
+          }
+          agentStats.set(pid, existing);
+        }
+
+        const totalTokens = entries.reduce((s, e) => s + (e.tokensUsed || 0), 0);
+
+        return (
+          <div className="agent-breakdown-panel">
+            {Array.from(agentStats.entries()).map(([pid, stats]) => {
+              const persona = council.personas.find(p => p.id === pid);
+              const pct = totalTokens > 0 ? Math.round((stats.tokens / totalTokens) * 100) : 0;
+              return (
+                <div key={pid} className="agent-breakdown-row">
+                  <div className="agent-breakdown-name">
+                    {persona && (
+                      <span
+                        className="agent-breakdown-avatar"
+                        style={{ backgroundColor: (persona.color || '#666') + '30', color: persona.color || '#666' }}
+                      >
+                        {persona.avatar || '🤖'}
+                      </span>
+                    )}
+                    <span className="agent-breakdown-label">
+                      {persona?.name || pid}
+                      <span className="agent-breakdown-role">
+                        {council.deliberation?.roleAssignments?.find(r => r.personaId === pid)?.role || ''}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="agent-breakdown-bar-container">
+                    <div className="agent-breakdown-bar" style={{ width: `${pct}%`, backgroundColor: persona?.color || '#666' }} />
+                  </div>
+                  <div className="agent-breakdown-details">
+                    <span className="abd-stat">{stats.tokens > 1000 ? `${(stats.tokens / 1000).toFixed(1)}k` : stats.tokens} tok</span>
+                    <span className="abd-stat">{(stats.latency / 1000).toFixed(0)}s</span>
+                    <span className="abd-stat">{stats.calls} calls</span>
+                    {stats.systemKB > 0 && <span className="abd-stat abd-dim">sys {(stats.systemKB / 1024).toFixed(0)}KB</span>}
+                    {stats.userKB > 0 && <span className="abd-stat abd-dim">msg {(stats.userKB / 1024).toFixed(0)}KB</span>}
+                    {stats.toolCount > 0 && <span className="abd-stat abd-dim">{stats.toolCount} tools</span>}
+                    <span className="abd-stat abd-pct">{pct}%</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* Phase Indicator */}
       <PhaseIndicator
@@ -1082,7 +1118,16 @@ export default function DeliberationView({
             <>
               {entries.length === 0 && thinkingPersonas.length === 0 && !deliberationError ? (
                 <div className="deliberation-empty">
-                  <p>{isGenerating ? 'Starting deliberation...' : 'No entries yet. Click Start to begin.'}</p>
+                  <p>{isGenerating ? 'Starting deliberation...' : 'No entries yet.'}</p>
+                  {!isGenerating && canStart && problemInput.trim() && (
+                    <button
+                      className="deliberation-start-btn"
+                      onClick={handleFrameProblem}
+                      disabled={isGenerating}
+                    >
+                      Start Deliberation
+                    </button>
+                  )}
                 </div>
               ) : (
                 entries.map((entry) => (
@@ -1148,6 +1193,28 @@ export default function DeliberationView({
                     }}
                   >
                     x
+                  </button>
+                </div>
+              )}
+              {/* Terminal state actions: Clear / Restart */}
+              {isTerminal && currentPhase !== 'created' && entries.length > 0 && (
+                <div className="terminal-actions">
+                  <span className="terminal-label">
+                    Deliberation {currentPhase === 'completed' ? 'completed' : currentPhase === 'failed' ? 'failed' : 'cancelled'}
+                  </span>
+                  <button
+                    className="terminal-btn clear-btn"
+                    onClick={handleClearResults}
+                    disabled={isGenerating}
+                  >
+                    Clear Results
+                  </button>
+                  <button
+                    className="terminal-btn restart-btn"
+                    onClick={handleRestartDeliberation}
+                    disabled={isGenerating || !problemInput.trim()}
+                  >
+                    Restart
                   </button>
                 </div>
               )}

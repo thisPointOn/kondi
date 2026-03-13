@@ -287,16 +287,16 @@ export class OpenAIClient {
             toolCall.status = 'running';
             console.log('[OpenAI] Calling tool:', toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);
 
-            let result;
-            if (toolInfo.serverId === LOCAL_SERVER_ID) {
-              result = await localToolsService.callTool(toolInfo.tool.name, toolCall.arguments, workingDirectory);
-            } else {
-              result = await mcpClient.callTool(
-                toolInfo.serverId,
-                toolInfo.tool.name,
-                toolCall.arguments
-              );
-            }
+            const TOOL_CALL_TIMEOUT = 300_000; // 5 min per tool call
+            const toolPromise = toolInfo.serverId === LOCAL_SERVER_ID
+              ? localToolsService.callTool(toolInfo.tool.name, toolCall.arguments, workingDirectory)
+              : mcpClient.callTool(toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);
+            const result = await Promise.race([
+              toolPromise,
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error(`Tool ${toolInfo.tool.name} timed out after ${TOOL_CALL_TIMEOUT / 1000}s`)), TOOL_CALL_TIMEOUT)
+              ),
+            ]);
 
             console.log('[OpenAI] Tool result:', result);
             toolCall.result = result;

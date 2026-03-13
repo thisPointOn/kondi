@@ -307,12 +307,16 @@ export class CodexClient {
             toolCall.status = 'running';
             console.log('[Codex] Calling tool:', toolInfo.serverId, toolInfo.tool.name, args);
 
-            let result;
-            if (toolInfo.serverId === LOCAL_SERVER_ID) {
-              result = await localToolsService.callTool(toolInfo.tool.name, args, workingDirectory);
-            } else {
-              result = await mcpClient.callTool(toolInfo.serverId, toolInfo.tool.name, args);
-            }
+            const TOOL_CALL_TIMEOUT = 300_000; // 5 min per tool call
+            const toolPromise = toolInfo.serverId === LOCAL_SERVER_ID
+              ? localToolsService.callTool(toolInfo.tool.name, args, workingDirectory)
+              : mcpClient.callTool(toolInfo.serverId, toolInfo.tool.name, args);
+            const result = await Promise.race([
+              toolPromise,
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error(`Tool ${toolInfo.tool.name} timed out after ${TOOL_CALL_TIMEOUT / 1000}s`)), TOOL_CALL_TIMEOUT)
+              ),
+            ]);
 
             console.log('[Codex] Tool result:', result);
             toolCall.result = result;

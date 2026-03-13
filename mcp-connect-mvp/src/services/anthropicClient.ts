@@ -397,12 +397,17 @@ class AnthropicClient {
           call.status = 'running';
           console.log('[Anthropic] Calling tool:', call.serverId, call.toolName, call.arguments);
 
+          const TOOL_CALL_TIMEOUT = 300_000; // 5 min per tool call
           let result;
-          if (call.serverId === LOCAL_SERVER_ID) {
-            result = await localToolsService.callTool(call.toolName, call.arguments, workingDirectory);
-          } else {
-            result = await mcpClient.callTool(call.serverId, call.toolName, call.arguments);
-          }
+          const toolPromise = call.serverId === LOCAL_SERVER_ID
+            ? localToolsService.callTool(call.toolName, call.arguments, workingDirectory)
+            : mcpClient.callTool(call.serverId, call.toolName, call.arguments);
+          result = await Promise.race([
+            toolPromise,
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`Tool ${call.toolName} timed out after ${TOOL_CALL_TIMEOUT / 1000}s`)), TOOL_CALL_TIMEOUT)
+            ),
+          ]);
 
           console.log('[Anthropic] Tool result:', result);
           call.result = result;

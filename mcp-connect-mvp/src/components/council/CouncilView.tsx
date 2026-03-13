@@ -21,13 +21,6 @@ interface CouncilViewProps {
   onResolve?: (council: Council) => Promise<void>;
   // Deliberation handlers
   onFrameProblem?: (council: Council, rawProblem: string) => Promise<void>;
-  onRunRound?: (council: Council) => Promise<void>;
-  onEvaluateRound?: (council: Council) => Promise<void>;
-  onMakeDecision?: (council: Council) => Promise<void>;
-  onCreatePlan?: (council: Council) => Promise<void>;
-  onIssueDirective?: (council: Council) => Promise<void>;
-  onExecuteWork?: (council: Council) => Promise<void>;
-  onReviewWork?: (council: Council) => Promise<void>;
   onPauseDeliberation?: (council: Council) => Promise<void>;
   onResumeDeliberation?: (council: Council) => Promise<void>;
   onForceDecision?: (council: Council) => Promise<void>;
@@ -55,13 +48,6 @@ export default function CouncilView({
   onResolve,
   // Deliberation handlers
   onFrameProblem,
-  onRunRound,
-  onEvaluateRound,
-  onMakeDecision,
-  onCreatePlan,
-  onIssueDirective,
-  onExecuteWork,
-  onReviewWork,
   onPauseDeliberation,
   onResumeDeliberation,
   onForceDecision,
@@ -121,13 +107,6 @@ export default function CouncilView({
         councilId={councilId}
         onBack={onBack}
         onFrameProblem={onFrameProblem}
-        onRunRound={onRunRound}
-        onEvaluateRound={onEvaluateRound}
-        onMakeDecision={onMakeDecision}
-        onCreatePlan={onCreatePlan}
-        onIssueDirective={onIssueDirective}
-        onExecuteWork={onExecuteWork}
-        onReviewWork={onReviewWork}
         onPause={onPauseDeliberation}
         onResume={onResumeDeliberation}
         onForceDecision={onForceDecision}

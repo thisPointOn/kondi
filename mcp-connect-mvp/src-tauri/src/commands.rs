@@ -1026,7 +1026,10 @@ pub async fn mcp_request(
     access_token: Option<String>,
     session_id: Option<String>,
 ) -> Result<McpResponse, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300)) // 5 min timeout for MCP tool calls
+        .build()
+        .map_err(|e| e.to_string())?;
 
     let mut request = match method.to_uppercase().as_str() {
         "GET" => client.get(&url),
@@ -1102,7 +1105,10 @@ pub async fn anthropic_request(
     apiKey: String,
     betas: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600)) // 10 min timeout for LLM API calls
+        .build()
+        .map_err(|e| e.to_string())?;
 
     let mut request = match method.to_uppercase().as_str() {
         "GET" => client.get(&url),
@@ -2893,7 +2899,10 @@ pub async fn codex_request(
     body_json["stream"] = serde_json::Value::Bool(true);
     let body_str = serde_json::to_string(&body_json).map_err(|e| e.to_string())?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600)) // 10 min timeout for LLM API calls
+        .build()
+        .map_err(|e| e.to_string())?;
 
     let resp = client
         .post("https://chatgpt.com/backend-api/codex/responses")

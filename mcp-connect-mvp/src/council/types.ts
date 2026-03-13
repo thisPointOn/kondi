@@ -3,6 +3,8 @@
  * Core type definitions
  */
 
+export type { ContextInspection } from './context-inspection';
+
 // ============================================================================
 // Persona Types
 // ============================================================================

@@ -318,6 +318,40 @@
   text-transform: lowercase;
 }
 
+/* Context inspection detail toggle */
+.entry-stats-detail-toggle {
+  cursor: pointer;
+  color: #6366f1;
+  font-size: 0.7rem;
+  margin-left: auto;
+  user-select: none;
+}
+.entry-stats-detail-toggle:hover {
+  color: #818cf8;
+}
+
+/* Context inspection detail panel */
+.entry-context-detail {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-tertiary, #1a1a1a);
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+.ctx-detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.15rem 0;
+  color: var(--text-secondary, #999);
+}
+.ctx-detail-label {
+  color: var(--text-tertiary, #666);
+}
+.ctx-detail-value {
+  font-family: monospace;
+  color: var(--text-primary, #ccc);
+}
+
 /* Collapsible functionality */
 .entry-collapse-toggle {
   background: transparent;
