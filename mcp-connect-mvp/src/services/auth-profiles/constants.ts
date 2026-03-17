@@ -10,7 +10,9 @@ export const ANTHROPIC_OAUTH_PREFIX = 'sk-ant-oat';
 export const ANTHROPIC_API_PREFIX = 'sk-ant-api';
 export const JWT_PREFIX = 'eyJ';
 
-/** Anthropic beta headers (from openclaw) */
+/** Anthropic beta headers.
+ * OAuth tokens are no longer used for direct API calls (routed through CLI instead).
+ * API key path uses prompt caching. */
 export const OAUTH_BETAS = [
   'claude-code-20250219',
   'oauth-2025-04-20',

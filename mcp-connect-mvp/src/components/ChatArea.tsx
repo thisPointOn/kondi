@@ -7,11 +7,7 @@ import { Paperclip, X, ChevronDown, FolderOpen, Pin } from 'lucide-react';
 import type { ChatModelPin } from '../hooks/useChats';
 import { open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, Message, ToolCall } from '../types/mcp';
-import { openaiClient } from '../services/openaiClient';
-import { codexClient } from '../services/codexClient';
-import { anthropicClient } from '../services/anthropicClient';
-import { deepseekClient, xaiClient, ollamaClient } from '../services/openaiCompatibleClient';
-import { geminiClient } from '../services/geminiClient';
+import { chatCompletion } from '../services/llm-router';
 import { LOCAL_TOOLS, LOCAL_SERVER_ID, localToolsService } from '../services/localTools';
 import {
   ANTHROPIC_CLI_MODELS,
@@ -776,53 +772,19 @@ const ChatArea: FC<ChatAreaProps> = ({
     // Use pinned model if set, otherwise fall back to global
     const modelForCall = effectiveModelId;
 
-    if (provId.startsWith('anthropic')) {
-      console.log('[ChatArea] Routing to Anthropic client');
-      const result = await anthropicClient.chat(
-        msgs, availableTools, modelForCall, serverSummary, modePrompt, effectiveWorkingDir, provId
-      );
-      message = result.message;
-      toolCalls = result.toolCalls;
-      message.provider = provId;
-    } else if (provId === 'openai-cli') {
-      console.log('[ChatArea] Routing to Codex client (OpenAI CLI)');
-      const result = await codexClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir);
-      message = result.message;
-      toolCalls = result.toolCalls;
-      message.provider = provId;
-    } else if (provId === 'openai-api' || provId.startsWith('openai')) {
-      console.log('[ChatArea] Routing to OpenAI client');
-      const result = await openaiClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir, provId);
-      message = result.message;
-      toolCalls = result.toolCalls;
-      message.provider = provId;
-    } else if (provId === 'deepseek') {
-      console.log('[ChatArea] Routing to DeepSeek client');
-      const result = await deepseekClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir, provId);
-      message = result.message;
-      toolCalls = result.toolCalls;
-      message.provider = provId;
-    } else if (provId === 'xai') {
-      console.log('[ChatArea] Routing to xAI client');
-      const result = await xaiClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir, provId);
-      message = result.message;
-      toolCalls = result.toolCalls;
-      message.provider = provId;
-    } else if (provId === 'google') {
-      console.log('[ChatArea] Routing to Gemini client');
-      const result = await geminiClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir, provId);
-      message = result.message;
-      toolCalls = result.toolCalls;
-      message.provider = provId;
-    } else if (provId === 'ollama') {
-      console.log('[ChatArea] Routing to Ollama client');
-      const result = await ollamaClient.chat(msgs, availableTools, modelForCall, modePrompt, effectiveWorkingDir, provId);
-      message = result.message;
-      toolCalls = result.toolCalls;
-      message.provider = provId;
-    } else {
-      throw new Error(`Unknown provider: ${provId}`);
-    }
+    const result = await chatCompletion({
+      provider: provId,
+      model: modelForCall,
+      messages: msgs,
+      availableTools,
+      systemPrompt: modePrompt,
+      workingDirectory: effectiveWorkingDir,
+      serverSummary,
+      chatId: chatId || undefined,
+    });
+    message = result.message;
+    toolCalls = result.toolCalls;
+    message.provider = provId;
 
     message.toolCalls = toolCalls;
 

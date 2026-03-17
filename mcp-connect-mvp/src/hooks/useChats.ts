@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppView } from '../components/Sidebar';
-import { openaiClient } from '../services/openaiClient';
-import { anthropicClient } from '../services/anthropicClient';
-import type { MCPTool, Message } from '../types/mcp';
+import { simpleCompletion } from '../services/llm-router';
+import type { Message } from '../types/mcp';
 import { invoke } from '@tauri-apps/api/core';
 
 type ChatRecord = Record<string, Message[]>;
@@ -264,17 +263,17 @@ export function useChats({
       .then(() => console.log('[useChats] Chats saved to Tauri storage'))
       .catch((e) => console.warn('[useChats] Failed to save chats to Tauri:', e));
 
-    // Also save to localStorage as backup
+    // Also save to localStorage as best-effort backup (Tauri storage is primary)
     try {
-      if (data.length > 4 * 1024 * 1024) {
-        console.warn('[useChats] Chat data too large for localStorage, trimming');
-        const trimmed = sorted.slice(0, Math.max(5, Math.floor(sorted.length / 2)));
+      if (data.length > 3 * 1024 * 1024) {
+        // Too large — save only the 3 most recent chats as backup
+        const trimmed = sorted.slice(0, 3);
         localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(trimmed));
       } else {
         localStorage.setItem(CHAT_STORAGE_KEY, data);
       }
-    } catch (e) {
-      console.warn('[useChats] Failed to save chats to localStorage:', e);
+    } catch {
+      // Quota exceeded — silently skip, Tauri storage is the source of truth
     }
   }, [chats, hasLoadedChats]);
 
@@ -342,22 +341,19 @@ export function useChats({
       timestamp: new Date(),
     };
 
-    const available = new Map<string, { serverId: string; tools: MCPTool[] }>();
-
     try {
-      let assistantMessage;
-      if (provider === 'chatgpt' && openaiKey) {
-        const res = await openaiClient.chat([userMessage], available, openaiModel, undefined, undefined, selectedProviderId);
-        assistantMessage = { ...res.message, timestamp: new Date() };
-      } else if (anthropicKey) {
-        const res = await anthropicClient.chat([userMessage], available, anthropicModel, undefined, undefined, undefined, selectedProviderId);
-        assistantMessage = { ...res.message, timestamp: new Date() };
-      } else if (openaiKey) {
-        const res = await openaiClient.chat([userMessage], available, openaiModel, undefined, undefined, selectedProviderId);
-        assistantMessage = { ...res.message, timestamp: new Date() };
-      } else {
-        throw new Error('No LLM provider configured. Add credentials in LLM Providers settings.');
-      }
+      const result = await simpleCompletion({
+        provider: selectedProviderId,
+        model: provider === 'chatgpt' ? openaiModel : anthropicModel,
+        systemPrompt: 'You are auditing an MCP server manifest against its README to spot risks and missing pieces.',
+        userMessage: prompt,
+      });
+      const assistantMessage: Message = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: result.content,
+        timestamp: new Date(),
+      };
 
       const chatId = crypto.randomUUID();
       setChats((prev) => ({

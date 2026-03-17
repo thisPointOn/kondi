@@ -1,16 +1,12 @@
 /**
  * GUI Pipeline Caller
  *
- * Unified LLM caller for pipeline execution in the GUI.
- * All providers route through direct API calls using auth profiles.
+ * Pipeline-specific wrapper around the unified LLM router.
+ * Adds tool discovery, tool capping, allowed-tool filtering, and timeouts.
+ * Provider routing is handled entirely by llm-router.ts.
  */
 
-import { isOpenAIModel } from './output-parsers';
-import { anthropicClient } from '../services/anthropicClient';
-import { openaiClient } from '../services/openaiClient';
-import { codexClient } from '../services/codexClient';
-import { deepseekClient, xaiClient, ollamaClient } from '../services/openaiCompatibleClient';
-import { geminiClient } from '../services/geminiClient';
+import { simpleCompletion } from '../services/llm-router';
 import { LOCAL_SERVER_ID } from '../services/localTools';
 import { BUILTIN_SERVER_IDS, countTools } from '../utils/filterTools';
 import type { MCPTool } from '../types/mcp';
@@ -106,185 +102,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number | undefined, label: stri
       setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms)
     ),
   ]);
-}
-
-// ============================================================================
-// API Callers (direct API calls, support MCP tools from GUI)
-// ============================================================================
-
-/**
- * Call Anthropic API directly.
- * Receives MCP tools from GUI-connected servers if provided.
- */
-async function callAnthropicApi(opts: CallLLMOptions): Promise<CallerResult> {
-  const start = Date.now();
-
-  const messages = [
-    {
-      id: crypto.randomUUID(),
-      role: 'user' as const,
-      content: opts.userMessage,
-      timestamp: new Date(),
-    },
-  ];
-
-  const tools = opts.skipTools ? new Map() : applyAllowedToolsFilter(opts.availableTools || new Map(), opts.allowedTools);
-
-  const result = await withTimeout(
-    anthropicClient.chat(
-      messages,
-      tools,
-      opts.model || 'claude-sonnet-4-5-20250929',
-      undefined,
-      opts.systemPrompt,
-      opts.workingDirectory,
-      opts.provider,
-    ),
-    opts.timeoutMs,
-    'Anthropic API',
-  );
-
-  const latencyMs = Date.now() - start;
-  const inputTokens = Math.ceil((opts.systemPrompt.length + opts.userMessage.length) / 4);
-  const outputTokens = Math.ceil(result.message.content.length / 4);
-
-  return {
-    content: result.message.content,
-    tokensUsed: inputTokens + outputTokens,
-    latencyMs,
-  };
-}
-
-/**
- * Call OpenAI API directly.
- * Receives MCP tools from GUI-connected servers if provided.
- */
-async function callOpenAiApi(opts: CallLLMOptions): Promise<CallerResult> {
-  const start = Date.now();
-
-  const messages = [
-    {
-      id: crypto.randomUUID(),
-      role: 'user' as const,
-      content: opts.userMessage,
-      timestamp: new Date(),
-    },
-  ];
-
-  const tools = opts.skipTools ? new Map() : applyAllowedToolsFilter(opts.availableTools || new Map(), opts.allowedTools);
-
-  const result = await withTimeout(
-    openaiClient.chat(
-      messages,
-      tools,
-      opts.model || 'gpt-4o',
-      opts.systemPrompt,
-      opts.workingDirectory,
-      opts.provider,
-    ),
-    opts.timeoutMs,
-    'OpenAI API',
-  );
-
-  const latencyMs = Date.now() - start;
-  const inputTokens = Math.ceil((opts.systemPrompt.length + opts.userMessage.length) / 4);
-  const outputTokens = Math.ceil(result.message.content.length / 4);
-
-  return {
-    content: result.message.content,
-    tokensUsed: inputTokens + outputTokens,
-    latencyMs,
-  };
-}
-
-/**
- * Call Codex API (ChatGPT subscription via OAuth).
- * Used for openai-cli provider.
- */
-async function callCodexApi(opts: CallLLMOptions): Promise<CallerResult> {
-  const start = Date.now();
-
-  const messages = [
-    {
-      id: crypto.randomUUID(),
-      role: 'user' as const,
-      content: opts.userMessage,
-      timestamp: new Date(),
-    },
-  ];
-
-  const tools = opts.skipTools ? new Map() : applyAllowedToolsFilter(opts.availableTools || new Map(), opts.allowedTools);
-
-  const result = await withTimeout(
-    codexClient.chat(
-      messages,
-      tools,
-      opts.model || 'gpt-5.2-codex',
-      opts.systemPrompt,
-      opts.workingDirectory,
-    ),
-    opts.timeoutMs,
-    'Codex API',
-  );
-
-  const latencyMs = Date.now() - start;
-  const inputTokens = Math.ceil((opts.systemPrompt.length + opts.userMessage.length) / 4);
-  const outputTokens = Math.ceil(result.message.content.length / 4);
-
-  return {
-    content: result.message.content,
-    tokensUsed: inputTokens + outputTokens,
-    latencyMs,
-  };
-}
-
-/**
- * Call an OpenAI-compatible provider (DeepSeek, xAI, Ollama).
- */
-async function callCompatibleApi(
-  client: import('../services/openaiCompatibleClient').OpenAICompatibleClient,
-  opts: CallLLMOptions
-): Promise<CallerResult> {
-  const start = Date.now();
-  const messages = [
-    { id: crypto.randomUUID(), role: 'user' as const, content: opts.userMessage, timestamp: new Date() },
-  ];
-  const tools = opts.skipTools ? new Map() : applyAllowedToolsFilter(opts.availableTools || new Map(), opts.allowedTools);
-
-  const result = await withTimeout(
-    client.chat(messages, tools, opts.model, opts.systemPrompt, opts.workingDirectory, opts.provider),
-    opts.timeoutMs,
-    'Compatible API',
-  );
-
-  const latencyMs = Date.now() - start;
-  const inputTokens = Math.ceil((opts.systemPrompt.length + opts.userMessage.length) / 4);
-  const outputTokens = Math.ceil(result.message.content.length / 4);
-
-  return { content: result.message.content, tokensUsed: inputTokens + outputTokens, latencyMs };
-}
-
-/**
- * Call Gemini API via Tauri proxy.
- */
-async function callGeminiApi(opts: CallLLMOptions): Promise<CallerResult> {
-  const start = Date.now();
-  const messages = [
-    { id: crypto.randomUUID(), role: 'user' as const, content: opts.userMessage, timestamp: new Date() },
-  ];
-  const tools = opts.skipTools ? new Map() : applyAllowedToolsFilter(opts.availableTools || new Map(), opts.allowedTools);
-
-  const result = await withTimeout(
-    geminiClient.chat(messages, tools, opts.model || 'models/gemini-2.5-flash', opts.systemPrompt, opts.workingDirectory, opts.provider),
-    opts.timeoutMs,
-    'Gemini API',
-  );
-
-  const latencyMs = Date.now() - start;
-  const inputTokens = Math.ceil((opts.systemPrompt.length + opts.userMessage.length) / 4);
-  const outputTokens = Math.ceil(result.message.content.length / 4);
-
-  return { content: result.message.content, tokensUsed: inputTokens + outputTokens, latencyMs };
 }
 
 // ============================================================================
@@ -431,7 +248,7 @@ function capToolTokens(
 }
 
 // ============================================================================
-// Unified Router
+// Router (delegates to unified llm-router)
 // ============================================================================
 
 /**
@@ -439,32 +256,26 @@ function capToolTokens(
  * Used internally by discoverTools to avoid recursion into discovery.
  */
 function routeToProvider(opts: CallLLMOptions): Promise<CallerResult> {
-  const provider = opts.provider || '';
-  if (provider === 'anthropic-cli' || provider === 'anthropic-api' || provider === 'anthropic') return callAnthropicApi(opts);
-  if (provider === 'openai-cli') return callCodexApi(opts);
-  if (provider === 'openai-api' || provider === 'openai') return callOpenAiApi(opts);
-  if (provider === 'deepseek') return callCompatibleApi(deepseekClient, opts);
-  if (provider === 'xai') return callCompatibleApi(xaiClient, opts);
-  if (provider === 'ollama') return callCompatibleApi(ollamaClient, opts);
-  if (provider === 'google') return callGeminiApi(opts);
-  if (opts.model?.includes('grok')) return callCompatibleApi(xaiClient, opts);
-  if (opts.model?.includes('deepseek')) return callCompatibleApi(deepseekClient, opts);
-  if (opts.model?.includes('gemini')) return callGeminiApi(opts);
-  if (opts.model && isOpenAIModel(opts.model)) return callOpenAiApi(opts);
-  return callAnthropicApi(opts);
+  const tools = opts.skipTools
+    ? undefined
+    : applyAllowedToolsFilter(opts.availableTools || new Map(), opts.allowedTools);
+
+  return withTimeout(
+    simpleCompletion({
+      provider: opts.provider,
+      model: opts.model,
+      systemPrompt: opts.systemPrompt,
+      userMessage: opts.userMessage,
+      availableTools: tools,
+      workingDirectory: opts.workingDirectory,
+    }),
+    opts.timeoutMs,
+    'LLM call',
+  );
 }
 
 /**
  * Unified LLM caller for GUI pipeline execution.
- *
- * Routes based on provider:
- *   - anthropic-cli  → Direct Anthropic API (OAuth tokens)
- *   - anthropic-api  → Direct Anthropic API (API key)
- *   - openai-cli     → Codex API (ChatGPT subscription OAuth)
- *   - openai-api     → Direct OpenAI API (API key)
- *   - deepseek       → Direct DeepSeek API (OpenAI-compatible)
- *
- * Falls back to model-name heuristic if provider is not specified.
  *
  * Automatically runs LLM tool discovery when the tool count exceeds the
  * threshold, asking the model to select which tools it needs before the

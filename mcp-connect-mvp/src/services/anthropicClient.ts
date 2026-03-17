@@ -6,7 +6,6 @@ import { formatToolCallSummary } from './formatToolCallSummary';
 import {
   resolveApiKey,
   resolveApiKeySync,
-  isOAuthToken,
   getBetasForToken,
   reportSuccess,
   reportFailure,
@@ -68,7 +67,6 @@ class AnthropicClient {
     apiKeyOverride?: string,
     preferredProfileId?: string,
   ): Promise<any> {
-    const url = `https://api.anthropic.com${path}`;
     const payload = body ? JSON.stringify(body) : null;
 
     let token: string;
@@ -87,6 +85,15 @@ class AnthropicClient {
 
     // Determine beta headers based on token type
     const betas = getBetasForToken(token);
+    const url = `https://api.anthropic.com${path}`;
+
+    // Debug: log the full request details for diagnosing 400 errors
+    if (method === 'POST' && path === '/v1/messages') {
+      console.log(`[Anthropic request] POST ${url}`);
+      console.log(`[Anthropic request] betas: ${betas.join(', ')}`);
+      console.log(`[Anthropic request] token prefix: ${token.substring(0, 15)}...`);
+      console.log(`[Anthropic request] payload (first 2000 chars):`, payload?.substring(0, 2000));
+    }
 
     for (let attempt = 0; attempt <= AnthropicClient.RATE_LIMIT_MAX_RETRIES; attempt++) {
       try {
@@ -535,7 +542,7 @@ class AnthropicClient {
     system?: string,
     preferredProfileId?: string,
   ) {
-    // Use array format for system prompt to enable prompt caching
+    // Use array format for system prompt to enable prompt caching (API key path only)
     const systemContent = system ? [{
       type: 'text',
       text: system,
@@ -552,8 +559,17 @@ class AnthropicClient {
       );
     }
 
+    const resolvedModel = model || 'claude-sonnet-4-5-20250929';
+
+    // Debug: log exactly what we're sending so we can diagnose 400 errors
+    const resolved = await resolveApiKey('anthropic', preferredProfileId);
+    const tokenPrefix = resolved?.apiKey?.substring(0, 12) || 'none';
+    const tokenType = resolved?.credential?.type || 'unknown';
+    console.log(`[Anthropic sendMessage] model=${resolvedModel}, profileId=${preferredProfileId || 'auto'}, tokenType=${tokenType}, tokenPrefix=${tokenPrefix}...`);
+    console.log(`[Anthropic sendMessage] messages=${messages.length}, tools=${cachedTools?.length || 0}, system=${systemContent ? 'yes' : 'no'}`);
+
     return this.request('/v1/messages', 'POST', {
-      model: model || 'claude-sonnet-4-5-20250929',
+      model: resolvedModel,
       max_tokens: 16384,
       messages,
       tools: cachedTools && cachedTools.length > 0 ? cachedTools : undefined,

@@ -1128,16 +1128,15 @@ pub async fn anthropic_request(
         .header("Content-Type", "application/json")
         .header("anthropic-version", "2023-06-01");
 
-    // Build beta headers
+    // Build beta headers — extracted from Claude Code 2.1.77 via ANTHROPIC_LOG=debug
     let beta_string = if let Some(ref custom_betas) = betas {
         // Caller-provided betas override defaults
-        custom_betas.join(",")
+        let joined = custom_betas.join(",");
+        if joined.is_empty() { String::new() } else { joined }
     } else if is_oauth_token {
-        // OAuth default: claude-code + oauth + prompt-caching
-        "claude-code-20250219,oauth-2025-04-20,prompt-caching-2024-07-31".to_string()
+        "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20".to_string()
     } else {
-        // API key default: prompt-caching only
-        "prompt-caching-2024-07-31".to_string()
+        String::new()
     };
 
     if is_oauth_token {
@@ -1148,7 +1147,9 @@ pub async fn anthropic_request(
         request = request.header("x-api-key", &apiKey);
     }
 
-    request = request.header("anthropic-beta", beta_string);
+    if !beta_string.is_empty() {
+        request = request.header("anthropic-beta", beta_string);
+    }
 
     if let Some(body) = body {
         request = request.body(body);
