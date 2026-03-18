@@ -72,6 +72,12 @@ function migrateCouncils(councils: Council[], fromVersion: number): Council[] {
     console.log('[CouncilStore] Migrated', migrated.length, 'councils from v1 to v2');
   }
 
+  // Always sanitize status — old duplicates may have invalid values like 'created'
+  migrated = migrated.map((council) => ({
+    ...council,
+    status: ['active', 'paused', 'resolved'].includes(council.status) ? council.status : 'active',
+  }));
+
   return migrated;
 }
 
@@ -222,6 +228,11 @@ export function updateCouncil(
     ...updates,
     updatedAt: new Date().toISOString(),
   };
+
+  // Coerce invalid status values to 'active' (e.g. 'created' from old duplicates)
+  if (!['active', 'paused', 'resolved'].includes(updated.status)) {
+    updated.status = 'active';
+  }
 
   // Validate the updated council
   const validation = validateCouncil(updated);
@@ -570,7 +581,7 @@ export function duplicateCouncil(councilId: string, newName?: string): Council |
     createdAt: now,
     updatedAt: now,
     messages: [],
-    status: 'created',
+    status: 'active',
     resolution: undefined,
     totalTokensUsed: 0,
     estimatedCost: 0,

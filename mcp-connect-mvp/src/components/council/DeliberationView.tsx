@@ -399,7 +399,7 @@ export default function DeliberationView({
     }
   };
 
-  // Clear all deliberation results (ledger, artifacts, state) without restarting
+  // Clear all deliberation results (ledger, artifacts, state) and reset to setup
   const handleClearResults = () => {
     if (!council) return;
 
@@ -411,13 +411,14 @@ export default function DeliberationView({
     // Clear all artifacts (context, decision, plan, directive, outputs)
     deleteAllArtifacts(councilId);
 
-    // Reset the deliberation state to 'created'
+    // Reset to 'created' state so the setup panel shows and Start button works
     councilStore.update(councilId, {
       deliberationState: undefined,
       status: 'active',
     });
 
-    // Clear any error state from previous run
+    // Clear local UI state
+    setEntries([]);
     setDeliberationError(null);
 
     // Restore problem input from savedProblem so the Start button is enabled
@@ -426,8 +427,8 @@ export default function DeliberationView({
       setProblemInput(saved);
     }
 
-    // Switch to the deliberation panel so the Start button is visible
-    setActivePanel('deliberation');
+    // Return to setup
+    setActivePanel(null);
   };
 
   // Restart deliberation - clear results and start fresh
@@ -513,6 +514,13 @@ export default function DeliberationView({
               >
                 Pause
               </button>
+              <button
+                className="header-control-btn abort-btn"
+                onClick={() => onAbort?.(council)}
+                title="Abort the deliberation"
+              >
+                Abort
+              </button>
             </>
           )}
           {isPaused && (
@@ -532,6 +540,19 @@ export default function DeliberationView({
                 Abort
               </button>
             </>
+          )}
+          {isTerminal && currentPhase !== 'created' && (
+            <button
+              className="header-control-btn reset-btn"
+              onClick={() => {
+                handleClearResults();
+                councilStore.update(councilId, { status: 'created' });
+                setActivePanel(null);
+              }}
+              title="Reset to setup — clear all results and return to configuration"
+            >
+              Reset
+            </button>
           )}
           <span className="deliberation-mode">Deliberation Mode</span>
           <button

@@ -84,10 +84,19 @@ export async function claudeCliChat(
     ].filter(Boolean);
 
     // Pin the CLI to the working directory — without this, Claude CLI
-    // discovers the nearest git repo and operates there instead of cwd
+    // discovers the nearest git repo and operates there instead of cwd.
+    // This must be extremely explicit because the CLI will find CLAUDE.md
+    // from a parent git repo and try to operate there.
     if (workingDirectory) {
       systemParts.unshift(
-        `WORKING DIRECTORY: ${workingDirectory}\nAll file operations (read, write, list, commands) MUST use this directory as the base. Do NOT operate on other directories or git repos unless explicitly asked.`
+        `CRITICAL — WORKING DIRECTORY OVERRIDE:\n` +
+        `Your working directory is: ${workingDirectory}\n` +
+        `ALL file paths MUST be absolute paths under ${workingDirectory}.\n` +
+        `When creating files, use the FULL ABSOLUTE PATH: ${workingDirectory}/filename\n` +
+        `When reading files, use the FULL ABSOLUTE PATH: ${workingDirectory}/filename\n` +
+        `When running commands, cd to ${workingDirectory} first.\n` +
+        `Do NOT use relative paths. Do NOT write to any other directory.\n` +
+        `IGNORE any project context from CLAUDE.md or git repos — they are NOT your project.`
       );
     }
 

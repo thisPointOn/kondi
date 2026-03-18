@@ -179,46 +179,56 @@ export default function RoleAssignment({
     mergeAssignments()
   );
 
-  // When personas are added/removed, sync the assignments array
+  // When personas change or role assignments update in the store, sync the local state.
+  // This handles: persona add/remove, navigating away and back, and duplicate councils.
   useEffect(() => {
-    setAssignments((prev) => {
-      const existingIds = new Set(prev.map((a) => a.personaId));
-      const personaIds = new Set(council.personas.map((p) => p.id));
+    const storeAssignments = council.deliberation?.roleAssignments || [];
+    const personaIds = new Set(council.personas.map((p) => p.id));
 
-      // Add assignments for new personas
-      const newAssignments = council.personas
-        .filter((p) => !existingIds.has(p.id))
-        .map((p) => ({ personaId: p.id, role: 'consultant' as DeliberationRole }));
+    // If the store has role assignments with valid persona IDs, use them as source of truth
+    const validStoreAssignments = storeAssignments.filter(a => personaIds.has(a.personaId));
+    if (validStoreAssignments.length > 0) {
+      const coveredIds = new Set(validStoreAssignments.map(a => a.personaId));
+      // Add defaults for any personas missing from the store
+      const missing = council.personas
+        .filter(p => !coveredIds.has(p.id))
+        .map(p => ({ personaId: p.id, role: 'consultant' as DeliberationRole }));
 
-      // Remove assignments for deleted personas
-      const filtered = prev.filter((a) => personaIds.has(a.personaId));
+      const merged = [...validStoreAssignments, ...missing];
 
-      if (newAssignments.length === 0 && filtered.length === prev.length) {
-        return prev; // No changes
-      }
+      setAssignments(prev => {
+        // Only update if actually different to avoid unnecessary re-renders
+        const prevKey = prev.map(a => `${a.personaId}:${a.role}`).sort().join(',');
+        const newKey = merged.map(a => `${a.personaId}:${a.role}`).sort().join(',');
+        if (prevKey === newKey) return prev;
+        return merged;
+      });
+    } else {
+      // No valid store assignments — fall back to existing local state,
+      // adding/removing personas as needed
+      setAssignments(prev => {
+        const existingIds = new Set(prev.map(a => a.personaId));
+        const newAssignments = council.personas
+          .filter(p => !existingIds.has(p.id))
+          .map(p => ({ personaId: p.id, role: 'consultant' as DeliberationRole }));
+        const filtered = prev.filter(a => personaIds.has(a.personaId));
 
-      // Mark as unsaved so user can re-save with the new persona included
-      if (newAssignments.length > 0 || filtered.length !== prev.length) {
+        if (newAssignments.length === 0 && filtered.length === prev.length) {
+          return prev;
+        }
         setSaved(false);
-      }
-
-      return [...filtered, ...newAssignments];
-    });
-  }, [council.personas]);
+        return [...filtered, ...newAssignments];
+      });
+    }
+  }, [council.personas, council.deliberation?.roleAssignments]);
 
   // Track model changes per persona
   const [modelChanges, setModelChanges] = useState<Record<string, { model: string; provider: string }>>({});
 
 
-  // Track if configuration is saved (starts as true if there are existing assignments)
-  const [saved, setSaved] = useState(() => existingAssignments.length > 0);
-
-  // Mark unsaved when external settings (working directory, task, etc.) change
-  useEffect(() => {
-    if (hasExternalChanges) {
-      setSaved(false);
-    }
-  }, [hasExternalChanges]);
+  // Saved starts false — the user must always explicitly save after opening setup.
+  // This prevents the "nothing saves" issue where saved=true on mount blocks handleSave.
+  const [saved, setSaved] = useState(false);
 
   // Track which persona has model dropdown open
   const [openModelDropdown, setOpenModelDropdown] = useState<string | null>(null);
@@ -356,7 +366,15 @@ export default function RoleAssignment({
   const workerInfo = getRoleModelInfo('worker');
 
   const handleSave = () => {
-    if (!canSave || saved) return;
+    console.log('[RoleAssignment] handleSave called', { canSave, saved, hasManager, hasConsultants, hasWorker, assignmentCount: assignments.length, assignments: assignments.map(a => `${a.personaId.slice(0,8)}:${a.role}`) });
+    if (!canSave) {
+      console.warn('[RoleAssignment] Cannot save — missing roles:', { hasManager, hasConsultants, hasWorker });
+      return;
+    }
+    if (saved) {
+      console.log('[RoleAssignment] Already saved, skipping');
+      return;
+    }
 
     // Build persona updates from model changes
     const personaUpdates = Object.entries(modelChanges).map(([id, { model, provider }]) => ({
