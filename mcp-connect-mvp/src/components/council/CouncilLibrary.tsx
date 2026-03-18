@@ -5,7 +5,7 @@
 import { useState, useEffect } from 'react';
 import { ask } from '@tauri-apps/plugin-dialog';
 import type { Council } from '../../council/types';
-import { councilStore, suggestedCombinations, getTemplateByName, createPersonaFromTemplate } from '../../council';
+import { councilStore, suggestedCombinations, getTemplateByName, createPersonaFromTemplate, duplicateCouncil } from '../../council';
 import { createCouncilFromSetup } from '../../council/factory';
 import { resolveDefaultModel } from '../../config/models';
 import type { ConfiguredProviders } from '../../hooks/useProviderConfig';
@@ -124,6 +124,11 @@ export default function CouncilLibrary({
     if (ok) {
       councilStore.delete(id);
     }
+  };
+
+  const handleDuplicate = (id: string) => {
+    const dup = duplicateCouncil(id);
+    if (dup) onCouncilSelect(dup.id);
   };
 
   const handleExport = (id: string) => {
@@ -323,6 +328,15 @@ export default function CouncilLibrary({
                   }}
                 >
                   Open
+                </button>
+                <button
+                  className="council-action"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDuplicate(council.id);
+                  }}
+                >
+                  Duplicate
                 </button>
                 <button
                   className="council-action"

@@ -64,6 +64,8 @@ export async function codexCliChat(
     args = [
       'exec', 'resume',
       '--json',
+      '--skip-git-repo-check',
+      '--sandbox', 'workspace-write',
       '--model', model,
       '--last',
     ];
@@ -72,6 +74,8 @@ export async function codexCliChat(
     args = [
       'exec',
       '--json',
+      '--skip-git-repo-check',
+      '--sandbox', 'workspace-write',
       '--model', model,
     ];
   }

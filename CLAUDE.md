@@ -10,7 +10,10 @@ Tauri desktop app (Rust + React/TypeScript) that orchestrates multi-model "counc
 | Pipeline types & executor | `mcp-connect-mvp/src/pipeline/types.ts`, `executor.ts` |
 | Council types & orchestrators | `mcp-connect-mvp/src/council/types.ts`, `deliberation-orchestrator.ts`, `coding-orchestrator.ts` |
 | Council factory (defaults) | `mcp-connect-mvp/src/council/factory.ts` |
-| LLM routing | `mcp-connect-mvp/src/council/llm-adapter.ts` |
+| LLM routing (unified) | `mcp-connect-mvp/src/services/llm-router.ts` |
+| Claude CLI client | `mcp-connect-mvp/src/services/claudeCliClient.ts` |
+| Codex CLI client | `mcp-connect-mvp/src/services/codexCliClient.ts` |
+| MCP proxy service | `mcp-connect-mvp/src/services/proxyService.ts` |
 | CLI pipeline runner | `mcp-connect-mvp/cli/run-pipeline.ts` |
 | Full spec (read when modifying architecture) | `docs/SPEC.md` |
 
@@ -32,7 +35,13 @@ Tauri desktop app (Rust + React/TypeScript) that orchestrates multi-model "counc
 
 8. **JSON output type enables `{{input.fieldName}}` templates.** When a step's `outputType` is `'json'`, downstream steps can access individual fields via `{{input.fieldName}}` or `{{input[N].fieldName}}` (dot-path walk). The content must be valid JSON.
 
-9. **No credential fallover between CLI and API.** When a persona specifies `provider: 'anthropic-cli'`, the system must NEVER fall back to `anthropic-api` (or vice versa). Every `.chat()` call must pass `provId`/`provider` through to the client so `resolveApiKey()` receives a `preferredProfileId`. Files: `llm-adapter.ts`, `gui-caller.ts`, `useChats.ts`, `ChatArea.tsx`. The `upsertProfile()` function resets failure state when credentials change to prevent stale `failCount` from blocking fresh tokens.
+9. **No credential fallover between CLI and API.** When a persona specifies `provider: 'anthropic-cli'`, the system must NEVER fall back to `anthropic-api` (or vice versa). All completions go through `llm-router.ts` which dispatches to the correct client based on provider ID. CLI providers (`anthropic-cli`, `openai-cli`) spawn their CLI binaries; API providers use direct HTTP. The `upsertProfile()` function resets failure state when credentials change to prevent stale `failCount` from blocking fresh tokens.
+
+10. **All LLM completions go through `llm-router.ts`.** Chat, council, and pipeline all call `chatCompletion()` or `simpleCompletion()` from the unified router. No call site may import or call a provider client directly for completions. CLI providers use session resumption (`--resume` / `resume --last`) for multi-turn chat; council/pipeline calls are stateless one-shot.
+
+11. **MCP tools for CLI providers go through local proxies.** CLI binaries can't use Kondi's MCP connections directly. The router calls `mcpClient.ensureProxiesForServers()` before LLM calls to start local proxy processes that bridge auth. Proxies are synced to `~/.claude.json` and `~/.codex/config.toml` so the CLI binaries discover them.
+
+12. **Server persistence: Tauri store is source of truth.** User-added servers are persisted via `save_server_config` (Rust backend → `~/.local/share/kondi/servers.json`). localStorage is a cache that gets rebuilt from Tauri on startup. The startup flow loads Tauri first, merges localStorage second, registers built-ins third, then auto-reconnects — this order prevents race conditions that overwrite localStorage with incomplete data.
 
 ## Self-Update Protocol
 

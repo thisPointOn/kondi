@@ -106,43 +106,76 @@ export function useServers({ hasLoadedKeys, validationReport }: UseServersParams
     });
   }, []);
 
-  // Load servers from localStorage on mount + auto-reconnect
+  // Load servers on mount: Tauri store (source of truth) → localStorage (fallback) → built-ins → auto-reconnect
+  // Runs as a single sequential async flow to prevent race conditions where
+  // refreshServers() overwrites localStorage with an incomplete server list.
   useEffect(() => {
     if (hasInitializedRef.current) return;
     hasInitializedRef.current = true;
 
-    // LocalStorage restore
-    const saved = localStorage.getItem('mcp-servers');
-    const serversToAutoConnect: MCPServer[] = [];
-    if (saved) {
+    (async () => {
+      // Step 1: Load from Tauri store (source of truth for user-added servers)
       try {
-        const parsed = JSON.parse(saved) as Record<string, MCPServer> | MCPServer[];
-        const configsArray = Array.isArray(parsed) ? parsed : Object.values(parsed);
-        configsArray.forEach((config) => {
-          const server: MCPServer = {
-            ...config,
-            transport: config.transport || 'http',
-            status: 'disconnected',
-            clientId: config.clientId,
-            clientSecret: config.clientSecret,
-          };
-          mcpClient.addServer(server);
-          if (config.autoConnect === true) {
-            serversToAutoConnect.push(server);
+        const configs = await invoke<
+          { id: string; name: string; url: string; transport: string; access_token?: string; client_id?: string; client_secret?: string; message_endpoint?: string; type?: string; metadata?: Record<string, any>; auto_connect?: boolean }[]
+        >('get_server_configs');
+        configs.forEach((config: any) => {
+          let serverType = config.type as MCPServer['type'] | undefined;
+          if (!serverType && config.transport === 'stdio') {
+            serverType = 'github_mcp_local';
           }
+          mcpClient.addServer({
+            id: config.id,
+            name: config.name,
+            url: config.url,
+            transport: (config.transport as MCPServer['transport']) || 'http',
+            status: 'disconnected',
+            accessToken: config.access_token || undefined,
+            clientId: config.client_id || undefined,
+            clientSecret: config.client_secret || undefined,
+            messageEndpoint: config.message_endpoint || undefined,
+            type: serverType,
+            metadata: config.metadata || undefined,
+            autoConnect: config.auto_connect ?? false,
+          });
         });
-      } catch (e) {
-        console.error('Failed to load saved servers:', e);
+        console.log(`[useServers] Loaded ${configs.length} servers from Tauri store`);
+      } catch (err) {
+        console.warn('Failed to load server configs from Tauri:', err);
       }
-    }
 
-    // Register built-in social MCP servers (skips any already restored above)
-    registerBuiltinServers(mcpClient);
+      // Step 2: Merge localStorage servers (picks up any not in Tauri store)
+      const saved = localStorage.getItem('mcp-servers');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved) as Record<string, MCPServer> | MCPServer[];
+          const configsArray = Array.isArray(parsed) ? parsed : Object.values(parsed);
+          const existingIds = new Set(mcpClient.getAllServers().map(s => s.id));
+          configsArray.forEach((config) => {
+            if (existingIds.has(config.id)) return; // Already loaded from Tauri
+            mcpClient.addServer({
+              ...config,
+              transport: config.transport || 'http',
+              status: 'disconnected',
+              clientId: config.clientId,
+              clientSecret: config.clientSecret,
+            });
+          });
+        } catch (e) {
+          console.error('Failed to load saved servers:', e);
+        }
+      }
 
-    // Auto-reconnect previously connected servers
-    if (serversToAutoConnect.length > 0) {
-      console.log('[useServers] Auto-reconnecting', serversToAutoConnect.length, 'previously connected servers');
-      (async () => {
+      // Step 3: Register built-in servers (skips any already loaded)
+      registerBuiltinServers(mcpClient);
+
+      // Step 4: Now that ALL servers are loaded, persist the full list to localStorage
+      refreshServers();
+
+      // Step 5: Auto-reconnect servers with autoConnect=true
+      const serversToAutoConnect = mcpClient.getAllServers().filter(s => s.autoConnect === true);
+      if (serversToAutoConnect.length > 0) {
+        console.log('[useServers] Auto-reconnecting', serversToAutoConnect.length, 'previously connected servers');
         for (const server of serversToAutoConnect) {
           try {
             console.log('[useServers] Auto-reconnecting server:', server.name);
@@ -170,42 +203,10 @@ export function useServers({ hasLoadedKeys, validationReport }: UseServersParams
           }
         }
         console.log('[useServers] Auto-reconnection complete');
-      })();
-    }
-
-    // Tauri store restore (server configs)
-    (async () => {
-      try {
-        const configs = await invoke<
-          { id: string; name: string; url: string; transport: string; access_token?: string; client_id?: string; client_secret?: string; message_endpoint?: string; type?: string; metadata?: Record<string, any>; auto_connect?: boolean }[]
-        >('get_server_configs');
-        configs.forEach((config: any) => {
-          let serverType = config.type as MCPServer['type'] | undefined;
-          if (!serverType && config.transport === 'stdio') {
-            serverType = 'github_mcp_local';
-          }
-          mcpClient.addServer({
-            id: config.id,
-            name: config.name,
-            url: config.url,
-            transport: (config.transport as MCPServer['transport']) || 'http',
-            status: 'disconnected',
-            accessToken: config.access_token || undefined,
-            clientId: config.client_id || undefined,
-            clientSecret: config.client_secret || undefined,
-            messageEndpoint: config.message_endpoint || undefined,
-            type: serverType,
-            metadata: config.metadata || undefined,
-            autoConnect: config.auto_connect ?? false,
-          });
-        });
-        refreshServers();
-      } catch (err) {
-        console.warn('Failed to load server configs from Tauri:', err);
       }
     })();
 
-    refreshServers();
+    refreshServers(); // Immediate render with whatever loaded synchronously
   }, []);
 
   // Apply validation report server errors

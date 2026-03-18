@@ -548,23 +548,37 @@ export function duplicateCouncil(councilId: string, newName?: string): Council |
   if (!original) return null;
 
   const now = new Date().toISOString();
+
+  // Build persona ID mapping (old → new) so role assignments stay linked
+  const personaIdMap = new Map<string, string>();
+  const newPersonas = original.personas.map((p) => {
+    const newId = crypto.randomUUID();
+    personaIdMap.set(p.id, newId);
+    return { ...p, id: newId };
+  });
+
+  // Remap role assignments to new persona IDs
+  const newRoleAssignments = original.deliberation?.roleAssignments?.map((ra) => ({
+    ...ra,
+    personaId: personaIdMap.get(ra.personaId) || ra.personaId,
+  }));
+
   const duplicate: Council = {
     ...original,
     id: crypto.randomUUID(),
     name: newName || `${original.name} (Copy)`,
     createdAt: now,
     updatedAt: now,
-    messages: [], // Start fresh
-    status: 'active',
+    messages: [],
+    status: 'created',
     resolution: undefined,
     totalTokensUsed: 0,
     estimatedCost: 0,
-    // Generate new IDs for personas
-    personas: original.personas.map((p) => ({
-      ...p,
-      id: crypto.randomUUID(),
-    })),
-    // Reset deliberation state but keep config
+    personas: newPersonas,
+    deliberation: original.deliberation ? {
+      ...original.deliberation,
+      roleAssignments: newRoleAssignments || [],
+    } : undefined,
     deliberationState: undefined,
   };
 

@@ -37,6 +37,7 @@ export interface CouncilSetup {
   saveDeliberationMode?: 'full' | 'abbreviated';
   maxWordsPerResponse?: number;
   bootstrapContext?: boolean;         // Default: true when workingDirectory is set
+  evolveContext?: boolean;            // Default: false — append findings/results to context each phase
   stepType?: 'council' | 'code_planning' | 'analysis' | 'agent' | 'coding' | 'review' | 'enrich';
   testCommand?: string;
   maxDebugCycles?: number;
@@ -150,6 +151,7 @@ export function createCouncilFromSetup(setup: CouncilSetup): Council {
       saveDeliberationMode: setup.saveDeliberationMode ?? 'full',
       maxWordsPerResponse: setup.maxWordsPerResponse,
       bootstrapContext,
+      evolveContext: setup.evolveContext ?? false,
       stepType: setup.stepType,
       testCommand: setup.testCommand,
       maxDebugCycles: setup.maxDebugCycles ?? 5,

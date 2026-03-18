@@ -51,13 +51,13 @@ Each persona in a council can use a different provider and model. Eight provider
 | Provider | CLI (Subscription) | API (Key) |
 |----------|-------------------|-----------|
 | **Anthropic** | Opus 4.6, Sonnet 4.5, Haiku 4.5, Opus 4.5, Sonnet 4 | Sonnet 4.5, Haiku 4.5, Sonnet 4 |
-| **OpenAI** | GPT-5.2, GPT-5.2 Codex, GPT-5.1 Codex Max/Mini | GPT-4o, GPT-4o Mini, GPT-4 Turbo, o1 Preview/Mini |
+| **OpenAI** | GPT-5.3 Codex, GPT-5.2 Codex, GPT-5.1 Codex Max/Mini | GPT-4o, GPT-4o Mini, GPT-4 Turbo, o1 Preview/Mini |
 | **DeepSeek** | -- | R1 (reasoning), Chat |
 | **Google** | Gemini CLI | Gemini 2.0 Flash, Gemini 1.5 Pro/Flash |
 | **xAI** | -- | Grok-2, Grok-2 Mini |
 | **Ollama** | -- | Any locally-running model (auto-discovered) |
 
-CLI providers route through locally installed tools (`claude`, `codex`, `gemini`) and use your existing subscription — no API key needed. The app auto-detects installed CLIs at startup and validates connectivity. Ollama models are discovered automatically when the Ollama server is running.
+CLI providers spawn the locally installed binary (`claude --print`, `codex exec`) as a subprocess and use your existing subscription — no API key needed. OAuth tokens from CLI tools only work through their own binaries (server-side client attestation), so the app proxies through them rather than calling the API directly. Multi-turn chat sessions use `--resume` (Claude) / `resume --last` (Codex) to maintain conversation state without resending history. The app auto-detects installed CLIs at startup and validates connectivity. Ollama models are discovered automatically when the Ollama server is running.
 
 ## Chat
 
@@ -84,7 +84,7 @@ Connect agents to any MCP server through four paths:
 
 **Credential management**: Built-in servers display token input fields directly in the Tools panel. Enter your API key or bot token, save, and connect — no env vars or config files needed.
 
-Connected MCP servers are automatically synced to Claude Code and Codex CLI tool configurations so CLI-based agents can call them directly.
+**CLI tool sync**: Connected MCP servers are automatically proxied to localhost and synced to Claude Code (`~/.claude.json`) and Codex (`~/.codex/config.toml`) tool configurations. The unified router calls `ensureProxiesForServers()` before each LLM call to guarantee proxies are running and synced. CLI-based agents connect to the local proxy endpoints transparently.
 
 ## Built-in Platform Servers
 
@@ -164,7 +164,7 @@ Problem Framing -> Independent Analysis -> Interactive Rounds -> Decision -> Dir
 6. **Executing** — Worker carries out the directive (optionally with file write permissions)
 7. **Reviewing** — Manager evaluates output, accepts or sends back for revision
 
-**Context versioning**: Consultants propose patches to the shared context document. The Manager accepts or rejects each one, incrementing the version. All proposals are recorded.
+**Context versioning**: Consultants propose patches to the shared context document. The Manager accepts or rejects each one, incrementing the version. All proposals are recorded. Enable **Evolve Context** to automatically append consultant findings and worker results to the context document as the deliberation progresses (v1 → v2 → v3...).
 
 **Append-only ledger**: Every agent invocation, phase transition, and artifact change is recorded with timestamps, token counts, latency, and cost estimates.
 
@@ -387,9 +387,12 @@ kondi/
 |   |   |   |-- ledger-store.ts     # Append-only audit trail
 |   |   |   |-- context-store.ts    # Versioned artifacts
 |   |   |   |-- store.ts            # Council CRUD (localStorage-backed)
-|   |   |   +-- llm-adapter.ts      # Provider routing for council agents
+|   |   |   +-- llm-adapter.ts      # Thin wrapper → llm-router
 |   |   |-- pipeline/               # Pipeline types, executor, build/test detection
 |   |   |-- services/               # LLM clients, MCP, OAuth, local tools
+|   |   |   |-- llm-router.ts       # Unified LLM router (all completions dispatch here)
+|   |   |   |-- claudeCliClient.ts  # anthropic-cli: spawns claude --print with sessions
+|   |   |   +-- codexCliClient.ts   # openai-cli: spawns codex exec with sessions
 |   |   |-- components/             # React UI (chat, council, pipeline, settings)
 |   |   +-- config/models.ts        # All model definitions and pricing
 |   |-- cli/                        # Headless CLI pipeline runner

@@ -685,6 +685,9 @@ export class DeliberationOrchestrator {
 
       councilStore.recordSubmission(council.id, consultant.id);
 
+      // Evolve context with consultant findings
+      this.appendToContext(council.id, 'Consultant Analysis', consultant.name, response.content, 'consultant', consultant.id);
+
       if (proposedPatch) {
         const patch = createPatch(
           council.id,
@@ -1366,6 +1369,9 @@ export class DeliberationOrchestrator {
       response.structured
     );
 
+    // Evolve context with worker results
+    this.appendToContext(council.id, 'Worker Execution', worker.name, response.content, 'worker', worker.id);
+
     this.transitionPhase(council.id, 'reviewing');
     return entry;
   }
@@ -1628,6 +1634,9 @@ export class DeliberationOrchestrator {
       undefined,
       response.structured
     );
+
+    // Evolve context with revision results
+    this.appendToContext(council.id, 'Worker Revision', worker.name, response.content, 'worker', worker.id);
 
     this.transitionPhase(council.id, 'reviewing');
     return entry;
@@ -2531,6 +2540,46 @@ export class DeliberationOrchestrator {
       };
     }
     return null;
+  }
+
+  /**
+   * Append a summary to the shared context document when evolveContext is enabled.
+   * Creates a new context version with the appended information.
+   */
+  private appendToContext(
+    councilId: string,
+    label: string,
+    personaName: string,
+    content: string,
+    role: 'consultant' | 'worker' | 'manager',
+    personaId?: string,
+  ): void {
+    const council = this.activeCouncilId ? councilStore.get(this.activeCouncilId) : null;
+    if (!council?.deliberation?.evolveContext) return;
+
+    const currentContext = getCurrentContext(councilId);
+    if (!currentContext) return;
+
+    // Extract a concise summary — first 2000 chars or up to COMPLETION SUMMARY
+    const summaryMatch = content.match(/## COMPLETION SUMMARY[\s\S]*/i);
+    const summary = summaryMatch
+      ? summaryMatch[0].slice(0, 1500)
+      : content.slice(0, 2000);
+
+    const round = council.deliberationState?.currentRound || 1;
+    const appendText = `\n\n---\n[Round ${round} — ${label} by ${personaName}]:\n${summary}`;
+
+    const updated = createContextVersion(
+      councilId,
+      currentContext.content + appendText,
+      `${label} by ${personaName} (round ${round})`,
+      role,
+      personaId,
+      round,
+    );
+
+    councilStore.setActiveContext(councilId, updated.id, updated.version);
+    console.log(`[Orchestrator] Context evolved to v${updated.version}: ${label} by ${personaName}`);
   }
 
   private extractAcceptanceCriteria(content: string): string | undefined {

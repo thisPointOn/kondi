@@ -104,6 +104,7 @@ export default function DeliberationView({
   const [workingDirectory, setWorkingDirectory] = useState(council?.deliberation?.workingDirectory || '');
   const [directoryConstrained, setDirectoryConstrained] = useState(council?.deliberation?.directoryConstrained ?? true);
   const [bootstrapContext, setBootstrapContext] = useState(council?.deliberation?.bootstrapContext ?? true);
+  const [evolveContext, setEvolveContext] = useState(council?.deliberation?.evolveContext ?? false);
   const [problemInput, setProblemInput] = useState(() => {
     const c = councilStore.get(councilId);
     return c?.deliberation?.savedProblem || '';
@@ -169,6 +170,7 @@ export default function DeliberationView({
     if ((workingDirectory || undefined) !== (d.workingDirectory || undefined)) return true;
     if (directoryConstrained !== (d.directoryConstrained ?? true)) return true;
     if (bootstrapContext !== (d.bootstrapContext ?? true)) return true;
+    if (evolveContext !== (d.evolveContext ?? false)) return true;
     if ((problemInput.trim() || undefined) !== (d.savedProblem || undefined)) return true;
     if ((expectedOutput.trim() || undefined) !== (d.expectedOutput || undefined)) return true;
     return false;
@@ -218,6 +220,9 @@ export default function DeliberationView({
         }
         if (c?.deliberation?.bootstrapContext !== undefined) {
           setBootstrapContext(c.deliberation.bootstrapContext);
+        }
+        if (c?.deliberation?.evolveContext !== undefined) {
+          setEvolveContext(c.deliberation.evolveContext);
         }
       }
     };
@@ -754,6 +759,16 @@ export default function DeliberationView({
                     Auto-scan directory for context
                   </span>
                 </label>
+                <label className="constraint-toggle" style={{ marginTop: '6px' }}>
+                  <input
+                    type="checkbox"
+                    checked={evolveContext}
+                    onChange={(e) => setEvolveContext(e.target.checked)}
+                  />
+                  <span className="constraint-label">
+                    Evolve context with findings
+                  </span>
+                </label>
               </div>
 
               {/* Council Mode */}
@@ -1030,6 +1045,7 @@ export default function DeliberationView({
                           workingDirectory: workingDirectory || undefined,
                           directoryConstrained,
                           bootstrapContext,
+                          evolveContext,
                           maxRounds: maxRounds,
                           saveDeliberation: saveMode !== 'none',
                           saveDeliberationMode: saveMode === 'none' ? 'full' : saveMode,

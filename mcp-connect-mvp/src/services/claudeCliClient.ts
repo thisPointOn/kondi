@@ -64,7 +64,13 @@ export async function claudeCliChat(
     '--output-format', 'stream-json',
     '--verbose',
     '--model', model,
+    '--permission-mode', 'bypassPermissions',
   ];
+
+  // Grant tool access to the working directory so the CLI can write files
+  if (workingDirectory) {
+    args.push('--add-dir', workingDirectory);
+  }
 
   if (existingSessionId) {
     args.push('--resume', existingSessionId);
@@ -76,6 +82,14 @@ export async function claudeCliChat(
       additionalSystemPrompt,
       serverSummary,
     ].filter(Boolean);
+
+    // Pin the CLI to the working directory — without this, Claude CLI
+    // discovers the nearest git repo and operates there instead of cwd
+    if (workingDirectory) {
+      systemParts.unshift(
+        `WORKING DIRECTORY: ${workingDirectory}\nAll file operations (read, write, list, commands) MUST use this directory as the base. Do NOT operate on other directories or git repos unless explicitly asked.`
+      );
+    }
 
     if (systemParts.length > 0) {
       args.push('--system-prompt', systemParts.join('\n\n'));

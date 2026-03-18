@@ -3,7 +3,7 @@
 > Machine-readable living spec. Single source of truth for current types, defaults, keys, and flags.
 > For architectural rationale and deep "why" explanations, see `ARCHITECTURE.md`.
 >
-> **Last updated:** 2026-03-06
+> **Last updated:** 2026-03-17
 
 ---
 
@@ -15,7 +15,7 @@
 | Frontend | React 18 + TypeScript + Vite |
 | Styling | Tailwind CSS |
 | State | In-memory `CouncilDataStore` (primary) + localStorage (cache) + React hooks |
-| LLM access | Direct API clients + CLI wrappers (Claude Code, Codex) |
+| LLM access | Unified router → API clients (HTTP) + CLI binary proxies (Claude, Codex) |
 | MCP transport | stdio (local), HTTP+SSE (proxy), built-in servers |
 
 ---
@@ -39,19 +39,22 @@ mcp-connect-mvp/
       ledger-store.ts            # Chunked ledger storage (ledger-index-{id}, ledger-chunk-{id}-{n})
       deliberation-orchestrator.ts  # Deliberation state machine
       coding-orchestrator.ts     # Coding workflow state machine
-      llm-adapter.ts             # Provider routing (LLMAdapter class)
+      llm-adapter.ts             # Thin wrapper — delegates to llm-router.ts
       prompts.ts                 # Prompt construction for all roles and step types
       validation.ts              # LLM output parsing/validation
     config/
       models.ts                  # ModelProvider type, all model definitions
     services/
-      anthropicClient.ts         # Anthropic API direct calls
-      openaiClient.ts            # OpenAI API direct calls
-      codexClient.ts             # Codex CLI wrapper
+      llm-router.ts              # Unified LLM router — ALL completions dispatch through here
+      claudeCliClient.ts         # anthropic-cli: spawns `claude --print` with --resume sessions
+      codexCliClient.ts          # openai-cli: spawns `codex exec --json` with resume sessions
+      anthropicClient.ts         # anthropic-api: direct HTTP to api.anthropic.com
+      openaiClient.ts            # openai-api: direct HTTP to api.openai.com
+      codexClient.ts             # Legacy Codex HTTP client (validation only)
       geminiClient.ts            # Google Gemini API client
       openaiCompatibleClient.ts  # DeepSeek, xAI, Ollama (OpenAI-compatible)
-      mcpClient.ts               # MCP server connection management
-      proxyService.ts            # MCP proxy lifecycle
+      mcpClient.ts               # MCP server connection + proxy management
+      proxyService.ts            # MCP proxy lifecycle (start/stop/sync to CLI configs)
     hooks/
       useProviderConfig.ts       # Provider selection, API keys, default model
   cli/
@@ -285,20 +288,42 @@ Entry point: `npx tsx cli/run-pipeline.ts <pipeline.json> [options]`
 
 ---
 
-## 8. LLM Adapter Routing
+## 8. Unified LLM Router
 
-`LLMAdapter` in `llm-adapter.ts` routes by provider ID and model name:
+All LLM completions flow through `llm-router.ts`. No call site may bypass the router.
 
-| Detection | Client | Default Model |
-|-----------|--------|---------------|
-| provider contains `anthropic` or model contains `claude` | `anthropicClient` | claude-sonnet-4-5-20250929 |
-| provider = `openai-cli` | `codexClient` | gpt-5.2-codex |
-| provider contains `openai` or model contains `gpt` | `openaiClient` | gpt-4o |
-| provider = `deepseek` or model contains `deepseek` | `deepseekClient` | (from params) |
-| provider = `google` or model contains `gemini` | `geminiClient` | gemini-2.5-flash |
-| provider = `xai` or model contains `grok` | `xaiClient` | (from params) |
-| provider = `ollama` | `ollamaClient` | (from params) |
-| Fallback | `anthropicClient` | claude-sonnet-4-5-20250929 |
+```
+ChatArea ───→ chatCompletion() ──┐
+Council  ───→ simpleCompletion() → chatCompletion() ──→ provider client
+Pipeline ───→ simpleCompletion() → chatCompletion() ──┘
+```
+
+### Provider Dispatch
+
+| Provider ID | Client | Transport | Session |
+|-------------|--------|-----------|---------|
+| `anthropic-cli` | `claudeCliClient.ts` | `claude --print` binary | `--resume <sessionId>` for chat |
+| `anthropic-api` | `anthropicClient.ts` | Direct HTTP (API key) | Stateless |
+| `openai-cli` | `codexCliClient.ts` | `codex exec --json` binary | `resume --last` for chat |
+| `openai-api` | `openaiClient.ts` | Direct HTTP (API key) | Stateless |
+| `deepseek` | `openaiCompatibleClient.ts` | OpenAI-compatible HTTP | Stateless |
+| `google` | `geminiClient.ts` | Gemini API | Stateless |
+| `xai` | `openaiCompatibleClient.ts` | OpenAI-compatible HTTP | Stateless |
+| `ollama` | `openaiCompatibleClient.ts` | Local HTTP | Stateless |
+
+### CLI Provider Details
+
+OAuth tokens from Claude Code and ChatGPT subscriptions only work from their respective CLI binaries — direct HTTP API calls are rejected (server-side client attestation). The router spawns CLI processes via Tauri commands (`run_claude_streaming`, `run_codex_streaming`).
+
+**Session management (chat only):** First call creates a new session; subsequent calls resume it (`--resume <sessionId>` for Claude, `resume --last` for Codex). Session IDs are stored in-memory per `chatId`. Council/pipeline calls are always fresh one-shot processes.
+
+**MCP tools:** CLI binaries can't use Kondi's MCP connections. The router calls `mcpClient.ensureProxiesForServers()` before each LLM call to start local proxy processes. Proxies are synced to `~/.claude.json` and `~/.codex/config.toml` so CLI binaries discover them automatically.
+
+### Context Passing
+
+- **Chat**: CLI session handles history via resume; only the latest user message is sent
+- **Council**: Orchestrator assembles full context (ledger history, patches, expected output) into `systemPrompt` + `userMessage` strings — stateless one-shot per call
+- **Pipeline**: Same as council — `simpleCompletion()` with full context in the prompt
 
 **Conversation ID isolation**: Each council persona call MUST get a unique conversation ID (`council-<uuid>`). Sharing IDs causes context accumulation and failures in round 2+.
 

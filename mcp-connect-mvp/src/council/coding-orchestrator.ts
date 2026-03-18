@@ -25,6 +25,8 @@ import {
 
 import {
   createOutput,
+  getCurrentContext,
+  createContextVersion,
 } from './context-store';
 
 import {
@@ -490,6 +492,9 @@ export class CodingOrchestrator {
           response.tokensUsed, response.latencyMs
         );
 
+        // Evolve context with module implementation
+        this.appendToContext(council.id, `Module Implementation (${module.name})`, worker.name, response.content, 'worker', worker.id);
+
         moduleOutputs[module.name] = response.content;
       } catch (error) {
         failureCount++;
@@ -553,6 +558,9 @@ export class CodingOrchestrator {
       council.id, 'reviewer', reviewer.id, 'code_review', 'code_reviewing',
       response.content, response.tokensUsed, response.latencyMs
     );
+
+    // Evolve context with review findings
+    this.appendToContext(council.id, 'Code Review', reviewer.name, response.content, 'consultant', reviewer.id);
 
     return verdict;
   }
@@ -996,6 +1004,42 @@ export class CodingOrchestrator {
     this.config.onEntryAdded?.(entry);
 
     return entry;
+  }
+
+  /**
+   * Append a summary to the shared context document when evolveContext is enabled.
+   */
+  private appendToContext(
+    councilId: string,
+    label: string,
+    personaName: string,
+    content: string,
+    role: 'consultant' | 'worker' | 'manager',
+    personaId?: string,
+  ): void {
+    const council = councilStore.get(councilId);
+    if (!council?.deliberation?.evolveContext) return;
+
+    const currentContext = getCurrentContext(councilId);
+    if (!currentContext) return;
+
+    const summaryMatch = content.match(/## COMPLETION SUMMARY[\s\S]*/i);
+    const summary = summaryMatch
+      ? summaryMatch[0].slice(0, 1500)
+      : content.slice(0, 2000);
+
+    const appendText = `\n\n---\n[${label} by ${personaName}]:\n${summary}`;
+
+    const updated = createContextVersion(
+      councilId,
+      currentContext.content + appendText,
+      `${label} by ${personaName}`,
+      role,
+      personaId,
+    );
+
+    councilStore.setActiveContext(councilId, updated.id, updated.version);
+    console.log(`[CodingOrchestrator] Context evolved to v${updated.version}: ${label} by ${personaName}`);
   }
 
   private parseDecompositionJson(content: string): {

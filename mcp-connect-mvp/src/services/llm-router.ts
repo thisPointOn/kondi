@@ -24,6 +24,7 @@ import { codexClient } from './codexClient';
 import { codexCliChat } from './codexCliClient';
 import { deepseekClient, xaiClient, ollamaClient } from './openaiCompatibleClient';
 import { geminiClient } from './geminiClient';
+import { mcpClient } from './mcpClient';
 
 // ============================================================================
 // Types
@@ -110,6 +111,12 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
   const prov = resolveProvider(params.provider);
   const tools = params.availableTools || new Map();
   const model = params.model || DEFAULT_MODELS[prov] || 'claude-sonnet-4-5-20250929';
+
+  // Ensure MCP proxies backing the provided tools are running and synced
+  const toolServerIds = Array.from(tools.values()).map(t => t.serverId).filter(Boolean);
+  if (toolServerIds.length > 0) {
+    await mcpClient.ensureProxiesForServers(toolServerIds);
+  }
 
   // Anthropic CLI — route through Claude CLI binary (OAuth tokens require it)
   if (prov === 'anthropic-cli') {

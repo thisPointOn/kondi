@@ -51,6 +51,8 @@ export class MCPClient {
   private reauthenticatingProxies: Set<string> = new Set();
   /** Set of server IDs currently connecting — prevents duplicate concurrent connectServer calls */
   private connectingServers: Set<string> = new Set();
+  /** Track in-flight proxy readiness checks to avoid duplicate startup/sync work */
+  private proxyEnsurePromises: Map<string, Promise<void>> = new Map();
 
   setAuthHandler(handler: (server: MCPServer) => Promise<string | null>): void {
     this.onAuthRequired = handler;
@@ -351,6 +353,35 @@ export class MCPClient {
     } catch (err) {
       console.warn(`[MCP Proxy] Failed to sync LLM configs:`, err);
     }
+  }
+
+  /**
+   * Ensure proxies for the given servers are running and synced to CLI configs.
+   * Used as a guard before routing chat/council/pipeline calls.
+   */
+  async ensureProxiesForServers(serverIds: string[]): Promise<void> {
+    const unique = Array.from(new Set(serverIds)).filter(Boolean);
+    if (unique.length === 0) return;
+
+    await Promise.all(unique.map((id) => this.ensureProxyReady(id)));
+  }
+
+  /** Deduped proxy startup/sync for a single server */
+  private ensureProxyReady(serverId: string): Promise<void> {
+    const existing = this.proxyEnsurePromises.get(serverId);
+    if (existing) return existing;
+
+    const promise = (async () => {
+      const server = this.servers.get(serverId);
+      if (!server) return;
+      if (server.transport !== 'http' && server.transport !== 'sse') return;
+      await this.ensureProxyForServer(server);
+    })().finally(() => {
+      this.proxyEnsurePromises.delete(serverId);
+    });
+
+    this.proxyEnsurePromises.set(serverId, promise);
+    return promise;
   }
 
   private sleep(ms: number): Promise<void> {
