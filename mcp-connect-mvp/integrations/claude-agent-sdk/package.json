@@ -1,0 +1,13 @@
+{
+  "name": "kondi-council-agent-tool",
+  "version": "0.1.0",
+  "description": "Kondi council deliberation tool for Claude Agent SDK",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "dist/index.mjs",
+  "files": ["dist/"],
+  "peerDependencies": {
+    "claude-agent-sdk": ">=0.2.0"
+  },
+  "keywords": ["claude", "agent-sdk", "anthropic", "council", "multi-agent", "tool"]
+}

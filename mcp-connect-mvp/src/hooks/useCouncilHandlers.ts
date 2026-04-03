@@ -1,8 +1,10 @@
 import { useCallback, useState } from 'react';
 import { createOrchestrator, DeliberationOrchestrator } from '../council';
+import { CodingOrchestrator } from '../council/coding-orchestrator';
 import { ledgerStore } from '../council/ledger-store';
 import { callLLM } from '../pipeline/gui-caller';
 import { filterToolsByServerIds, verifyRequiredTools } from '../utils/filterTools';
+import { invoke } from '@tauri-apps/api/core';
 import type { Persona, Council } from '../council/types';
 import type { MCPTool } from '../types/mcp';
 
@@ -105,8 +107,56 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
 
   // ───── Deliberation handlers ─────
 
+  /**
+   * Factory: builds a CodingOrchestrator with the same callback pattern.
+   */
+  const makeCodingOrchestrator = useCallback(() => {
+    return new CodingOrchestrator({
+      invokeAgent: async (invocation, persona) => {
+        console.log('[Council:Coding] invokeAgent called', { personaName: persona.name, model: persona.model });
+        const mcpTools = invocation.skipTools ? undefined : filterToolsByServerIds(availableTools, invocation.allowedServerIds);
+        const result = await callLLM({
+          model: persona.model,
+          provider: persona.provider,
+          systemPrompt: invocation.systemPrompt,
+          userMessage: invocation.userMessage,
+          temperature: persona.temperature,
+          skipTools: invocation.skipTools,
+          allowedTools: invocation.allowedTools,
+          availableTools: mcpTools,
+          conversationId: invocation.conversationId,
+          workingDirectory: invocation.workingDirectory,
+          timeoutMs: invocation.timeoutMs,
+        });
+        return { ...result, sessionId: result.sessionId };
+      },
+      onPhaseChange: (from: string, to: string) => console.log(`[Coding] Phase: ${from} → ${to}`),
+      onError: (err: Error, ctx: string) => console.error(`[Coding Error] ${ctx}:`, err),
+      onAgentThinkingStart: (persona: Persona, startedAt: number) => {
+        setThinkingPersonas(prev => [
+          ...prev.filter(p => p.id !== persona.id),
+          { ...persona, thinkingStartedAt: startedAt } as Persona & { thinkingStartedAt: number },
+        ]);
+      },
+      onAgentThinkingEnd: (persona: Persona) => {
+        setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+      },
+      runCommand: async (cmd: string, cwd?: string) => {
+        const result = await invoke<{ stdout: string; stderr: string; exit_code: number }>('run_command', {
+          command: cmd,
+          cwd: cwd || undefined,
+        });
+        return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exit_code };
+      },
+      readFile: async (path: string) => {
+        return invoke<string>('read_local_file', { path });
+      },
+    });
+  }, [availableTools]);
+
   const onFrameProblem = useCallback(async (council: Council, rawProblem: string) => {
-    console.log('[useCouncilHandlers] onFrameProblem called - starting full deliberation', { councilId: council.id, rawProblem });
+    const stepType = council.deliberation?.stepType;
+    console.log('[useCouncilHandlers] onFrameProblem called', { councilId: council.id, stepType, rawProblem });
     setThinkingPersonas([]);
 
     // Pre-flight: verify MCP tools referenced in council prompts are available
@@ -118,17 +168,26 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
     verifyRequiredTools(availableTools, promptText, council.name);
 
     try {
-      const deliberator = makeDeliberator({ includePhaseChange: true, includeError: true });
-      console.log('[useCouncilHandlers] Starting full deliberation...');
-      await deliberator.runFullDeliberation(council, rawProblem);
-      console.log('[useCouncilHandlers] Full deliberation completed');
+      if (stepType === 'coding') {
+        // Coding orchestrator: decompose → implement → review → test → debug
+        const codingOrchestrator = makeCodingOrchestrator();
+        console.log('[useCouncilHandlers] Starting coding workflow...');
+        await codingOrchestrator.runCodingWorkflow(council, rawProblem);
+        console.log('[useCouncilHandlers] Coding workflow completed');
+      } else {
+        // Deliberation orchestrator (default for all other types)
+        const deliberator = makeDeliberator({ includePhaseChange: true, includeError: true });
+        console.log('[useCouncilHandlers] Starting full deliberation...');
+        await deliberator.runFullDeliberation(council, rawProblem);
+        console.log('[useCouncilHandlers] Full deliberation completed');
+      }
     } catch (error) {
-      console.error('[useCouncilHandlers] Error in deliberation:', error);
+      console.error('[useCouncilHandlers] Error:', error);
       throw error;
     } finally {
       setThinkingPersonas([]);
     }
-  }, [makeDeliberator, availableTools]);
+  }, [makeDeliberator, makeCodingOrchestrator, availableTools]);
 
   const onPauseDeliberation = useCallback(async (council: Council) => {
     const deliberator = makeDeliberator({ includeThinking: false });

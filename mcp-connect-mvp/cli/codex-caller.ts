@@ -44,6 +44,7 @@ export async function callCodex(opts: {
     if (opts.skipTools) {
       args.push('--sandbox', 'read-only');
     } else {
+      // --full-auto implies --sandbox workspace-write and -a on-request
       args.push('--full-auto');
     }
   }
@@ -97,6 +98,16 @@ export async function callCodex(opts: {
 
       if (code !== 0 && !rawStdout.includes('thread.started')) {
         reject(new Error(`Codex CLI exited with code ${code}: ${rawStderr || rawStdout}`));
+        return;
+      }
+
+      // Check for model/API errors in the JSONL stream before parsing
+      // (codex may exit 0 but include error events)
+      const errorMatch = rawStdout.match(/"type":"error","message":"(.*?)"/);
+      if (errorMatch && !rawStdout.includes('"type":"agent_message"')) {
+        let errMsg = errorMatch[1];
+        try { errMsg = JSON.parse(`"${errMsg}"`); } catch { /* use raw */ }
+        reject(new Error(`Codex error: ${errMsg}`));
         return;
       }
 

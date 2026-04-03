@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kondi-council-crewai"
+version = "0.1.0"
+description = "Kondi multi-LLM council deliberation tool for CrewAI agents"
+license = "AGPL-3.0-only"
+requires-python = ">=3.10"
+dependencies = ["crewai>=0.50.0"]
+keywords = ["crewai", "ai", "council", "multi-agent", "deliberation", "code-review"]
+
+[project.urls]
+Repository = "https://github.com/yourusername/kondi"

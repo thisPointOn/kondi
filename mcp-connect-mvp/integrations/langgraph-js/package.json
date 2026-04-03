@@ -1,0 +1,14 @@
+{
+  "name": "kondi-council-langgraph",
+  "version": "0.1.0",
+  "description": "Kondi multi-LLM council deliberation node for LangGraph.js workflows",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "dist/index.mjs",
+  "files": ["dist/"],
+  "dependencies": {},
+  "peerDependencies": {
+    "@langchain/langgraph": ">=0.2.0"
+  },
+  "keywords": ["langgraph", "langchain", "ai", "council", "multi-agent", "deliberation"]
+}

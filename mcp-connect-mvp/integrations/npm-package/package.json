@@ -1,0 +1,25 @@
+{
+  "name": "kondi-council",
+  "version": "0.1.0",
+  "description": "Multi-LLM council deliberation CLI — structured debates between AI personas across providers",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "bin": {
+    "kondi-council": "./dist/kondi.mjs"
+  },
+  "files": [
+    "dist/"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "ai", "llm", "multi-agent", "council", "deliberation",
+    "claude", "openai", "codex", "cli", "code-review",
+    "multi-model", "agent-orchestration"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/kondi"
+  }
+}

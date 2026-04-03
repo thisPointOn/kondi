@@ -1,0 +1,22 @@
+{
+  "name": "n8n-nodes-kondi",
+  "version": "0.1.0",
+  "description": "n8n community node for Kondi multi-LLM council deliberations",
+  "license": "AGPL-3.0-only",
+  "main": "dist/nodes/KondiCouncil.node.js",
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "nodes": ["dist/nodes/KondiCouncil.node.js"]
+  },
+  "files": [
+    "dist/"
+  ],
+  "dependencies": {},
+  "devDependencies": {
+    "n8n-workflow": "*"
+  },
+  "keywords": [
+    "n8n", "n8n-community-node-package", "ai", "council", "deliberation",
+    "multi-agent", "code-review"
+  ]
+}

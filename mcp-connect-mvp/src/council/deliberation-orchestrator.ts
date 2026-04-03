@@ -2253,6 +2253,8 @@ export class DeliberationOrchestrator {
     const roleAssignment = council?.deliberation?.roleAssignments
       ?.find(r => r.personaId === persona.id);
 
+    console.log(`[Orchestrator:ToolAccess] persona=${persona.name} context=${context} roleAssignment.toolAccess=${roleAssignment?.toolAccess} roleAssignment.found=${!!roleAssignment} totalAssignments=${council?.deliberation?.roleAssignments?.length}`);
+
     if (roleAssignment?.toolAccess === 'none') {
       invocation = { ...invocation, skipTools: true };
     } else if (roleAssignment?.toolAccess === 'full') {

@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S npx tsx
 /**
  * CLI Pipeline Runner
  *
@@ -23,27 +23,9 @@ import { PipelineExecutor } from '../src/pipeline/executor';
 import type { PlatformAdapter } from '../src/pipeline/executor';
 import type { Pipeline, CouncilStepConfig, LlmStepConfig, ScriptStepConfig, ConditionStepConfig } from '../src/pipeline/types';
 import { migrateLlmConfig } from '../src/pipeline/types';
-import { callClaude } from './claude-caller';
-import { callCodex } from './codex-caller';
+import { callLLM } from './llm-caller';
 import { createNodePlatform } from './node-platform';
 import { exportSession } from './session-export';
-import { isOpenAIModel } from '../src/pipeline/output-parsers';
-
-function callLLM(opts: {
-  systemPrompt: string;
-  userMessage: string;
-  model?: string;
-  workingDir?: string;
-  allowedTools?: string[];
-  skipTools?: boolean;
-  conversationId?: string;
-  timeoutMs?: number;
-}) {
-  if (opts.model && isOpenAIModel(opts.model)) {
-    return callCodex(opts);
-  }
-  return callClaude(opts);
-}
 
 // ── ANSI colors ──
 const C = {
@@ -499,7 +481,7 @@ async function main() {
     }
   } else {
     // Manually write into localStorage since create() generates a new id
-    const data = JSON.parse(storage.getItem('mcp-pipelines') || '{"version":2,"pipelines":[],"lastUpdated":""}');
+    const data = JSON.parse(storage.getItem('mcp-pipelines') || '{"version":5,"pipelines":[],"lastUpdated":""}');
     data.pipelines.push(pipeline);
     data.lastUpdated = new Date().toISOString();
     storage.setItem('mcp-pipelines', JSON.stringify(data));
@@ -535,6 +517,7 @@ async function main() {
       const isOpus = persona.model?.includes('opus');
       const timeoutMs = isWorker ? 1_800_000 : isOpus ? 1_200_000 : 900_000;
       const result = await callLLM({
+        provider: persona.provider || 'anthropic-cli',
         systemPrompt: invocation.systemPrompt,
         userMessage: invocation.userMessage,
         model: persona.model,

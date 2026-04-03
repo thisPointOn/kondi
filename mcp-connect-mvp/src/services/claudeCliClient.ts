@@ -41,6 +41,25 @@ export function clearCliSession(chatId: string): void {
 }
 
 /**
+ * Clear Claude CLI's project session history for a directory.
+ * Claude CLI stores session .jsonl files in ~/.claude/projects/<path-key>/
+ * which get loaded as context in subsequent sessions. For councils, this
+ * causes cross-contamination between independent deliberations.
+ *
+ * Path key format: /home/erik/Documents/foo → -home-erik-Documents-foo
+ */
+async function clearProjectSessions(workingDirectory: string): Promise<void> {
+  try {
+    const pathKey = workingDirectory.replace(/\//g, '-');
+    const cmd = `rm -f "$HOME/.claude/projects/${pathKey}/"*.jsonl 2>/dev/null; true`;
+    await invoke('run_command', { command: cmd, cwd: workingDirectory });
+    console.log(`[ClaudeCliClient] Cleared project sessions for ${workingDirectory}`);
+  } catch (err) {
+    console.warn('[ClaudeCliClient] Failed to clear project sessions:', err);
+  }
+}
+
+/**
  * Route a chat request through the Claude CLI binary.
  * Matches the same return type as anthropicClient.chat().
  *
@@ -57,6 +76,13 @@ export async function claudeCliChat(
   chatId?: string,
 ): Promise<ChatResult> {
   const existingSessionId = chatId ? sessionMap.get(chatId) : undefined;
+
+  // For council/pipeline calls (no chatId), clear prior project sessions
+  // to prevent context contamination between independent deliberations.
+  // Chat calls keep sessions for multi-turn continuity.
+  if (!chatId && workingDirectory) {
+    await clearProjectSessions(workingDirectory);
+  }
 
   // Build CLI args
   const args: string[] = [
@@ -88,14 +114,16 @@ export async function claudeCliChat(
     // This must be extremely explicit because the CLI will find CLAUDE.md
     // from a parent git repo and try to operate there.
     if (workingDirectory) {
+      const wsDir = `${workingDirectory.replace(/\/$/, '')}/.kondi/workspace`;
       systemParts.unshift(
         `CRITICAL — WORKING DIRECTORY OVERRIDE:\n` +
         `Your working directory is: ${workingDirectory}\n` +
-        `ALL file paths MUST be absolute paths under ${workingDirectory}.\n` +
-        `When creating files, use the FULL ABSOLUTE PATH: ${workingDirectory}/filename\n` +
-        `When reading files, use the FULL ABSOLUTE PATH: ${workingDirectory}/filename\n` +
+        `Your OUTPUT directory for new files is: ${wsDir}\n` +
+        `ALL new files MUST be written to ${wsDir} (create it with mkdir -p if needed).\n` +
+        `You may READ files from anywhere under ${workingDirectory}.\n` +
         `When running commands, cd to ${workingDirectory} first.\n` +
-        `Do NOT use relative paths. Do NOT write to any other directory.\n` +
+        `Use FULL ABSOLUTE PATHS for all file operations.\n` +
+        `Do NOT write to any other directory.\n` +
         `IGNORE any project context from CLAUDE.md or git repos — they are NOT your project.`
       );
     }

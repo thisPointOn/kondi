@@ -1,9 +1,11 @@
 {
   "name": "kondi",
-  "private": true,
   "license": "AGPL-3.0-only",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "kondi": "./cli/kondi.ts"
+  },
   "scripts": {
     "dev": "vite --port 5175",
     "build": "tsc -b && vite build",
@@ -12,7 +14,9 @@
     "tauri": "WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri",
     "tauri:dev": "WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev",
     "dev:server": "node server/index.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "council": "npx tsx cli/run-council.ts",
+    "pipeline": "npx tsx cli/run-pipeline.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.3",
@@ -32,6 +36,7 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "stripe": "^17.5.0",
+    "tsx": "^4.0.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

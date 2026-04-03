@@ -792,50 +792,62 @@ export default function DeliberationView({
                 </label>
               </div>
 
-              {/* Council Mode */}
+              {/* Council Type */}
               <div className="setup-section">
-                <h4>Council Mode</h4>
+                <h4>Council Type</h4>
                 <div className="mode-selector">
-                  <button
-                    type="button"
-                    className={`mode-option ${council.orchestration.mode === 'deliberation' ? 'active' : ''}`}
-                    onClick={() => {
-                      councilStore.update(councilId, {
-                        orchestration: { ...council.orchestration, mode: 'deliberation' },
-                        deliberation: council.deliberation || {
-                          enabled: true,
-                          roleAssignments: [],
-                          minRounds: 1,
-                          maxRounds: 4,
-                          maxRevisions: 3,
-                          summaryMode: 'hybrid',
-                          summarizeAfterRound: 2,
-                          contextTokenBudget: 100000,
-                          consultantErrorPolicy: 'retry',
-                          maxRetries: 2,
-                          requirePlan: false,
-                          consultantExecution: 'sequential',
-                        },
-                      });
-                    }}
-                  >
-                    <span className="mode-icon">⚖️</span>
-                    <span className="mode-label">Deliberation</span>
-                    <span className="mode-desc">Manager orchestrates consultants and worker</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`mode-option ${council.orchestration.mode === 'freeform' ? 'active' : ''}`}
-                    onClick={() => {
-                      councilStore.update(councilId, {
-                        orchestration: { ...council.orchestration, mode: 'freeform' },
-                      });
-                    }}
-                  >
-                    <span className="mode-icon">💬</span>
-                    <span className="mode-label">Freeform</span>
-                    <span className="mode-desc">Open discussion between all personas</span>
-                  </button>
+                  {([
+                    { type: 'council', icon: '⚖️', label: 'Deliberation', desc: 'Manager orchestrates consultants and worker' },
+                    { type: 'coding', icon: '💻', label: 'Coding', desc: 'Spec → implement → review → test → debug' },
+                    { type: 'analysis', icon: '🔍', label: 'Analysis', desc: 'Research and analysis with MCP tools' },
+                    { type: 'review', icon: '📝', label: 'Review', desc: 'Code review and documentation' },
+                    { type: 'agent', icon: '🤖', label: 'Agent', desc: 'Task execution with tool access' },
+                    { type: 'freeform', icon: '💬', label: 'Freeform', desc: 'Open discussion between personas' },
+                  ] as const).map((opt) => (
+                    <button
+                      key={opt.type}
+                      type="button"
+                      className={`mode-option ${
+                        opt.type === 'freeform'
+                          ? council.orchestration.mode === 'freeform' ? 'active' : ''
+                          : council.orchestration.mode === 'deliberation' && council.deliberation?.stepType === opt.type ? 'active'
+                          : council.orchestration.mode !== 'freeform' && !council.deliberation?.stepType && opt.type === 'council' ? 'active'
+                          : ''
+                      }`}
+                      onClick={() => {
+                        if (opt.type === 'freeform') {
+                          councilStore.update(councilId, {
+                            orchestration: { ...council.orchestration, mode: 'freeform' },
+                          });
+                        } else {
+                          councilStore.update(councilId, {
+                            orchestration: { ...council.orchestration, mode: 'deliberation' },
+                            deliberation: {
+                              ...(council.deliberation || {
+                                enabled: true,
+                                roleAssignments: [],
+                                minRounds: 1,
+                                maxRounds: 4,
+                                maxRevisions: 3,
+                                summaryMode: 'hybrid',
+                                summarizeAfterRound: 2,
+                                contextTokenBudget: 100000,
+                                consultantErrorPolicy: 'retry',
+                                maxRetries: 2,
+                                requirePlan: false,
+                                consultantExecution: 'sequential',
+                              }),
+                              stepType: opt.type,
+                            },
+                          });
+                        }
+                      }}
+                    >
+                      <span className="mode-icon">{opt.icon}</span>
+                      <span className="mode-label">{opt.label}</span>
+                      <span className="mode-desc">{opt.desc}</span>
+                    </button>
+                  ))}
                 </div>
               </div>
 

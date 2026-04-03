@@ -365,13 +365,18 @@ When DONE, end with:
   }
 
   if (permissions?.writePermissions) {
-    const scopeNote = permissions.workingDirectory
+    const workspaceDir = permissions.workingDirectory
+      ? `${permissions.workingDirectory.replace(/\/$/, '')}/.kondi/workspace`
+      : undefined;
+    const scopeNote = workspaceDir
       ? (permissions.directoryConstrained
-        ? `You have WRITE PERMISSIONS to the directory: ${permissions.workingDirectory}
-All file operations MUST be within this directory. Do not write outside it.`
+        ? `You have WRITE PERMISSIONS. Output directory: ${workspaceDir}
+All files you create MUST be written to ${workspaceDir} (create it if needed).
+You may READ files from anywhere under ${permissions.workingDirectory}, but WRITE only to the output directory above.`
         : `You have WRITE PERMISSIONS to the file system.
 Working directory: ${permissions.workingDirectory}
-You may write to any location on the system.`)
+Output directory for new files: ${workspaceDir}
+Write new files to the output directory. You may modify existing files in-place.`)
       : `You have WRITE PERMISSIONS to the file system.
 You may read and write files as needed.`;
 

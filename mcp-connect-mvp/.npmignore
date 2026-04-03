@@ -1,0 +1,29 @@
+# Tauri desktop app (not needed for CLI)
+src-tauri/
+
+# Frontend build artifacts
+dist/
+node_modules/
+
+# Dev/build config
+.eslintrc*
+eslint.config*
+vite.config*
+postcss.config*
+tailwind.config*
+tsconfig*.json
+
+# Test fixtures
+*.test.*
+__tests__/
+
+# Docs (keep cli/README.md)
+docs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

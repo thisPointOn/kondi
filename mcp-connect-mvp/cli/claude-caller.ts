@@ -12,6 +12,8 @@ export interface CallerResult {
   tokensUsed: number;
   latencyMs: number;
   sessionId?: string;
+  cacheRead?: number;
+  cacheCreation?: number;
 }
 
 /**
@@ -29,6 +31,24 @@ export async function callClaude(opts: {
 }): Promise<CallerResult> {
   const start = Date.now();
 
+  // Clear prior project sessions to prevent context contamination between councils.
+  // Only for new sessions (not --resume).
+  if (!opts.conversationId && opts.workingDir) {
+    const pathKey = opts.workingDir.replace(/\//g, '-');
+    const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+    const projectDir = `${homeDir}/.claude/projects/${pathKey}`;
+    try {
+      const fs = await import('node:fs');
+      if (fs.existsSync(projectDir)) {
+        for (const f of fs.readdirSync(projectDir)) {
+          if (f.endsWith('.jsonl')) {
+            fs.unlinkSync(`${projectDir}/${f}`);
+          }
+        }
+      }
+    } catch { /* non-fatal */ }
+  }
+
   const args: string[] = [];
 
   // Resume existing conversation or start new one
@@ -42,6 +62,12 @@ export async function callClaude(opts: {
 
   if (opts.model) {
     args.push('--model', opts.model);
+  }
+
+  // Grant write permissions and pin to working directory
+  args.push('--permission-mode', 'bypassPermissions');
+  if (opts.workingDir) {
+    args.push('--add-dir', opts.workingDir);
   }
 
   // System prompt only on first call (not when resuming)

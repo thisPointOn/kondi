@@ -1,0 +1,21 @@
+{
+  "name": "kondi-council-mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing Kondi multi-LLM council deliberations as tools",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "bin": {
+    "kondi-council-mcp": "./dist/server.mjs"
+  },
+  "files": [
+    "dist/"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.3",
+    "zod": "^4.3.6"
+  },
+  "keywords": [
+    "mcp", "model-context-protocol", "ai", "council", "deliberation",
+    "claude-desktop", "cursor", "windsurf"
+  ]
+}

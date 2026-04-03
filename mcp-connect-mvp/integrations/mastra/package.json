@@ -1,0 +1,13 @@
+{
+  "name": "kondi-council-mastra",
+  "version": "0.1.0",
+  "description": "Kondi council deliberation tool and workflow step for Mastra",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "dist/index.mjs",
+  "files": ["dist/"],
+  "peerDependencies": {
+    "@mastra/core": ">=0.5.0"
+  },
+  "keywords": ["mastra", "ai", "agent", "council", "multi-agent", "workflow", "tool"]
+}

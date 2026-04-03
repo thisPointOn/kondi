@@ -113,7 +113,7 @@ export function createCouncilFromSetup(setup: CouncilSetup): Council {
       focusArea: p.focusArea,
       stance: p.startingStance,
       suppressPersona: p.suppressPersona ?? (p.role === 'manager' || p.role === 'worker' || p.role === 'reviewer'),
-      writePermissions: p.role === 'worker' ? true : undefined,
+      writePermissions: (p.role === 'worker' && p.toolAccess !== 'none') ? true : undefined,
       toolAccess: p.toolAccess,
       allowedServerIds: p.allowedServerIds,
     })
