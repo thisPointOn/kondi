@@ -4,7 +4,7 @@
   border-right: 1px solid #2a2a2a;
   display: flex;
   flex-direction: column;
-  padding: 12px;
+  padding: 8px;
   transition: width 0.2s ease;
   overflow-y: auto;
   overflow-x: hidden;
@@ -18,13 +18,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
-  min-height: 42px;
+  margin-bottom: 8px;
+  min-height: 36px;
 }
 
 .sidebar-logo {
-  padding: 12px 8px;
-  font-size: 18px;
+  padding: 8px;
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -50,10 +50,17 @@
   color: #999;
 }
 
-.chats-section {
+.chats-section,
+.council-section {
   display: flex;
   flex-direction: column;
 }
+
+.council-section {
+  padding: 0 8px;
+  margin-top: 4px;
+}
+.council-section .section-header-toggle { gap: 6px; }
 
 .section-header {
   display: flex;
@@ -65,8 +72,8 @@
 .section-header-toggle {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 6px 8px;
   background: transparent;
   border: none;
   border-radius: 8px;
@@ -115,7 +122,7 @@
 }
 
 .section-label {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
@@ -128,11 +135,11 @@
 }
 
 .chat-item {
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-radius: 6px;
   cursor: pointer;
   margin-bottom: 2px;
-  font-size: 13px;
+  font-size: 12px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -406,15 +413,15 @@
 
 /* FlowForge Section */
 .flowforge-section {
-  margin-top: 16px;
+  margin-top: 10px;
 }
 
 .section-divider {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  font-size: 11px;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -430,16 +437,16 @@
 
 .nav-btn {
   width: 100%;
-  padding: 10px 12px;
+  padding: 8px 10px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 8px;
   color: #999;
-  font-size: 14px;
+  font-size: 12.5px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-bottom: 4px;
   transition: all 0.2s;
 }
@@ -537,16 +544,16 @@
 
 .settings-btn {
   width: 100%;
-  padding: 10px 12px;
+  padding: 8px 10px;
   background: transparent;
   border: 1px solid #2a2a2a;
   border-radius: 8px;
   color: #999;
-  font-size: 14px;
+  font-size: 12.5px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   transition: all 0.2s;
 }
 
@@ -595,4 +602,58 @@
     justify-content: center;
     padding: 10px;
   }
+}
+
+/* Projects section */
+.projects-section { display: flex; flex-direction: column; }
+.project-list { display: flex; flex-direction: column; gap: 1px; }
+.project-group { display: flex; flex-direction: column; }
+.project-row { display: flex; align-items: center; gap: 2px; }
+.project-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  padding: 4px 6px;
+  color: var(--text-secondary, #b4b4c0);
+  cursor: pointer;
+  font-size: 13px;
+  border-radius: 6px;
+}
+.project-toggle:hover { background: rgba(255,255,255,0.04); color: #e2e8f0; }
+.project-toggle .chevron { flex-shrink: 0; transition: transform 0.15s; color: #888; }
+.project-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.project-count { flex-shrink: 0; font-size: 10px; color: #6b7280; }
+.project-mini-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: transparent;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0;
+}
+.project-row:hover .project-mini-btn { opacity: 1; }
+.project-mini-btn:hover { background: rgba(255,255,255,0.06); color: #e2e8f0; }
+.project-mini-btn.danger:hover { color: #f87171; }
+.project-chats { display: flex; flex-direction: column; gap: 1px; padding-left: 16px; }
+
+/* Council/project list items are <button>s — keep their names left-justified. */
+.chat-item { justify-content: flex-start; text-align: left; width: 100%; }
+.chat-item.empty { justify-content: center; }
+.chat-item-title {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

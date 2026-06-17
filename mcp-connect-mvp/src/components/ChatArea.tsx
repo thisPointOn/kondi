@@ -3,11 +3,11 @@ import type React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
-import { Paperclip, X, ChevronDown, FolderOpen, Pin } from 'lucide-react';
+import { Paperclip, X, ChevronDown, FolderOpen, Pin, FileText, CheckSquare, Trash2 } from 'lucide-react';
 import type { ChatModelPin } from '../hooks/useChats';
-import { open as tauriOpen } from '@tauri-apps/plugin-dialog';
+import { open as tauriOpen, ask } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, Message, ToolCall } from '../types/mcp';
-import { chatCompletion } from '../services/llm-router';
+import { chatCompletion, simpleCompletion } from '../services/llm-router';
 import { LOCAL_TOOLS, LOCAL_SERVER_ID, localToolsService } from '../services/localTools';
 import {
   ANTHROPIC_CLI_MODELS,
@@ -17,9 +17,20 @@ import {
   DEEPSEEK_MODELS,
   GOOGLE_MODELS,
   XAI_MODELS,
+  ZAI_MODELS,
+  NVIDIA_MODELS,
   OLLAMA_MODELS,
+  getModelById,
   type ModelDefinition,
 } from '../config/models';
+import { ROUTED_PROFILE_OPTIONS, getRoutedProfileOptions } from '../router/profile-options';
+import { ROUTER_PROFILES_EVENT } from '../router/profile-store';
+import { syncTasksFromText, completeTaskByText } from '../services/taskSync';
+import { nextRunnable, markActive, completeQueuedTask } from '../services/taskQueue';
+import { diffKey, getDiffByKey } from '../services/diffStore';
+import { filterVisibleModels, useModelStatus } from '../services/modelProbe';
+import { recordContextSnapshot } from '../services/chatContextSnapshot';
+import { applyCompression, getCompressionSettings } from '../services/contextCompression';
 import './ChatArea.css';
 
 interface AttachedFile {
@@ -105,7 +116,29 @@ interface ProviderMeta {
   models: ModelDefinition[];
 }
 
+// Routed profiles ("Smart Routing") presented as selectable chat models. The
+// `provider` field is cosmetic here — picking one sets the chat provider to
+// 'router' and the model to 'route:<name>', which llm-router resolves per call.
+const ROUTED_CHAT_MODELS: ModelDefinition[] = ROUTED_PROFILE_OPTIONS.map(o => ({
+  id: o.id,
+  name: o.name,
+  provider: 'router' as unknown as ModelDefinition['provider'],
+  contextWindow: 200000,
+  capabilities: ['text', 'code', 'reasoning'],
+  inputCostPer1K: 0,
+  outputCostPer1K: 0,
+  costDisplay: 'auto',
+  tier: 1,
+}));
+
 const PROVIDER_META: ProviderMeta[] = [
+  {
+    id: 'router',
+    label: '🔀 Smart Routing',
+    shortLabel: 'Router',
+    color: '#a855f7',
+    models: ROUTED_CHAT_MODELS,
+  },
   {
     id: 'anthropic-cli',
     label: 'Claude CLI (Subscription)',
@@ -149,6 +182,20 @@ const PROVIDER_META: ProviderMeta[] = [
     models: XAI_MODELS,
   },
   {
+    id: 'zai',
+    label: 'Z.AI (GLM)',
+    shortLabel: 'GLM',
+    color: '#0ea5e9',
+    models: ZAI_MODELS,
+  },
+  {
+    id: 'nvidia-router',
+    label: 'NVIDIA Router',
+    shortLabel: 'NVIDIA',
+    color: '#76b900',
+    models: NVIDIA_MODELS,
+  },
+  {
     id: 'google',
     label: 'Google Gemini',
     shortLabel: 'Gemini',
@@ -173,7 +220,7 @@ function formatTokens(n: number): string {
 }
 
 function ChatContextBar({
-  messages, servers, availableTools, attachedFiles, workingDir, modelId, providerId,
+  messages, servers, availableTools, attachedFiles, workingDir, modelId, providerId, onDelete,
 }: {
   messages: Message[];
   servers: MCPServer[];
@@ -182,6 +229,7 @@ function ChatContextBar({
   workingDir?: string;
   modelId?: string;
   providerId?: string;
+  onDelete?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -231,8 +279,64 @@ function ChatContextBar({
   const apiUsage = latestAssistant?.usage;
   const hasApiUsage = !!apiUsage;
 
+  // Input for the latest response: real inputTokens, else payloadChars/4 (CLI
+  // providers report 0 inputTokens but record the prompt size). Never show 0
+  // when context was actually sent.
+  const apiInputTokens = apiUsage
+    ? (apiUsage.inputTokens || (apiUsage.payloadChars ? Math.round(apiUsage.payloadChars / 4) : 0))
+    : 0;
+  const apiInputEstimated = !!apiUsage && !apiUsage.inputTokens && !!apiUsage.payloadChars;
+
   // Use actual input tokens when available, otherwise fall back to estimate
-  const displayTokens = hasApiUsage ? (apiUsage!.inputTokens + apiUsage!.outputTokens) : estimatedTokens;
+  const displayTokens = hasApiUsage ? (apiInputTokens + apiUsage!.outputTokens) : estimatedTokens;
+
+  // Cumulative per-model usage across the whole chat (so switching models
+  // doesn't hide the tokens an earlier model already used).
+  //
+  // Input tokens: every turn re-sends the whole context, but providers report
+  // it differently — APIs give real inputTokens; CLI providers report 0 but
+  // record payloadChars (the prompt size); some messages have no usage at all.
+  // So we fall back: inputTokens → payloadChars/4 → (system+tools baseline +
+  // the running size of all prior messages). That last fallback is why input is
+  // no longer 0 for CLI/older turns — the context they received IS counted.
+  const perModel = (() => {
+    const map = new Map<string, { label: string; input: number; output: number; tokens: number; msgs: number; estimated: boolean; color: string }>();
+    const baseline = sysTokens + totalToolDefTokens; // system prompt + tool schemas, sent every turn
+    let runningChars = 0;
+    for (const m of messages) {
+      const cChars = m.content?.length || 0;
+      if (m.role === 'assistant') {
+        const key = m.model || m.provider || 'unknown';
+        const label = (m.model || m.provider || 'unknown').replace(/^models\//, '');
+        const color = PROVIDER_META.find(p => p.id === m.provider)?.color || '#8b5cf6';
+        const e = map.get(key) || { label, input: 0, output: 0, tokens: 0, msgs: 0, estimated: false, color };
+        const u = m.usage;
+        let inTok: number;
+        let outTok: number;
+        let est = false;
+        if (u?.inputTokens) {
+          inTok = u.inputTokens;
+        } else if (u?.payloadChars) {
+          inTok = Math.round(u.payloadChars / 4); est = true;
+        } else {
+          inTok = baseline + Math.round(runningChars / 4); est = true;
+        }
+        if (u?.outputTokens) {
+          outTok = u.outputTokens;
+        } else {
+          outTok = Math.round(cChars / 3.5); est = true;
+        }
+        e.input += inTok;
+        e.output += outTok;
+        e.tokens = e.input + e.output;
+        e.msgs += 1;
+        if (est) e.estimated = true;
+        map.set(key, e);
+      }
+      runningChars += cChars;
+    }
+    return [...map.values()].sort((a, b) => b.tokens - a.tokens);
+  })();
 
   return (
     <>
@@ -240,7 +344,7 @@ function ChatContextBar({
         <span className="ctx-toggle">{expanded ? '\u25BE' : '\u25B8'}</span>
         {hasApiUsage ? (
           <>
-            <span className="ctx-stat">{formatTokens(apiUsage!.inputTokens)} in</span>
+            <span className="ctx-stat">{formatTokens(apiInputTokens)}{apiInputEstimated ? '~' : ''} in</span>
             <span className="ctx-stat">{formatTokens(apiUsage!.outputTokens)} out</span>
             {apiUsage!.cacheRead ? <span className="ctx-stat ctx-cache">{formatTokens(apiUsage!.cacheRead)} cached</span> : null}
           </>
@@ -248,10 +352,20 @@ function ChatContextBar({
           <span className="ctx-stat">~{formatTokens(estimatedTokens)} tokens</span>
         )}
         <span className="ctx-stat">{messages.length} msgs</span>
+        {perModel.length > 1 && <span className="ctx-stat" title="Click to see per-model usage">{perModel.length} models</span>}
         {totalTools > 0 && <span className="ctx-stat">{totalTools} tools</span>}
         {connectedServers > 0 && <span className="ctx-stat">{connectedServers} server{connectedServers !== 1 ? 's' : ''}</span>}
         {totalToolCalls > 0 && <span className="ctx-stat">{totalToolCalls} tool call{totalToolCalls !== 1 ? 's' : ''}</span>}
         {attachedFiles.length > 0 && <span className="ctx-stat">{attachedFiles.length} pending file{attachedFiles.length !== 1 ? 's' : ''}</span>}
+        {onDelete && (
+          <button
+            className="ctx-delete-btn"
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            title="Delete this chat"
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
       </div>
       {expanded && (
         <div className="chat-context-detail">
@@ -260,13 +374,45 @@ function ChatContextBar({
               <tr><th>Source</th><th>Detail</th><th>{hasApiUsage ? 'Tokens' : 'Est. Tokens'}</th></tr>
             </thead>
             <tbody>
+              {perModel.length > 0 && (
+                <>
+                  <tr className="ctx-section-row"><td colSpan={3}>Per-model usage (this chat)</td></tr>
+                  {perModel.map(pm => (
+                    <tr key={pm.label}>
+                      <td>
+                        <span className="ctx-model" style={{ background: pm.color + '22', color: pm.color }}>{pm.label}</span>
+                        <span className="ctx-model-msgs">{pm.msgs} msg{pm.msgs !== 1 ? 's' : ''}{pm.estimated ? ' (est)' : ''}</span>
+                      </td>
+                      <td>
+                        <span className="ctx-io">
+                          <span className="ctx-in">{formatTokens(pm.input)} in</span>
+                          <span className="ctx-out">{formatTokens(pm.output)} out</span>
+                        </span>
+                      </td>
+                      <td>{formatTokens(pm.tokens)}</td>
+                    </tr>
+                  ))}
+                  {perModel.length > 1 && (
+                    <tr className="ctx-total-row">
+                      <td>All models</td>
+                      <td>
+                        <span className="ctx-io">
+                          <span className="ctx-in">{formatTokens(perModel.reduce((s, p) => s + p.input, 0))} in</span>
+                          <span className="ctx-out">{formatTokens(perModel.reduce((s, p) => s + p.output, 0))} out</span>
+                        </span>
+                      </td>
+                      <td>{formatTokens(perModel.reduce((s, p) => s + p.tokens, 0))}</td>
+                    </tr>
+                  )}
+                </>
+              )}
               {hasApiUsage && (
                 <>
                   <tr className="ctx-section-row"><td colSpan={3}>API Usage (last response)</td></tr>
                   <tr>
                     <td>Input tokens</td>
-                    <td>Actual from API</td>
-                    <td>{formatTokens(apiUsage!.inputTokens)}</td>
+                    <td>{apiInputEstimated ? 'Est. from prompt size' : 'Actual from API'}</td>
+                    <td>{formatTokens(apiInputTokens)}</td>
                   </tr>
                   <tr>
                     <td>Output tokens</td>
@@ -393,6 +539,8 @@ interface ChatAreaProps {
     'openai-api': boolean;
     deepseek: boolean;
     xai: boolean;
+    zai: boolean;
+    'nvidia-router': boolean;
     google: boolean;
     ollama: boolean;
   };
@@ -405,6 +553,7 @@ interface ChatAreaProps {
   onSendingChange?: (sending: boolean) => void;
   /** Per-chat update — writes messages to a specific chatId (survives chat switches) */
   onChatUpdate?: (chatId: string, messages: Message[]) => void;
+  onDeleteChat?: (id: string) => void;
   /** Per-chat sending state callbacks (pinned to chatId, survives chat switches) */
   onChatSendingChange?: (chatId: string, sending: boolean) => void;
   onChatActiveProviderChange?: (chatId: string, provider: string | null) => void;
@@ -421,6 +570,9 @@ interface ChatAreaProps {
   /** Lifted active provider — persists across view changes */
   activeProviderOverride?: string | null;
   onActiveProviderChange?: (provider: string | null) => void;
+  /** Right-side workspace panel visibility + toggle (rendered in App). */
+  showRightSidebar?: boolean;
+  onToggleRightSidebar?: () => void;
 }
 
 const ChatArea: FC<ChatAreaProps> = ({
@@ -444,6 +596,8 @@ const ChatArea: FC<ChatAreaProps> = ({
     'openai-api': true,
     deepseek: false,
     xai: false,
+    zai: false,
+    'nvidia-router': false,
     google: false,
     ollama: false,
   },
@@ -457,12 +611,17 @@ const ChatArea: FC<ChatAreaProps> = ({
   sending: sendingProp,
   onSendingChange,
   onChatUpdate,
+  onDeleteChat,
   onChatSendingChange,
   onChatActiveProviderChange,
   activeProviderOverride,
   onActiveProviderChange,
+  showRightSidebar,
+  onToggleRightSidebar,
 }) => {
   const [inputValue, setInputValue] = useState('');
+  // True while an assistant reply is streaming in (suppresses the typing dots).
+  const [streamingActive, setStreamingActive] = useState(false);
   const [showToolAutocomplete, setShowToolAutocomplete] = useState(false);
   const [sendingLocal, setSendingLocal] = useState(false);
   const [activeProviderLocal, setActiveProviderLocal] = useState<string | null>(null);
@@ -508,13 +667,34 @@ const ChatArea: FC<ChatAreaProps> = ({
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
-  // Effective provider meta — override Ollama models with discovered ones
+  // Re-render model lists whenever probe status changes (a model auto-hidden
+  // after a failed call, or a manual "Refresh models" sweep completes).
+  const modelStatusVersion = useModelStatus();
+  // Re-render the Smart-Routing list when profiles are added/edited in Settings.
+  const [routerProfilesVersion, setRouterProfilesVersion] = useState(0);
+  useEffect(() => {
+    const onChange = () => setRouterProfilesVersion(v => v + 1);
+    window.addEventListener(ROUTER_PROFILES_EVENT, onChange);
+    return () => window.removeEventListener(ROUTER_PROFILES_EVENT, onChange);
+  }, []);
+
+  // Effective provider meta — override Ollama models with discovered ones, swap
+  // in the live routed-profile list, and drop probe-broken models.
   const effectiveProviderMeta = useMemo(() => {
-    if (!discoveredOllamaModels || discoveredOllamaModels.length === 0) return PROVIDER_META;
-    return PROVIDER_META.map(p =>
-      p.id === 'ollama' ? { ...p, models: discoveredOllamaModels } : p
-    );
-  }, [discoveredOllamaModels]);
+    const routedModels: ModelDefinition[] = getRoutedProfileOptions().map(o => ({
+      id: o.id, name: o.name, provider: 'router' as unknown as ModelDefinition['provider'],
+      contextWindow: 200000, capabilities: ['text', 'code', 'reasoning'],
+      inputCostPer1K: 0, outputCostPer1K: 0, costDisplay: 'auto', tier: 1,
+    }));
+    return PROVIDER_META.map(p => {
+      if (p.id === 'router') return { ...p, models: routedModels };
+      if (p.id === 'ollama' && discoveredOllamaModels && discoveredOllamaModels.length > 0) {
+        return { ...p, models: filterVisibleModels(discoveredOllamaModels) };
+      }
+      return { ...p, models: filterVisibleModels(p.models) };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [discoveredOllamaModels, modelStatusVersion, routerProfilesVersion]);
 
   // Get current model name for display
   const currentModel = chatModelId || (provider === 'claude' ? anthropicModel : openaiModel);
@@ -527,14 +707,47 @@ const ChatArea: FC<ChatAreaProps> = ({
   const pinnedProviderMeta = chatModelPin ? effectiveProviderMeta.find((p) => p.id === chatModelPin.providerId) : null;
   const pinnedModelDef = pinnedProviderMeta?.models.find((m) => m.id === chatModelPin?.modelId);
 
-  // Available (configured) providers
+  // Available (configured) providers. Smart Routing is always selectable —
+  // it dispatches to whichever concrete provider its profile resolves to.
   const availableProviders = effectiveProviderMeta.filter(
-    (p) => configuredProviders[p.id as keyof typeof configuredProviders]
+    (p) => p.id === 'router' || configuredProviders[p.id as keyof typeof configuredProviders]
   );
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, sending]);
+
+  // Scroll the chat to a specific message (fired when a completed task is clicked).
+  useEffect(() => {
+    const onScrollTo = (e: Event) => {
+      const id = (e as CustomEvent<{ messageId?: string }>).detail?.messageId;
+      if (!id) return;
+      const el = document.getElementById(`chat-msg-${id}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('msg-flash');
+        setTimeout(() => el.classList.remove('msg-flash'), 1600);
+      }
+    };
+    window.addEventListener('kondi-scroll-to-message', onScrollTo as EventListener);
+    return () => window.removeEventListener('kondi-scroll-to-message', onScrollTo as EventListener);
+  }, []);
+
+  // Scroll the chat to a diff tile (fired when a Review-tab item is clicked).
+  useEffect(() => {
+    const onScrollToDiff = (e: Event) => {
+      const key = (e as CustomEvent<{ key?: string }>).detail?.key;
+      if (!key) return;
+      const el = document.getElementById(`chat-diff-${key}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('msg-flash');
+        setTimeout(() => el.classList.remove('msg-flash'), 1600);
+      }
+    };
+    window.addEventListener('kondi-scroll-to-diff', onScrollToDiff as EventListener);
+    return () => window.removeEventListener('kondi-scroll-to-diff', onScrollToDiff as EventListener);
+  }, []);
 
   useEffect(() => {
     if (pendingToolInsert) {
@@ -755,7 +968,8 @@ const ChatArea: FC<ChatAreaProps> = ({
     provId: string,
     msgs: Message[],
     modePrompt?: string,
-    retryCount = 0
+    retryCount = 0,
+    onStreamText?: (fullText: string) => void,
   ): Promise<Message> => {
     setActiveProvider(provId);
     const serverSummary = getServerSummary();
@@ -772,19 +986,64 @@ const ChatArea: FC<ChatAreaProps> = ({
     // Use pinned model if set, otherwise fall back to global
     const modelForCall = effectiveModelId;
 
+    // Compress the context per the user's Context-tab settings (summarize/omit
+    // older messages, trim tool schemas). Returns the exact payload to send.
+    const compressed = await applyCompression({
+      chatId: chatId || 'default',
+      messages: msgs,
+      tools: availableTools,
+      systemPrompt: modePrompt,
+      summarize: async (text: string) => {
+        const r = await simpleCompletion({
+          provider: provId,
+          model: modelForCall,
+          systemPrompt: 'You compress conversation context. Summarize the exchange below into a concise, factual summary that preserves decisions, key facts, names, file paths, and any open threads. Use terse bullet points. Do not add commentary.',
+          userMessage: text,
+        });
+        return r.content;
+      },
+    });
+    const sendMessages = compressed.messages;
+    const sendTools = compressed.tools || availableTools;
+    const sendSystem = compressed.systemPrompt;
+
+    // Snapshot the exact context being sent so the Workspace → Context panel
+    // can show the live payload + its size.
+    recordContextSnapshot({
+      provider: provId,
+      model: modelForCall,
+      systemPrompt: sendSystem,
+      serverSummary,
+      messages: sendMessages,
+      availableTools: sendTools,
+      compression: {
+        level: getCompressionSettings().level,
+        originalMessages: compressed.stats.originalMessages,
+        keptMessages: compressed.stats.keptMessages,
+        droppedMessages: compressed.stats.droppedMessages,
+        summarized: compressed.stats.summarized,
+        toolsTrimmed: compressed.stats.toolsTrimmed,
+      },
+    });
+
+    let streamAcc = '';
     const result = await chatCompletion({
       provider: provId,
       model: modelForCall,
-      messages: msgs,
-      availableTools,
-      systemPrompt: modePrompt,
+      messages: sendMessages,
+      availableTools: sendTools,
+      systemPrompt: sendSystem,
       workingDirectory: effectiveWorkingDir,
       serverSummary,
       chatId: chatId || undefined,
+      onToken: onStreamText
+        ? (delta: string) => { streamAcc += delta; onStreamText(streamAcc); }
+        : undefined,
     });
     message = result.message;
     toolCalls = result.toolCalls;
     message.provider = provId;
+    message.model = modelForCall;
 
     message.toolCalls = toolCalls;
 
@@ -804,6 +1063,72 @@ const ChatArea: FC<ChatAreaProps> = ({
 
     return message;
   };
+
+  // ── Task runner: run queued tasks sequentially as chat turns ──
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const runTaskRef = useRef<(text: string, base: Message[]) => Promise<Message[]>>();
+  runTaskRef.current = async (text: string, base: Message[]): Promise<Message[]> => {
+    const targetChatId = chatId;
+    const wd = chatWorkingDir || localToolsService.getWorkingDirectory() || globalWorkingDirectory || undefined;
+    const write = (msgs: Message[]) => {
+      if (onChatUpdate && targetChatId) onChatUpdate(targetChatId, msgs);
+      else onMessagesChange(msgs);
+    };
+    const userMsg: Message = {
+      id: crypto.randomUUID(), role: 'user', content: text, taskTag: text, timestamp: new Date(),
+    };
+    const withUser = [...base, userMsg];
+    write(withUser);
+    if (targetChatId) onChatSendingChange?.(targetChatId, true);
+    setSending(true);
+    try {
+      const asst = await callProvider(effectiveProviderId, withUser);
+      asst.taskTag = text;
+      const withAsst = [...withUser, asst];
+      write(withAsst);
+      // Mark the task done and tag it to this output for click-to-scroll.
+      await completeTaskByText(wd, text, asst.id);
+      return withAsst;
+    } catch (err) {
+      const errMsg: Message = {
+        id: crypto.randomUUID(), role: 'assistant',
+        content: `Task failed: ${err instanceof Error ? err.message : String(err)}`,
+        taskTag: text, provider: effectiveProviderId, timestamp: new Date(),
+      };
+      const withErr = [...withUser, errMsg];
+      write(withErr);
+      await completeTaskByText(wd, text, errMsg.id);
+      return withErr;
+    } finally {
+      setSending(false);
+      if (targetChatId) onChatSendingChange?.(targetChatId, false);
+    }
+  };
+
+  const taskRunningRef = useRef(false);
+  useEffect(() => {
+    const drain = async () => {
+      if (taskRunningRef.current || !chatId) return;
+      taskRunningRef.current = true;
+      try {
+        let current = messagesRef.current;
+        let next = nextRunnable();
+        while (next) {
+          markActive(next.id);
+          current = (await runTaskRef.current?.(next.text, current)) ?? current;
+          completeQueuedTask(next.id);
+          next = nextRunnable();
+        }
+      } finally {
+        taskRunningRef.current = false;
+      }
+    };
+    // The queue store emits this on enqueue / resume / state change.
+    const onQueueUpdated = () => { void drain(); };
+    window.addEventListener('kondi-taskqueue-updated', onQueueUpdated);
+    return () => window.removeEventListener('kondi-taskqueue-updated', onQueueUpdated);
+  }, [chatId]);
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || sending || !chatId) return;
@@ -879,8 +1204,30 @@ const ChatArea: FC<ChatAreaProps> = ({
     stopRef.current = false;
 
     try {
-      const message = await callProvider(effectiveProviderId, currentMessages);
+      const streamId = crypto.randomUUID();
+      const message = await callProvider(
+        effectiveProviderId, currentMessages, undefined, 0,
+        (text: string) => {
+          setStreamingActive(true);
+          updateTarget([...currentMessages, {
+            id: streamId,
+            role: 'assistant',
+            content: text,
+            provider: effectiveProviderId,
+            timestamp: new Date(),
+          } as Message]);
+        },
+      );
+      setStreamingActive(false);
       let updatedMessages = [...currentMessages, message];
+
+      // Recognize any tasks the assistant produced/completed and sync them into
+      // the Workspace → Tasks panel (tagged with this message id for scroll-to).
+      void syncTasksFromText(
+        chatWorkingDir || localToolsService.getWorkingDirectory() || globalWorkingDirectory || undefined,
+        message.content,
+        message.id,
+      );
 
       // If there's a staged comment, append it and send a follow-up LLM call
       const pending = stagedCommentRef.current;
@@ -976,6 +1323,7 @@ const ChatArea: FC<ChatAreaProps> = ({
       // Clear staged comment on error too
       updateStagedComment(null);
     } finally {
+      setStreamingActive(false);
       setSendingTarget(false);
       setActiveProviderTarget(null);
     }
@@ -989,69 +1337,34 @@ const ChatArea: FC<ChatAreaProps> = ({
     }
   };
 
+  // "Try again" — regenerate an assistant message from the conversation up to it.
+  const handleRetry = async (target: Message) => {
+    if (!chatId || sending) return;
+    const idx = messages.findIndex((m) => m.id === target.id);
+    if (idx < 0) return;
+    const base = messages.slice(0, idx);
+    if (!base.some((m) => m.role === 'user')) return;
+    const targetChatId = chatId;
+    const updateTarget = (msgs: Message[]) =>
+      onChatUpdate ? onChatUpdate(targetChatId, msgs) : onMessagesChange(msgs);
+    updateTarget(base);
+    setSending(true);
+    try {
+      const asst = await callProvider(effectiveProviderId, base);
+      updateTarget([...base, asst]);
+    } catch (e) {
+      updateTarget([...base, {
+        id: crypto.randomUUID(), role: 'assistant',
+        content: 'Error: ' + (e instanceof Error ? e.message : String(e)),
+        timestamp: new Date(), provider: effectiveProviderId,
+      } as Message]);
+    } finally {
+      setSending(false);
+    }
+  };
+
   return (
     <main className="chat-area">
-      {/* Provider/Model selector header */}
-      <div className="model-selector-bar" ref={dropdownRef}>
-        <button
-          className="active-model-btn"
-          onClick={() => setShowModelDropdown(!showModelDropdown)}
-          disabled={sending}
-        >
-          <span
-            className="provider-color-dot"
-            style={{ backgroundColor: activeProviderMeta?.color || '#888' }}
-          />
-          <span className="active-model-name">
-            {activeModelDef?.name || currentModel}
-          </span>
-          <span className="active-provider-name">
-            {activeProviderMeta?.shortLabel || selectedProviderId}
-          </span>
-          <ChevronDown size={14} className={`model-chevron ${showModelDropdown ? 'open' : ''}`} />
-        </button>
-
-        {showModelDropdown && (
-          <div className="provider-model-dropdown">
-            {availableProviders.map((pm) => {
-              const isActiveProvider = pm.id === selectedProviderId;
-              return (
-                <div
-                  key={pm.id}
-                  className={`provider-tile ${isActiveProvider ? 'active' : ''}`}
-                >
-                  <div className="provider-tile-header">
-                    <span
-                      className="provider-tile-dot"
-                      style={{ backgroundColor: pm.color }}
-                    />
-                    <span className="provider-tile-name">{pm.label}</span>
-                  </div>
-                  <div className="provider-tile-models">
-                    {pm.models.map((model) => {
-                      const isCurrentModel = isActiveProvider && model.id === currentModel;
-                      return (
-                        <button
-                          key={model.id}
-                          className={`model-option-btn ${isCurrentModel ? 'current' : ''}`}
-                          onClick={() => handleSelectModel(pm, model.id)}
-                        >
-                          <span className="model-option-name">{model.name}</span>
-                          {isCurrentModel && <span className="model-check">&#10003;</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-            {availableProviders.length === 0 && (
-              <div className="no-providers">No providers configured. Set up API keys or CLI auth in Settings.</div>
-            )}
-          </div>
-        )}
-      </div>
-
       {/* Working directory & model pin bar */}
       <div className="chat-dir-bar">
         <button
@@ -1171,14 +1484,18 @@ const ChatArea: FC<ChatAreaProps> = ({
         workingDir={chatWorkingDir || globalWorkingDirectory}
         modelId={effectiveModelId}
         providerId={effectiveProviderId}
+        onDelete={chatId && onDeleteChat ? async () => {
+          const ok = await ask('Delete this chat? This cannot be undone.', { title: 'Delete Chat', kind: 'warning' });
+          if (ok) onDeleteChat(chatId);
+        } : undefined}
       />}
 
       <div className="messages-container">
         {messages.map((message) => (
-          <MessageRow key={message.id} message={message} servers={servers} />
+          <MessageRow key={message.id} message={message} servers={servers} onRetry={handleRetry} />
         ))}
 
-        {sending && (
+        {sending && !streamingActive && (
           <div className={`message typing ${activeProvider || ''}`}>
             <div className={`avatar assistant ${activeProvider || ''}`}>
               {PROVIDER_META.find(p => p.id === activeProvider)?.shortLabel || 'AI'}
@@ -1303,13 +1620,74 @@ const ChatArea: FC<ChatAreaProps> = ({
             {sending && inputValue.trim() ? '⏎' : '↑'}
           </button>
         </div>
+
+        {/* Provider/Model selector — under the text entry, compact */}
+        <div className="model-selector-bar model-selector-bar-bottom" ref={dropdownRef}>
+          <button
+            className="active-model-btn"
+            onClick={() => setShowModelDropdown(!showModelDropdown)}
+            disabled={sending}
+          >
+            <span
+              className="provider-color-dot"
+              style={{ backgroundColor: activeProviderMeta?.color || '#888' }}
+            />
+            <span className="active-model-name">
+              {activeModelDef?.name || currentModel}
+            </span>
+            <span className="active-provider-name">
+              {activeProviderMeta?.shortLabel || selectedProviderId}
+            </span>
+            <ChevronDown size={14} className={`model-chevron ${showModelDropdown ? 'open' : ''}`} />
+          </button>
+
+          {showModelDropdown && (
+            <div className="provider-model-dropdown">
+              {availableProviders.map((pm) => {
+                const isActiveProvider = pm.id === selectedProviderId;
+                return (
+                  <div
+                    key={pm.id}
+                    className={`provider-tile ${isActiveProvider ? 'active' : ''}`}
+                  >
+                    <div className="provider-tile-header">
+                      <span
+                        className="provider-tile-dot"
+                        style={{ backgroundColor: pm.color }}
+                      />
+                      <span className="provider-tile-name">{pm.label}</span>
+                    </div>
+                    <div className="provider-tile-models">
+                      {pm.models.map((model) => {
+                        const isCurrentModel = isActiveProvider && model.id === currentModel;
+                        return (
+                          <button
+                            key={model.id}
+                            className={`model-option-btn ${isCurrentModel ? 'current' : ''}`}
+                            onClick={() => handleSelectModel(pm, model.id)}
+                          >
+                            <span className="model-option-name">{model.name}</span>
+                            {isCurrentModel && <span className="model-check">&#10003;</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+              {availableProviders.length === 0 && (
+                <div className="no-providers">No providers configured. Set up API keys or CLI auth in Settings.</div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </main>
   );
 };
 
 /** Copy-to-clipboard button */
-const CopyBtn: FC<{ text: string; className?: string }> = ({ text, className = '' }) => {
+const CopyBtn: FC<{ text: string; className?: string; label?: string }> = ({ text, className = '', label }) => {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -1324,7 +1702,7 @@ const CopyBtn: FC<{ text: string; className?: string }> = ({ text, className = '
       }}
       title={copied ? 'Copied!' : 'Copy'}
     >
-      {copied ? '✓' : '⧉'}
+      {copied ? '✓' : '⧉'}{label ? ` ${copied ? 'Copied' : label}` : ''}
     </button>
   );
 };
@@ -1353,9 +1731,11 @@ const markdownComponents: Components = {
   },
 };
 
-const MessageRow: FC<{ message: Message; servers: MCPServer[] }> = ({ message, servers }) => {
+const MessageRow: FC<{ message: Message; servers: MCPServer[]; onRetry?: (m: Message) => void }> = ({ message, servers, onRetry }) => {
   const isUser = message.role === 'user';
   const provider = message.provider;
+  const [showModelDetails, setShowModelDetails] = useState(false);
+  const [showCtx, setShowCtx] = useState(false);
   const serverById = useMemo(
     (): Record<string, string> => ({
       [LOCAL_SERVER_ID]: 'Local',
@@ -1364,30 +1744,32 @@ const MessageRow: FC<{ message: Message; servers: MCPServer[] }> = ({ message, s
     [servers],
   );
 
-  const getAvatar = () => {
-    if (isUser) return 'User';
-    return PROVIDER_META.find(p => p.id === provider)?.shortLabel || 'AI';
-  };
-
   // For user messages with attachments, show only the text part (before file contents)
   const displayContent = useMemo(() => {
     if (isUser && message.attachments && message.attachments.length > 0) {
-      // Strip file contents from display - they're shown in the file block
       const fileMarker = '\n\n--- File:';
       const markerIndex = message.content.indexOf(fileMarker);
-      if (markerIndex > -1) {
-        return message.content.slice(0, markerIndex);
-      }
+      if (markerIndex > -1) return message.content.slice(0, markerIndex);
     }
     return message.content;
   }, [message.content, message.attachments, isUser]);
 
+  const u = message.usage;
+  const inTok = u ? (u.inputTokens || (u.payloadChars ? Math.round(u.payloadChars / 4) : 0)) : 0;
+  const outTok = u ? (u.outputTokens || Math.round((message.content?.length || 0) / 3.5)) : 0;
+  const modelId = message.model || '';
+  const modelDef = modelId ? getModelById(modelId) : undefined;
+  const modelLabel = modelDef?.name || modelId || PROVIDER_META.find(p => p.id === provider)?.shortLabel || 'AI';
+
   return (
-    <div className={`message ${provider || ''}`}>
-      <div className={`avatar ${isUser ? 'user' : 'assistant'} ${provider || ''}`}>
-        {getAvatar()}
-      </div>
+    <div id={`chat-msg-${message.id}`} className={`message ${isUser ? 'user' : 'assistant'} ${provider || ''}`}>
       <div className="message-content">
+        {message.taskTag && (
+          <div className="task-tag-badge" title={message.taskTag}>
+            <CheckSquare size={11} />
+            <span>Task{isUser ? '' : ' result'}: {message.taskTag}</span>
+          </div>
+        )}
         {isUser ? (
           <>
             {displayContent}
@@ -1406,14 +1788,108 @@ const MessageRow: FC<{ message: Message; servers: MCPServer[] }> = ({ message, s
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{message.content}</ReactMarkdown>
         )}
 
-        {message.toolCalls?.map((toolCall) => (
-          <ToolCallBadge
-            key={toolCall.id}
-            toolCall={toolCall}
-            serverName={serverById[toolCall.serverId] || 'Server'}
-          />
-        ))}
+        {(() => {
+          const calls = message.toolCalls || [];
+          const writeCalls = calls.filter(tc => tc.toolName === 'write_file' && tc.arguments?.path);
+          const otherCalls = calls.filter(tc => !(tc.toolName === 'write_file' && tc.arguments?.path));
+          return (
+            <>
+              {writeCalls.map(tc => <DiffTile key={tc.id} toolCall={tc} />)}
+              {otherCalls.length > 0 && <ToolsCombo toolCalls={otherCalls} serverById={serverById} />}
+            </>
+          );
+        })()}
       </div>
+
+      {/* Footer (assistant): model (clickable for details) · tokens · copy · try again · context */}
+      {!isUser && (
+        <div className="msg-footer">
+          <button className="msg-model" onClick={() => setShowModelDetails(v => !v)} title="Model details">
+            {modelLabel}
+          </button>
+          {(inTok > 0 || outTok > 0) && (
+            <span className="msg-tokens">
+              <span className="msg-in">{formatTokens(inTok)} in</span>
+              <span className="msg-out">{formatTokens(outTok)} out</span>
+            </span>
+          )}
+          <CopyBtn text={message.content} className="msg-action" label="Copy" />
+          {onRetry && (
+            <button className="msg-action" onClick={() => onRetry(message)} title="Regenerate this response">↻ Try again</button>
+          )}
+          {u && (
+            <button className="msg-action msg-ctx" onClick={() => setShowCtx(v => !v)}>
+              {showCtx ? '▾' : '▸'} context
+            </button>
+          )}
+        </div>
+      )}
+
+      {!isUser && showModelDetails && (
+        <div className="msg-detail">
+          <div className="msg-detail-row"><span>Model</span><span className="msg-detail-mono">{modelId || '—'}</span></div>
+          <div className="msg-detail-row"><span>Provider</span><span>{provider || '—'}</span></div>
+          {modelDef && <>
+            <div className="msg-detail-row"><span>Context window</span><span>{(modelDef.contextWindow / 1000).toFixed(0)}K tokens</span></div>
+            <div className="msg-detail-row"><span>Cost</span><span>${modelDef.inputCostPer1K}/1K in · ${modelDef.outputCostPer1K}/1K out</span></div>
+            {modelDef.capabilities?.length > 0 && <div className="msg-detail-row"><span>Capabilities</span><span>{modelDef.capabilities.join(', ')}</span></div>}
+          </>}
+          {!modelDef && modelId && <div className="msg-detail-hint">No catalog entry for this model.</div>}
+        </div>
+      )}
+
+      {!isUser && showCtx && u && (
+        <div className="msg-detail">
+          <div className="msg-detail-row"><span>Input tokens</span><span>{formatTokens(inTok)}{u.inputTokens ? '' : ' (est)'}</span></div>
+          <div className="msg-detail-row"><span>Output tokens</span><span>{formatTokens(outTok)}{u.outputTokens ? '' : ' (est)'}</span></div>
+          {u.payloadChars ? <div className="msg-detail-row"><span>Payload sent</span><span>{(u.payloadChars / 1024).toFixed(1)} KB</span></div> : null}
+          {u.cacheRead ? <div className="msg-detail-row"><span>Cache read</span><span>{formatTokens(u.cacheRead)}</span></div> : null}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/** A code-change tile: collapsed shows the file + change counts; expanded
+ *  shows the green/red line diff. Listed in the Workspace → Review tab. */
+const DiffTile: FC<{ toolCall: ToolCall }> = ({ toolCall }) => {
+  const [expanded, setExpanded] = useState(false);
+  const path = String(toolCall.arguments?.path ?? '');
+  const content = String(toolCall.arguments?.content ?? '');
+  const key = diffKey(path, content);
+  const diff = getDiffByKey(key);
+  const fileName = path.split('/').pop() || path;
+  const additions = diff?.additions ?? 0;
+  const deletions = diff?.deletions ?? 0;
+
+  return (
+    <div id={`chat-diff-${key}`} className="diff-tile">
+      <div className="diff-tile-head" onClick={() => setExpanded(p => !p)}>
+        <span className="diff-tile-icon">{expanded ? '▾' : '▸'}</span>
+        <FileText size={13} />
+        <span className="diff-tile-file" title={path}>{fileName}</span>
+        {diff?.isNew && <span className="diff-tile-new">new</span>}
+        <span className="diff-tile-counts">
+          <span className="diff-add">+{additions}</span>
+          <span className="diff-del">-{deletions}</span>
+        </span>
+      </div>
+      {expanded && diff && (
+        <div className="diff-tile-body">
+          {diff.truncated && <div className="diff-truncated">large file — showing full replacement</div>}
+          <pre className="diff-lines">
+            {diff.lines.map((ln, i) => (
+              <div key={i} className={`diff-line ${ln.type}`}>
+                <span className="diff-gutter">{ln.type === 'add' ? '+' : ln.type === 'del' ? '-' : ' '}</span>
+                <span className="diff-text">{ln.text}</span>
+              </div>
+            ))}
+          </pre>
+        </div>
+      )}
+      {expanded && !diff && (
+        <div className="diff-tile-body"><div className="diff-truncated">Diff not captured for this change.</div></div>
+      )}
     </div>
   );
 };
@@ -1438,6 +1914,61 @@ const ToolCallBadge: FC<{ toolCall: ToolCall; serverName: string }> = ({
         </div>
       )}
       {expanded && toolCall.error && <div className="tool-result error">{toolCall.error}</div>}
+    </div>
+  );
+};
+
+/** A single collapsible "Tools used (N)" combo. Each tool expands inline to
+ *  show that call's arguments / result / error. */
+const ToolsCombo: FC<{ toolCalls: ToolCall[]; serverById: Record<string, string> }> = ({ toolCalls, serverById }) => {
+  const [open, setOpen] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  return (
+    <div className="tools-combo">
+      <div className="tools-combo-head" onClick={() => setOpen(o => !o)}>
+        <span className="tools-combo-caret">{open ? '▾' : '▸'}</span>
+        <span>⚡</span>
+        <span>Tools used ({toolCalls.length})</span>
+      </div>
+      {open && (
+        <div className="tools-combo-list">
+          {toolCalls.map(tc => {
+            const isOpen = openId === tc.id;
+            return (
+              <div key={tc.id} className="tools-combo-item">
+                <div className="tools-combo-row" onClick={() => setOpenId(id => id === tc.id ? null : tc.id)}>
+                  <span className="tools-combo-caret">{isOpen ? '▾' : '▸'}</span>
+                  <span className="tools-combo-name">{tc.toolName}</span>
+                  <span className="server-name">· {serverById[tc.serverId] || 'Server'}</span>
+                  <span className={`tool-status ${tc.status}`}>[{tc.status}]</span>
+                </div>
+                {isOpen && (
+                  <div className="tools-combo-detail">
+                    {tc.arguments && Object.keys(tc.arguments).length > 0 && (
+                      <div className="tools-combo-section">
+                        <div className="tools-combo-label">Arguments</div>
+                        <pre>{JSON.stringify(tc.arguments, null, 2)}</pre>
+                      </div>
+                    )}
+                    {tc.result != null && (
+                      <div className="tools-combo-section">
+                        <div className="tools-combo-label">Result</div>
+                        <pre>{typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2)}</pre>
+                      </div>
+                    )}
+                    {tc.error && (
+                      <div className="tools-combo-section error">
+                        <div className="tools-combo-label">Error</div>
+                        <pre>{tc.error}</pre>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

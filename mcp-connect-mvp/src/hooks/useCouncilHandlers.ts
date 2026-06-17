@@ -3,6 +3,7 @@ import { createOrchestrator, DeliberationOrchestrator } from '../council';
 import { CodingOrchestrator } from '../council/coding-orchestrator';
 import { ledgerStore } from '../council/ledger-store';
 import { callLLM } from '../pipeline/gui-caller';
+import { roleToPhase } from '../router/profile-options';
 import { filterToolsByServerIds, verifyRequiredTools } from '../utils/filterTools';
 import { invoke } from '@tauri-apps/api/core';
 import type { Persona, Council } from '../council/types';
@@ -39,6 +40,7 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
             conversationId: invocation.conversationId,
             workingDirectory: invocation.workingDirectory,
             timeoutMs: invocation.timeoutMs,
+            routePhase: roleToPhase(persona.preferredDeliberationRole || 'consultant'),
           });
           console.log('[Council] invokeAgent completed', { personaName: persona.name, tokensUsed: result.tokensUsed });
           return { ...result, sessionId: result.sessionId };
@@ -127,6 +129,7 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
           conversationId: invocation.conversationId,
           workingDirectory: invocation.workingDirectory,
           timeoutMs: invocation.timeoutMs,
+          routePhase: roleToPhase(persona.preferredDeliberationRole || 'worker'),
         });
         return { ...result, sessionId: result.sessionId };
       },
@@ -213,9 +216,15 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
     await deliberator.abort(council);
   }, [makeDeliberator]);
 
-  const onUserMessage = useCallback(async (council: Council, message: string, lastResponderId?: string) => {
-    const responder = council.personas.find(p => p.id === lastResponderId);
+  const onUserMessage = useCallback(async (council: Council, message: string, lastResponderId?: string, modelOverride?: { provider: string; model: string }) => {
+    // Pick who replies: the named responder, else the Manager, else first persona.
+    const managerId = council.deliberation?.roleAssignments?.find(r => r.role === 'manager')?.personaId;
+    const responder = council.personas.find(p => p.id === lastResponderId)
+      || council.personas.find(p => p.id === managerId)
+      || council.personas[0];
     if (!responder) return;
+    const useProvider = modelOverride?.provider || responder.provider;
+    const useModel = modelOverride?.model || responder.model;
 
     // Add user message to ledger
     const userEntry = {
@@ -235,10 +244,10 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
     setThinkingPersonas([responder]);
     try {
       const result = await callLLM({
-        model: responder.model,
-        provider: responder.provider,
+        model: useModel,
+        provider: useProvider,
         systemPrompt: responder.predisposition.systemPrompt,
-        userMessage: `The user has paused the deliberation to ask you a question or make a comment:\n\n"${message}"\n\nPlease respond helpfully, keeping in mind the context of the ongoing deliberation.`,
+        userMessage: `The user is continuing the conversation after the council's deliberation:\n\n"${message}"\n\nRespond helpfully, drawing on the deliberation's context and conclusions.`,
         temperature: responder.temperature,
         availableTools,
       });

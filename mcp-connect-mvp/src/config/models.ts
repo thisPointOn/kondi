@@ -15,6 +15,8 @@ export type ModelProvider =
   | 'deepseek'
   | 'google'
   | 'xai'
+  | 'zai'              // Z.AI (GLM family, OpenAI-compatible Coding Plan endpoint)
+  | 'nvidia-router'    // NVIDIA NIM / local router (OpenAI-compatible)
   | 'ollama';
 
 /** Legacy provider names for backwards compatibility */
@@ -36,6 +38,14 @@ export interface ModelDefinition {
   featured?: boolean;
   /** Model tier for sorting: 1=frontier, 2=standard, 3=mini/fast */
   tier: 1 | 2 | 3;
+  /**
+   * Open-ended capability tags consumed by the Smart Router (src/router/).
+   * Richer than `capabilities` (which drives the existing UI): e.g.
+   * 'planning', 'coding', 'fast-coding', 'code-review', 'summarization',
+   * 'reasoning', 'analysis', 'general', 'architecture'. When omitted, the
+   * registry builder derives a reasonable set from `capabilities` + `tier`.
+   */
+  routingCapabilities?: string[];
 }
 
 // ============================================================================
@@ -53,6 +63,7 @@ export const ANTHROPIC_API_MODELS: ModelDefinition[] = [
     costDisplay: '~$0.005/msg',
     featured: true,
     tier: 1,
+    routingCapabilities: ['code-review', 'analysis', 'reasoning', 'coding'],
   },
   {
     id: 'claude-haiku-4-5-20251001',
@@ -64,6 +75,7 @@ export const ANTHROPIC_API_MODELS: ModelDefinition[] = [
     outputCostPer1K: 0.005,
     costDisplay: '~$0.002/msg',
     tier: 3,
+    routingCapabilities: ['summarization', 'fast-coding', 'general'],
   },
   {
     id: 'claude-sonnet-4-20250514',
@@ -93,6 +105,7 @@ export const ANTHROPIC_CLI_MODELS: ModelDefinition[] = [
     costDisplay: '~$0.01/msg',
     featured: true,
     tier: 1,
+    routingCapabilities: ['planning', 'reasoning', 'architecture', 'analysis'],
   },
   {
     id: 'claude-sonnet-4-5-20250929',
@@ -105,6 +118,7 @@ export const ANTHROPIC_CLI_MODELS: ModelDefinition[] = [
     costDisplay: '~$0.005/msg',
     featured: true,
     tier: 2,
+    routingCapabilities: ['code-review', 'analysis', 'reasoning', 'coding'],
   },
   {
     id: 'claude-haiku-4-5-20251001',
@@ -116,6 +130,7 @@ export const ANTHROPIC_CLI_MODELS: ModelDefinition[] = [
     outputCostPer1K: 0.005,
     costDisplay: '~$0.002/msg',
     tier: 3,
+    routingCapabilities: ['summarization', 'fast-coding', 'general'],
   },
   {
     id: 'claude-opus-4-5-20251101',
@@ -145,6 +160,43 @@ export const ANTHROPIC_CLI_MODELS: ModelDefinition[] = [
 // OpenAI API Models (Direct API key access)
 // ============================================================================
 export const OPENAI_API_MODELS: ModelDefinition[] = [
+  {
+    id: 'gpt-5.4',
+    name: 'GPT-5.4',
+    provider: 'openai-api',
+    contextWindow: 1000000,
+    capabilities: ['text', 'vision', 'code', 'reasoning'],
+    inputCostPer1K: 0.0025,
+    outputCostPer1K: 0.015,
+    costDisplay: '~$0.01/msg',
+    featured: true,
+    tier: 1,
+    routingCapabilities: ['planning', 'general', 'reasoning', 'coding', 'analysis', 'writing'],
+  },
+  {
+    id: 'gpt-5.4-mini',
+    name: 'GPT-5.4 Mini',
+    provider: 'openai-api',
+    contextWindow: 400000,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0.00075,
+    outputCostPer1K: 0.0045,
+    costDisplay: '~$0.002/msg',
+    tier: 2,
+    routingCapabilities: ['general', 'fast-coding', 'writing'],
+  },
+  {
+    id: 'gpt-5.4-nano',
+    name: 'GPT-5.4 Nano',
+    provider: 'openai-api',
+    contextWindow: 400000,
+    capabilities: ['text', 'code'],
+    inputCostPer1K: 0.0002,
+    outputCostPer1K: 0.00125,
+    costDisplay: '~$0.0005/msg',
+    tier: 3,
+    routingCapabilities: ['summarization', 'fast-coding', 'general'],
+  },
   {
     id: 'gpt-4o',
     name: 'GPT-4o',
@@ -218,18 +270,84 @@ export const OPENAI_API_MODELS: ModelDefinition[] = [
 // ============================================================================
 // OpenAI CLI Models (ChatGPT subscription - newer models)
 // ============================================================================
+// Model IDs verified against the installed Codex CLI binary (v0.139.0). The
+// interactive picker surfaces a curated subset (gpt-5.5 / gpt-5.4 / gpt-5.4-mini);
+// the rest remain selectable via config. Refresh when `codex update` bumps the set.
 export const OPENAI_CLI_MODELS: ModelDefinition[] = [
   {
+    id: 'gpt-5.5',
+    name: 'GPT-5.5 (Latest)',
+    provider: 'openai-cli',
+    contextWindow: 256000,
+    capabilities: ['text', 'vision', 'code', 'reasoning'],
+    inputCostPer1K: 0.01,
+    outputCostPer1K: 0.03,
+    costDisplay: 'Subscription',
+    featured: true,
+    tier: 1,
+    routingCapabilities: ['planning', 'reasoning', 'architecture', 'coding', 'analysis'],
+  },
+  {
+    id: 'gpt-5.5-pro',
+    name: 'GPT-5.5 Pro',
+    provider: 'openai-cli',
+    contextWindow: 256000,
+    capabilities: ['text', 'vision', 'code', 'reasoning'],
+    inputCostPer1K: 0.012,
+    outputCostPer1K: 0.036,
+    costDisplay: 'Subscription',
+    tier: 1,
+    routingCapabilities: ['planning', 'reasoning', 'architecture', 'analysis'],
+  },
+  {
+    id: 'gpt-5.4',
+    name: 'GPT-5.4',
+    provider: 'openai-cli',
+    contextWindow: 256000,
+    capabilities: ['text', 'vision', 'code', 'reasoning'],
+    inputCostPer1K: 0.0025,
+    outputCostPer1K: 0.015,
+    costDisplay: 'Subscription',
+    featured: true,
+    tier: 2,
+    routingCapabilities: ['coding', 'general', 'reasoning', 'analysis'],
+  },
+  {
+    id: 'gpt-5.4-mini',
+    name: 'GPT-5.4 Mini',
+    provider: 'openai-cli',
+    contextWindow: 256000,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0.00075,
+    outputCostPer1K: 0.0045,
+    costDisplay: 'Subscription',
+    featured: true,
+    tier: 3,
+    routingCapabilities: ['fast-coding', 'general', 'summarization'],
+  },
+  {
+    id: 'gpt-5.4-nano',
+    name: 'GPT-5.4 Nano',
+    provider: 'openai-cli',
+    contextWindow: 256000,
+    capabilities: ['text', 'code'],
+    inputCostPer1K: 0.0002,
+    outputCostPer1K: 0.00125,
+    costDisplay: 'Subscription',
+    tier: 3,
+    routingCapabilities: ['summarization', 'fast-coding'],
+  },
+  {
     id: 'gpt-5.3-codex',
-    name: 'GPT-5.3 Codex (Latest)',
+    name: 'GPT-5.3 Codex',
     provider: 'openai-cli',
     contextWindow: 192000,
     capabilities: ['text', 'code', 'reasoning'],
     inputCostPer1K: 0.01,
     outputCostPer1K: 0.03,
     costDisplay: 'Subscription',
-    featured: true,
     tier: 1,
+    routingCapabilities: ['coding', 'code-review', 'reasoning'],
   },
   {
     id: 'gpt-5.2-codex',
@@ -240,19 +358,8 @@ export const OPENAI_CLI_MODELS: ModelDefinition[] = [
     inputCostPer1K: 0.01,
     outputCostPer1K: 0.03,
     costDisplay: 'Subscription',
-    featured: true,
-    tier: 1,
-  },
-  {
-    id: 'gpt-5.2',
-    name: 'GPT-5.2',
-    provider: 'openai-cli',
-    contextWindow: 192000,
-    capabilities: ['text', 'vision', 'code', 'reasoning'],
-    inputCostPer1K: 0.01,
-    outputCostPer1K: 0.03,
-    costDisplay: 'Subscription',
-    tier: 1,
+    tier: 2,
+    routingCapabilities: ['coding', 'code-review'],
   },
   {
     id: 'gpt-5.1-codex-max',
@@ -263,40 +370,29 @@ export const OPENAI_CLI_MODELS: ModelDefinition[] = [
     inputCostPer1K: 0.008,
     outputCostPer1K: 0.024,
     costDisplay: 'Subscription',
-    tier: 1,
+    tier: 2,
   },
   {
-    id: 'gpt-5.1-codex',
-    name: 'GPT-5.1 Codex',
+    id: 'gpt-5.1-codex-mini',
+    name: 'GPT-5.1 Codex Mini',
     provider: 'openai-cli',
     contextWindow: 192000,
-    capabilities: ['text', 'code', 'reasoning'],
-    inputCostPer1K: 0.008,
-    outputCostPer1K: 0.024,
-    costDisplay: 'Subscription',
-    tier: 2,
-  },
-  {
-    id: 'gpt-5-codex',
-    name: 'GPT-5 Codex',
-    provider: 'openai-cli',
-    contextWindow: 128000,
-    capabilities: ['text', 'code'],
-    inputCostPer1K: 0.005,
-    outputCostPer1K: 0.015,
-    costDisplay: 'Subscription',
-    tier: 2,
-  },
-  {
-    id: 'gpt-5-codex-mini',
-    name: 'GPT-5 Codex Mini',
-    provider: 'openai-cli',
-    contextWindow: 128000,
     capabilities: ['text', 'code'],
     inputCostPer1K: 0.002,
     outputCostPer1K: 0.006,
     costDisplay: 'Subscription',
     tier: 3,
+  },
+  {
+    id: 'gpt-5.1',
+    name: 'GPT-5.1',
+    provider: 'openai-cli',
+    contextWindow: 256000,
+    capabilities: ['text', 'vision', 'code', 'reasoning'],
+    inputCostPer1K: 0.01,
+    outputCostPer1K: 0.03,
+    costDisplay: 'Subscription',
+    tier: 2,
   },
 ];
 
@@ -326,6 +422,81 @@ export const DEEPSEEK_MODELS: ModelDefinition[] = [
     outputCostPer1K: 0.00028,
     costDisplay: '~$0.0003/msg',
     tier: 2,
+    routingCapabilities: ['coding', 'fast-coding', 'refactoring'],
+  },
+];
+
+// ============================================================================
+// Z.AI (GLM family) — OpenAI-compatible Coding Plan endpoint
+// ============================================================================
+export const ZAI_MODELS: ModelDefinition[] = [
+  {
+    id: 'glm-5.1',
+    name: 'GLM 5.1',
+    provider: 'zai',
+    contextWindow: 200000,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0.0014,
+    outputCostPer1K: 0.0044,
+    costDisplay: '~$0.003/msg',
+    featured: true,
+    tier: 1,
+    routingCapabilities: ['planning', 'reasoning', 'analysis', 'code-review'],
+  },
+  {
+    id: 'glm-4.6',
+    name: 'GLM 4.6',
+    provider: 'zai',
+    contextWindow: 200000,
+    capabilities: ['text', 'code'],
+    inputCostPer1K: 0.0006,
+    outputCostPer1K: 0.0022,
+    costDisplay: '~$0.001/msg',
+    featured: true,
+    tier: 2,
+    routingCapabilities: ['coding', 'fast-coding', 'general'],
+  },
+  {
+    id: 'glm-4.5-flash',
+    name: 'GLM 4.5 Flash',
+    provider: 'zai',
+    contextWindow: 128000,
+    capabilities: ['text', 'code'],
+    inputCostPer1K: 0,
+    outputCostPer1K: 0,
+    costDisplay: 'Free',
+    tier: 3,
+    routingCapabilities: ['summarization', 'general'],
+  },
+  {
+    id: 'glm-4.5-air',
+    name: 'GLM 4.5 Air',
+    provider: 'zai',
+    contextWindow: 128000,
+    capabilities: ['text', 'code'],
+    inputCostPer1K: 0.0002,
+    outputCostPer1K: 0.0011,
+    costDisplay: '~$0.0005/msg',
+    tier: 3,
+    routingCapabilities: ['fast-coding', 'general', 'summarization'],
+  },
+];
+
+// ============================================================================
+// NVIDIA NIM / Router (OpenAI-compatible; base URL via NVIDIA_ROUTER_URL)
+// ============================================================================
+export const NVIDIA_MODELS: ModelDefinition[] = [
+  {
+    id: 'nvidia/llama-3.3-nemotron-super-49b',
+    name: 'Nemotron Super 49B',
+    provider: 'nvidia-router',
+    contextWindow: 128000,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0,
+    outputCostPer1K: 0,
+    costDisplay: 'Router',
+    tier: 2,
+    routingCapabilities: ['reasoning', 'general', 'coding'],
   },
 ];
 
@@ -344,6 +515,7 @@ export const GOOGLE_MODELS: ModelDefinition[] = [
     costDisplay: '~$0.005/msg',
     featured: true,
     tier: 1,
+    routingCapabilities: ['planning', 'reasoning', 'analysis', 'coding'],
   },
   {
     id: 'models/gemini-2.5-flash',
@@ -356,6 +528,7 @@ export const GOOGLE_MODELS: ModelDefinition[] = [
     costDisplay: '~$0.001/msg',
     featured: true,
     tier: 2,
+    routingCapabilities: ['coding', 'fast-coding', 'general', 'summarization'],
   },
   {
     id: 'models/gemini-2.0-flash',
@@ -474,6 +647,8 @@ export const ALL_MODELS: ModelDefinition[] = [
   ...DEEPSEEK_MODELS,
   ...GOOGLE_MODELS,
   ...XAI_MODELS,
+  ...ZAI_MODELS,
+  ...NVIDIA_MODELS,
   ...OLLAMA_MODELS,
 ];
 
@@ -520,7 +695,9 @@ export function getModelsForPersonaSelector(): Array<{
     'deepseek': 4,
     'google': 5,
     'xai': 6,
-    'ollama': 7,
+    'zai': 7,
+    'nvidia-router': 8,
+    'ollama': 9,
   };
 
   return ALL_MODELS
@@ -586,7 +763,12 @@ export function resolveProvider(
  * OpenAI CLI has newer models not available via API.
  */
 const OPENAI_CLI_TO_API_MODEL: Record<string, string> = {
-  'gpt-5.2': 'gpt-4o',
+  'gpt-5.5': 'gpt-5.4',
+  'gpt-5.5-pro': 'gpt-5.4',
+  'gpt-5.4': 'gpt-5.4',
+  'gpt-5.4-mini': 'gpt-5.4-mini',
+  'gpt-5.4-nano': 'gpt-5.4-nano',
+  'gpt-5.3-codex': 'gpt-5.4',
   'gpt-5.2-codex': 'gpt-4o',
   'gpt-5.1-codex-max': 'gpt-4o',
   'gpt-5.1-codex-mini': 'gpt-4o-mini',

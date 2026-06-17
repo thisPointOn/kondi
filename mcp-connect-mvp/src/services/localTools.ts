@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { MCPTool } from '../types/mcp';
+import { recordDiff } from './diffStore';
+import { recordArtifact } from './artifactManifest';
 
 export interface FileInfo {
   name: string;
@@ -213,7 +215,14 @@ export class LocalToolsService {
         if (!inScope) {
           await this.requestPermission('write to', resolvedPath, dir);
         }
+        // Capture the before-state so we can show a diff tile in the chat.
+        let oldContent = '';
+        try { oldContent = await invoke<string>('read_local_file', { path: resolvedPath }); } catch { /* new file */ }
         await invoke<void>('write_local_file', { path: resolvedPath, content: args.content });
+        // Key by the raw arg path so the rendered tool call can look it up.
+        try { recordDiff(args.path, oldContent, args.content ?? ''); } catch { /* diff is best-effort */ }
+        // Record as a generated artifact (Kondi's own tool wrote it).
+        if (dir) { void recordArtifact(dir, resolvedPath, 'assistant-tool'); }
         return [{ type: 'text', text: `Successfully wrote to ${resolvedPath}` }];
       }
 

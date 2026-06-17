@@ -72,6 +72,8 @@ export class OpenAICompatibleClient {
     const map: Record<string, string> = {
       'deepseek': PROFILE_IDS.deepseekApiKey,
       'xai': PROFILE_IDS.xaiApiKey,
+      'zai': PROFILE_IDS.zaiApiKey,
+      'nvidia-router': PROFILE_IDS.nvidiaApiKey,
       'google-api': PROFILE_IDS.googleApiKey,
     };
     return map[provId];
@@ -196,6 +198,35 @@ export class OpenAICompatibleClient {
     }
   }
 
+  /**
+   * Run one completion as an SSE stream, assembling content + tool-call deltas.
+   * Returns a message-shaped object compatible with the non-streaming path.
+   * `onToken` is called for each text delta (live chat streaming).
+   */
+  private async streamOnce(
+    params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
+    onToken: (delta: string) => void,
+  ): Promise<{ content: string | null; tool_calls?: any[] }> {
+    const stream = await this.client!.chat.completions.create({ ...params, stream: true });
+    let content = '';
+    const toolCallsAcc: any[] = [];
+    for await (const chunk of stream as any) {
+      const delta = chunk.choices?.[0]?.delta;
+      if (!delta) continue;
+      if (delta.content) { content += delta.content; onToken(delta.content); }
+      if (delta.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index ?? 0;
+          if (!toolCallsAcc[idx]) toolCallsAcc[idx] = { id: '', type: 'function', function: { name: '', arguments: '' } };
+          if (tc.id) toolCallsAcc[idx].id = tc.id;
+          if (tc.function?.name) toolCallsAcc[idx].function.name += tc.function.name;
+          if (tc.function?.arguments) toolCallsAcc[idx].function.arguments += tc.function.arguments;
+        }
+      }
+    }
+    return { content: content || null, tool_calls: toolCallsAcc.length ? toolCallsAcc : undefined };
+  }
+
   async chat(
     messages: Message[],
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
@@ -203,6 +234,7 @@ export class OpenAICompatibleClient {
     additionalSystemPrompt?: string,
     workingDirectory?: string,
     provId?: string,
+    onToken?: (delta: string) => void,
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     const authMethod = this.getAuthMethod();
     console.log(`[${this.config.providerName}] chat() called`, { authMethod, model, provId });
@@ -275,14 +307,17 @@ export class OpenAICompatibleClient {
     try {
       while (turnCount < MAX_TOOL_TURNS) {
         turnCount++;
-        const completion = await this.client!.chat.completions.create({
+        const createParams = {
           model: model || this.config.defaultModel,
           messages: currentMessages,
           tools: tools.length > 0 ? tools : undefined,
-          tool_choice: turnCount === 1 && tools.length > 0 ? 'auto' : undefined,
-        });
+          tool_choice: (turnCount === 1 && tools.length > 0 ? 'auto' : undefined) as any,
+        };
 
-        const response = completion.choices[0].message;
+        // Stream the response when a token callback is provided (live chat).
+        const response = onToken
+          ? await this.streamOnce(createParams, onToken)
+          : (await this.client!.chat.completions.create(createParams)).choices[0].message;
 
         if (!response.tool_calls || response.tool_calls.length === 0) {
           finalContent = typeof response.content === 'string'
@@ -386,4 +421,23 @@ export const ollamaClient = new OpenAICompatibleClient({
   authProvider: 'ollama',
   defaultModel: 'llama3.1',
   requiresAuth: false,
+});
+
+/** Z.AI (GLM) — OpenAI-compatible Coding Plan endpoint */
+export const zaiClient = new OpenAICompatibleClient({
+  baseURL: 'https://api.z.ai/api/coding/paas/v4',
+  providerName: 'Z.AI',
+  authProvider: 'zai',
+  defaultModel: 'glm-4.6',
+});
+
+/**
+ * NVIDIA NIM / local router — OpenAI-compatible. Base URL is overridable via
+ * the VITE_NVIDIA_ROUTER_URL build env (falls back to the local router port).
+ */
+export const nvidiaRouterClient = new OpenAICompatibleClient({
+  baseURL: (import.meta as any).env?.VITE_NVIDIA_ROUTER_URL || 'http://localhost:8001/v1',
+  providerName: 'NVIDIA Router',
+  authProvider: 'nvidia-router',
+  defaultModel: 'nvidia/llama-3.3-nemotron-super-49b',
 });

@@ -243,10 +243,9 @@ export function useChats({
             content = content.slice(0, markerIndex) + '\n\n[File attachments not saved]';
           }
         }
-        // Truncate very long messages to prevent storage overflow
-        if (content.length > 10000) {
-          content = content.slice(0, 10000) + '\n\n[Message truncated for storage]';
-        }
+        // Never truncate message text — the full response must always be shown.
+        // Tauri file storage (primary) has no tight size cap; the localStorage
+        // backup below is size-guarded separately, so no per-message truncation.
         return { ...m, content };
       });
       const updatedAt =

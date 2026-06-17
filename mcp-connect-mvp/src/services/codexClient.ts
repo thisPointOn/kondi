@@ -39,18 +39,20 @@ When using tools:
 - If no relevant tool is available, that's fine - help the user with your general knowledge instead.
 - Present tool results clearly and concisely.`;
 
-// Models supported by the codex/responses endpoint.
+// Models supported by the codex/responses endpoint (verified against the
+// installed Codex CLI v0.139.0). Note: which of these a given account can
+// actually use depends on the plan — modelProbe hides the ones that error.
 const CODEX_MODELS = [
+  'gpt-5.5',
+  'gpt-5.5-pro',
+  'gpt-5.4',
+  'gpt-5.4-mini',
+  'gpt-5.4-nano',
   'gpt-5.3-codex',
-  'gpt-5.3-codex-spark',
   'gpt-5.2-codex',
-  'gpt-5.2',
   'gpt-5.1-codex-max',
-  'gpt-5.1-codex',
+  'gpt-5.1-codex-mini',
   'gpt-5.1',
-  'gpt-5-codex',
-  'gpt-5-codex-mini',
-  'gpt-5',
 ];
 
 export class CodexClient {
@@ -142,7 +144,7 @@ export class CodexClient {
     try {
       await this.invokeWithRetry(
         JSON.stringify({
-          model: 'gpt-5.2-codex',
+          model: 'gpt-5.5',
           instructions: 'Reply with ok.',
           input: [{ type: 'message', role: 'user', content: 'hi' }],
           store: false,
@@ -152,15 +154,25 @@ export class CodexClient {
       reportSuccess(auth.profileId);
       return { ok: true };
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // A "model not supported" 400 means the OAuth token IS valid (auth passed)
+      // — the account just doesn't allow this specific test model. The user
+      // picks a supported model at chat time, so treat the credential as good.
+      const isModelMismatch = /not supported|unsupported model|model.*not|400/i.test(msg)
+        && !/401|403|unauthorized|invalid|expired|revoked|no credentials/i.test(msg);
+      if (isModelMismatch) {
+        reportSuccess(auth.profileId);
+        return { ok: true };
+      }
       console.error('[Codex] Validation failed', err);
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      return { ok: false, error: msg };
     }
   }
 
   async chat(
     messages: Message[],
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
-    model = 'gpt-5.2-codex',
+    model = 'gpt-5.5',
     additionalSystemPrompt?: string,
     workingDirectory?: string,
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
@@ -225,7 +237,7 @@ export class CodexClient {
         console.log(`[Codex] Turn ${turnCount}, input items: ${input.length}`);
 
         const body: Record<string, unknown> = {
-          model: model || 'gpt-5.2-codex',
+          model: model || 'gpt-5.5',
           instructions,
           input,
           store: false,

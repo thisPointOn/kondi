@@ -669,13 +669,20 @@ export class DeliberationOrchestrator {
 
       const proposedPatch = this.extractContextProposal(response.content);
 
+      // Independent analyses run concurrently and land in shared context out of
+      // order — tag each with the focus/question it addressed (parallel mode).
+      const isParallel = council.deliberation?.consultantExecution !== 'sequential';
+      const briefedContent = isParallel
+        ? `**Focus — ${focusArea}:** the question this analysis addresses.\n\n${response.content}`
+        : response.content;
+
       const entry = this.createEntry(
         council.id,
         'consultant',
         consultant.id,
         'analysis',
         'round_independent',
-        response.content,
+        briefedContent,
         response.tokensUsed,
         response.latencyMs,
         undefined,
@@ -686,7 +693,7 @@ export class DeliberationOrchestrator {
       councilStore.recordSubmission(council.id, consultant.id);
 
       // Evolve context with consultant findings
-      this.appendToContext(council.id, 'Consultant Analysis', consultant.name, response.content, 'consultant', consultant.id);
+      this.appendToContext(council.id, 'Consultant Analysis', consultant.name, briefedContent, 'consultant', consultant.id);
 
       if (proposedPatch) {
         const patch = createPatch(
@@ -769,6 +776,12 @@ export class DeliberationOrchestrator {
     const proposedPatch = this.extractContextProposal(response.content);
     const context = getCurrentContext(council.id);
 
+    // Concurrent consultants write into shared context out of order, so tag
+    // each output with the focus/question it addressed (parallel mode only).
+    const briefedContent = isSequential
+      ? response.content
+      : `**Focus — ${focusArea}:** the question this response addresses.\n\n${response.content}`;
+
     // Create ledger entry
     const entryType: LedgerEntryType = proposedPatch ? 'proposal' : 'response';
     const entry = this.createEntry(
@@ -777,7 +790,7 @@ export class DeliberationOrchestrator {
       consultant.id,
       entryType,
       'round_interactive',
-      response.content,
+      briefedContent,
       response.tokensUsed,
       response.latencyMs,
       undefined,

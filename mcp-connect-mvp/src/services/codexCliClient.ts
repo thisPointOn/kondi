@@ -19,6 +19,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Message, MCPTool } from '../types/mcp';
 import type { ChatResult } from './llm-router';
 import { parseCodexJsonOutput } from '../pipeline/output-parsers';
+import { captureGeneratedFiles } from './artifactManifest';
 
 interface CodexCommandResult {
   success: boolean;
@@ -29,6 +30,9 @@ interface CodexCommandResult {
 
 /** Map chatId → Codex thread_id for session resumption */
 const sessionMap = new Map<string, string>();
+/** Map chatId → messages.length the Codex session is in sync with (detects
+ *  model switches so we replay history instead of resuming a stale session). */
+const sessionSyncMap = new Map<string, number>();
 
 /** Get the stored Codex session ID for a chat */
 export function getCodexSessionId(chatId: string): string | undefined {
@@ -38,6 +42,7 @@ export function getCodexSessionId(chatId: string): string | undefined {
 /** Clear the stored Codex session */
 export function clearCodexSession(chatId: string): void {
   sessionMap.delete(chatId);
+  sessionSyncMap.delete(chatId);
 }
 
 /**
@@ -50,16 +55,21 @@ export function clearCodexSession(chatId: string): void {
 export async function codexCliChat(
   messages: Message[],
   availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
-  model = 'gpt-5.2-codex',
+  model = 'gpt-5.5',
   additionalSystemPrompt?: string,
   workingDirectory?: string,
   chatId?: string,
 ): Promise<ChatResult> {
   const existingSessionId = chatId ? sessionMap.get(chatId) : undefined;
+  const lastSyncedLen = chatId ? sessionSyncMap.get(chatId) : undefined;
+  // Only resume when the new user message is the single new turn since the
+  // last Codex reply. If another model answered in between (the user switched
+  // models), the session is stale — start fresh and replay history.
+  const resume = !!existingSessionId && lastSyncedLen !== undefined && messages.length === lastSyncedLen + 1;
 
   let args: string[];
 
-  if (existingSessionId) {
+  if (resume) {
     // Resume existing session
     args = [
       'exec', 'resume',
@@ -80,19 +90,20 @@ export async function codexCliChat(
     ];
   }
 
-  // System prompt only on first message (Codex remembers across resume)
-  if (!existingSessionId && additionalSystemPrompt) {
-    // Codex uses the prompt itself as context; prepend system instructions
-    // There's no --system-prompt flag, so we prepend to the user message
-  }
-
   // Get the latest user message
   const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
-  let prompt = lastUserMessage?.content || '';
-
-  // On first call, prepend system prompt to the user message
-  if (!existingSessionId && additionalSystemPrompt) {
-    prompt = `${additionalSystemPrompt}\n\n---\n\n${prompt}`;
+  let prompt: string;
+  if (resume) {
+    prompt = lastUserMessage?.content || '';
+  } else {
+    // Fresh session — replay the full conversation so context is fluid across
+    // model switches (Codex's own session has none of the other models' turns).
+    const turns = messages.filter(m => m.role === 'user' || m.role === 'assistant');
+    const history = turns.length > 1
+      ? turns.slice(0, -1).map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n') + '\n\n----\n\n'
+      : '';
+    prompt = `${history}User: ${lastUserMessage?.content || ''}`;
+    if (additionalSystemPrompt) prompt = `${additionalSystemPrompt}\n\n---\n\n${prompt}`;
   }
 
   // For new sessions, pass prompt as positional arg (stdin with '-' also works but is less reliable)
@@ -117,9 +128,17 @@ export async function codexCliChat(
     throw new Error(errorMsg);
   }
 
-  // Store session ID for future resume calls
+  // Store session ID + the message count this session is in sync with
+  // (+1 for the assistant reply the chat appends after we return).
   if (result.session_id && chatId) {
     sessionMap.set(chatId, result.session_id);
+    sessionSyncMap.set(chatId, messages.length + 1);
+  }
+
+  // Capture files this agent wrote during the run (it uses its own tools, not
+  // Kondi's write_file) so they show up as artifacts.
+  if (workingDirectory) {
+    void captureGeneratedFiles(workingDirectory, startTime, 'cli-agent', model);
   }
 
   // Parse the JSONL output

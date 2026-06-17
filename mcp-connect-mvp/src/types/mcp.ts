@@ -62,6 +62,10 @@ export interface Message {
   toolCalls?: ToolCall[];
   timestamp: Date;
   provider?: string;
+  /** Concrete model that produced this message (assistant messages). */
+  model?: string;
+  /** When set, this message is the input/output of a queued task (its text). */
+  taskTag?: string;
   attachments?: MessageAttachment[];
   /** Token usage from the API response (assistant messages only) */
   usage?: MessageUsage;

@@ -44,6 +44,8 @@ export const PROFILE_IDS = {
   openaiApiKey: 'openai:api-key',
   deepseekApiKey: 'deepseek:api-key',
   xaiApiKey: 'xai:api-key',
+  zaiApiKey: 'zai:api-key',
+  nvidiaApiKey: 'nvidia-router:api-key',
   googleOAuth: 'google:oauth',
   googleApiKey: 'google:api-key',
   ollamaLocal: 'ollama:local',

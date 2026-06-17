@@ -3,7 +3,7 @@
  * Defines credential types, profile structure, and store schema
  */
 
-export type AuthProvider = 'anthropic' | 'openai' | 'deepseek' | 'xai' | 'google' | 'ollama';
+export type AuthProvider = 'anthropic' | 'openai' | 'deepseek' | 'xai' | 'zai' | 'nvidia-router' | 'google' | 'ollama';
 
 export type CredentialType = 'api_key' | 'oauth' | 'token' | 'gemini_oauth' | 'none';
 

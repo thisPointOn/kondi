@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { FolderOpen, ChevronDown } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
 import type {
   Council,
@@ -25,6 +26,10 @@ import ArtifactPanel from './ArtifactPanel';
 import AddPersonaModal from './AddPersonaModal';
 import { acceptPatch, rejectPatch } from '../../council/context-store';
 import { buildAbbreviatedSummary, saveDeliberationOutput } from '../../services/deliberationSaveService';
+import { estimateCostUsd, formatUsd } from '../../services/cost';
+import { isModelBroken, filterVisibleModels } from '../../services/modelProbe';
+import { getModelsForPersonaSelector } from '../../config/models';
+import { consumeCouncilSetup } from './councilSetupSignal';
 import type { PresetPersona, DeliberationPhase } from '../../council/types';
 import './DeliberationView.css';
 
@@ -43,8 +48,9 @@ interface DeliberationViewProps {
   onResume?: (council: Council) => Promise<void>;
   onForceDecision?: (council: Council) => Promise<void>;
   onAbort?: (council: Council) => Promise<void>;
-  /** Called when user sends a message while paused - last responder should reply */
-  onUserMessage?: (council: Council, message: string, lastResponderId: string) => Promise<void>;
+  /** Called when the user sends a message (paused, or continuing after the
+   *  council is done). Optional model override picks which model replies. */
+  onUserMessage?: (council: Council, message: string, lastResponderId?: string, modelOverride?: { provider: string; model: string }) => Promise<void>;
   /** Configured providers for model selection */
   configuredProviders?: {
     'anthropic-cli': boolean;
@@ -95,12 +101,17 @@ export default function DeliberationView({
   const [showArtifactPanel, setShowArtifactPanel] = useState(false);
   const [showAgentBreakdown, setShowAgentBreakdown] = useState(false);
   const [activePanel, setActivePanel] = useState<'setup' | 'deliberation' | 'output' | null>(() => {
+    // The tile "Edit" button requests opening straight into Setup.
+    if (consumeCouncilSetup(councilId)) return 'setup';
     // Auto-open setup panel for new councils
     const c = councilStore.get(councilId);
     const phase = c?.deliberationState?.currentPhase || 'created';
     return phase === 'created' ? 'setup' : null;
   });
   const [pausedUserInput, setPausedUserInput] = useState('');
+  const [continueInput, setContinueInput] = useState('');
+  const [continueModel, setContinueModel] = useState<{ provider: string; model: string } | null>(null);
+  const [showContinueModelDropdown, setShowContinueModelDropdown] = useState(false);
   const [workingDirectory, setWorkingDirectory] = useState(council?.deliberation?.workingDirectory || '');
   const [directoryConstrained, setDirectoryConstrained] = useState(council?.deliberation?.directoryConstrained ?? true);
   const [bootstrapContext, setBootstrapContext] = useState(council?.deliberation?.bootstrapContext ?? true);
@@ -348,6 +359,8 @@ export default function DeliberationView({
   const canStart = hasManager && hasConsultants && hasWorker;
 
   // Handle problem framing
+  const [modelValidationError, setModelValidationError] = useState<string | null>(null);
+
   const handleFrameProblem = async () => {
     console.log('[DeliberationView] handleFrameProblem called', {
       hasCouncil: !!council,
@@ -371,6 +384,32 @@ export default function DeliberationView({
       console.error('[DeliberationView] No problem input provided');
       return;
     }
+
+    // Validate every participating persona's model is actually available before
+    // running — a broken/unsupported model or unconfigured provider would fail
+    // mid-deliberation. Check role-assigned personas (or all if none assigned).
+    const assignments = council.deliberation?.roleAssignments || [];
+    const assignedIds = new Set(assignments.map((a) => a.personaId));
+    const participating = council.personas.filter((p) => assignedIds.size === 0 || assignedIds.has(p.id));
+    const unavailable: string[] = [];
+    for (const p of participating) {
+      const providerConfigured = p.provider === 'router'
+        || !!(configuredProviders as Record<string, boolean>)[p.provider];
+      if (!providerConfigured) {
+        unavailable.push(`${p.name} — ${p.model} (provider “${p.provider}” not configured)`);
+      } else if (isModelBroken(p.model)) {
+        unavailable.push(`${p.name} — ${p.model} (model unavailable on your plan)`);
+      }
+    }
+    if (unavailable.length > 0) {
+      setModelValidationError(
+        `Can't start — these models aren't available:\n• ${unavailable.join('\n• ')}\n\n` +
+        `Pick available models in Setup, or run "Refresh models" in Settings → LLM Providers.`,
+      );
+      console.warn('[DeliberationView] Aborting start — unavailable models:', unavailable);
+      return;
+    }
+    setModelValidationError(null);
     console.log('[DeliberationView] All checks passed, starting...');
 
     // Always force-reset to a clean state before starting.
@@ -463,14 +502,92 @@ export default function DeliberationView({
 
   return (
     <div className="deliberation-view">
+      {/* Active directory + context usage at the top — same as the chat view. */}
+      <div className="chat-dir-bar">
+        <span className="chat-dir-indicator" title={council.deliberation?.workingDirectory || 'No working directory set'}>
+          <FolderOpen size={14} />
+          <span className="chat-dir-path">
+            {council.deliberation?.workingDirectory || 'No working directory set'}
+          </span>
+        </span>
+      </div>
+      {(() => {
+        const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+        const totalTokens = entries.reduce((s, e) => s + (e.tokensUsed || 0), 0);
+        const totalLatency = entries.reduce((s, e) => s + (e.latencyMs || 0), 0);
+        const round = council.deliberationState?.currentRound || 0;
+        // Per-agent usage (same metrics the chat context bar shows).
+        const stats = new Map<string, { tokens: number; calls: number; latency: number }>();
+        for (const e of entries) {
+          const pid = e.authorPersonaId;
+          if (!pid || pid === 'user' || pid === 'system') continue;
+          const s = stats.get(pid) || { tokens: 0, calls: 0, latency: 0 };
+          s.tokens += e.tokensUsed || 0; s.calls += 1; s.latency += e.latencyMs || 0;
+          stats.set(pid, s);
+        }
+        const modelsUsed = new Set(entries.map(e => council.personas.find(p => p.id === e.authorPersonaId)?.model).filter(Boolean));
+        const totalCost = [...stats.entries()].reduce((sum, [pid, s]) => {
+          const p = council.personas.find(pp => pp.id === pid);
+          return sum + estimateCostUsd(p?.model, s.tokens);
+        }, 0);
+        const st = currentPhase === 'completed' ? { l: 'completed', c: 'completed' }
+          : currentPhase === 'failed' ? { l: 'failed', c: 'failed' }
+          : currentPhase === 'cancelled' ? { l: 'cancelled', c: 'cancelled' }
+          : currentPhase === 'paused' ? { l: 'paused', c: 'paused' }
+          : (currentPhase === 'created' || currentPhase === 'problem_framing') ? { l: 'planning', c: 'planning' }
+          : { l: 'running', c: 'running' };
+        return (
+          <>
+            <div className="chat-context-bar" onClick={() => setShowAgentBreakdown(v => !v)}>
+              <span className="ctx-toggle">{showAgentBreakdown ? '▾' : '▸'}</span>
+              <span className="ctx-stat">{entries.length} {entries.length === 1 ? 'comment' : 'comments'}</span>
+              {totalTokens > 0 && <span className="ctx-stat">{fmt(totalTokens)} tokens</span>}
+              {totalCost > 0 && <span className="ctx-stat">{formatUsd(totalCost)}</span>}
+              {totalLatency > 0 && <span className="ctx-stat">{(totalLatency / 1000).toFixed(0)}s</span>}
+              {round > 0 && <span className="ctx-stat">round {round}</span>}
+              <span className="ctx-stat">{modelsUsed.size || council.personas.length} models</span>
+              <span style={{ flex: 1 }} />
+              <button
+                className="ctx-edit-btn"
+                onClick={(e) => { e.stopPropagation(); setActivePanel('setup'); }}
+                title="Edit council setup"
+              >
+                ✎ Edit
+              </button>
+              <span className={`deliberation-status deliberation-status-${st.c}`}>{st.l}</span>
+            </div>
+            {showAgentBreakdown && (
+              <div className="chat-context-detail">
+                {stats.size === 0 ? (
+                  <div className="ctx-empty-detail">No usage yet.</div>
+                ) : (
+                  <table className="ctx-table">
+                    <thead><tr><th>Agent</th><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
+                    <tbody>
+                      {[...stats.entries()].sort((a, b) => b[1].tokens - a[1].tokens).map(([pid, s]) => {
+                        const p = council.personas.find(pp => pp.id === pid);
+                        const role = council.deliberation?.roleAssignments?.find(r => r.personaId === pid)?.role;
+                        return (
+                          <tr key={pid}>
+                            <td>{p?.name || pid}{role ? ` · ${role}` : ''}</td>
+                            <td className="ctx-mono">{(p?.model || '').replace(/^models\//, '')}</td>
+                            <td>{s.calls}</td>
+                            <td>{fmt(s.tokens)}</td>
+                            <td>{formatUsd(estimateCostUsd(p?.model, s.tokens))}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </>
+        );
+      })()}
       {/* Header */}
       <div className="deliberation-header">
         <div className="deliberation-header-left">
-          {onBack && (
-            <button className="deliberation-back-btn" onClick={onBack}>
-              Back
-            </button>
-          )}
           <div className="deliberation-title-section">
             <h2>{council.name}</h2>
             <span className={`deliberation-status deliberation-status-${
@@ -540,19 +657,6 @@ export default function DeliberationView({
                 Abort
               </button>
             </>
-          )}
-          {isTerminal && currentPhase !== 'created' && (
-            <button
-              className="header-control-btn reset-btn"
-              onClick={() => {
-                handleClearResults();
-                councilStore.update(councilId, { status: 'created' });
-                setActivePanel(null);
-              }}
-              title="Reset to setup — clear all results and return to configuration"
-            >
-              Reset
-            </button>
           )}
           <span className="deliberation-mode">Deliberation Mode</span>
           <button
@@ -652,6 +756,7 @@ export default function DeliberationView({
                   </div>
                   <div className="agent-breakdown-details">
                     <span className="abd-stat">{stats.tokens > 1000 ? `${(stats.tokens / 1000).toFixed(1)}k` : stats.tokens} tok</span>
+                    <span className="abd-stat abd-dim">{formatUsd(estimateCostUsd(persona?.model, stats.tokens))}</span>
                     <span className="abd-stat">{(stats.latency / 1000).toFixed(0)}s</span>
                     <span className="abd-stat">{stats.calls} calls</span>
                     {stats.systemKB > 0 && <span className="abd-stat abd-dim">sys {(stats.systemKB / 1024).toFixed(0)}KB</span>}
@@ -662,6 +767,18 @@ export default function DeliberationView({
                 </div>
               );
             })}
+            {(() => {
+              const totalCost = Array.from(agentStats.entries()).reduce((sum, [pid, stats]) => {
+                const persona = council.personas.find(p => p.id === pid);
+                return sum + estimateCostUsd(persona?.model, stats.tokens);
+              }, 0);
+              return (
+                <div className="agent-breakdown-total">
+                  <span className="abd-stat">Total: {totalTokens > 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : totalTokens} tok</span>
+                  <span className="abd-stat abd-cost">~{formatUsd(totalCost)}</span>
+                </div>
+              );
+            })()}
           </div>
         );
       })()}
@@ -684,10 +801,21 @@ export default function DeliberationView({
       <div className="deliberation-main">
         {/* Ledger Timeline */}
         <div className="deliberation-ledger">
+          {modelValidationError && (
+            <div className="model-validation-banner">
+              <span className="mv-text">{modelValidationError}</span>
+              <button className="mv-dismiss" onClick={() => setModelValidationError(null)}>×</button>
+            </div>
+          )}
           {/* Setup Panel - shown in main area */}
           {activePanel === 'setup' ? (
-            <div className="main-setup-panel">
-              <h3>Setup</h3>
+            <div className="council-setup-overlay" onClick={() => setActivePanel(null)}>
+              <div className="council-setup-dialog" onClick={(e) => e.stopPropagation()}>
+                <div className="council-setup-dialog-head">
+                  <h3>Council Setup</h3>
+                  <button type="button" className="setup-dialog-close" onClick={() => setActivePanel(null)}>×</button>
+                </div>
+                <div className="main-setup-panel">
 
               {/* Council Name */}
               <div className="setup-section">
@@ -790,6 +918,9 @@ export default function DeliberationView({
                     Evolve context with findings
                   </span>
                 </label>
+                <p className="directory-hint">
+                  As the council deliberates, new facts and decisions are folded back into the shared context document, so later rounds and personas build on what's already been discovered instead of starting fresh.
+                </p>
               </div>
 
               {/* Council Type */}
@@ -1100,6 +1231,8 @@ export default function DeliberationView({
                   onEditPersona={(persona) => setEditingPersona(persona)}
                 />
               </div>
+                </div>
+              </div>
             </div>
           ) : activePanel === 'output' ? (
             <div className="main-output-panel">
@@ -1245,28 +1378,6 @@ export default function DeliberationView({
                   </button>
                 </div>
               )}
-              {/* Terminal state actions: Clear / Restart */}
-              {isTerminal && currentPhase !== 'created' && entries.length > 0 && (
-                <div className="terminal-actions">
-                  <span className="terminal-label">
-                    Deliberation {currentPhase === 'completed' ? 'completed' : currentPhase === 'failed' ? 'failed' : 'cancelled'}
-                  </span>
-                  <button
-                    className="terminal-btn clear-btn"
-                    onClick={handleClearResults}
-                    disabled={isGenerating}
-                  >
-                    Clear Results
-                  </button>
-                  <button
-                    className="terminal-btn restart-btn"
-                    onClick={handleRestartDeliberation}
-                    disabled={isGenerating || !problemInput.trim()}
-                  >
-                    Restart
-                  </button>
-                </div>
-              )}
               <div ref={ledgerEndRef} />
             </>
           )}
@@ -1350,6 +1461,88 @@ export default function DeliberationView({
           </div>
         </div>
       )}
+
+      {/* Continue the conversation after the council is done — chat-style input
+          with the model combo beneath it. */}
+      {isTerminal && onUserMessage && (() => {
+        const managerPersona =
+          council.personas.find(p => council.deliberation?.roleAssignments?.some(r => r.personaId === p.id && r.role === 'manager'))
+          || council.personas[0];
+        const selProvider = continueModel?.provider || managerPersona?.provider || '';
+        const selModel = continueModel?.model || managerPersona?.model || '';
+        const opts = filterVisibleModels(getModelsForPersonaSelector());
+        const activeName = opts.find(o => o.provider === selProvider && o.id === selModel)?.name || selModel;
+        const groups = new Map<string, { id: string; name: string }[]>();
+        for (const o of opts) {
+          const arr = groups.get(o.provider);
+          if (arr) arr.push({ id: o.id, name: o.name });
+          else groups.set(o.provider, [{ id: o.id, name: o.name }]);
+        }
+        const send = () => {
+          const text = continueInput.trim();
+          if (!text || isGenerating) return;
+          setContinueInput('');
+          onUserMessage(council, text, undefined, { provider: selProvider, model: selModel });
+        };
+        return (
+          <div className="input-area">
+            <div className="input-container">
+              <textarea
+                value={continueInput}
+                onChange={(e) => setContinueInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+                placeholder="Continue the conversation…"
+                className="chat-input"
+                rows={1}
+                disabled={isGenerating}
+              />
+              <button
+                className="send-btn"
+                onClick={send}
+                disabled={!continueInput.trim() || isGenerating}
+              >
+                ↑
+              </button>
+            </div>
+
+            <div className="model-selector-bar model-selector-bar-bottom">
+              <button className="active-model-btn" onClick={() => setShowContinueModelDropdown(v => !v)} disabled={isGenerating}>
+                <span className="provider-color-dot" style={{ backgroundColor: '#6366f1' }} />
+                <span className="active-model-name">{activeName}</span>
+                <span className="active-provider-name">{selProvider}</span>
+                <ChevronDown size={14} className={`model-chevron ${showContinueModelDropdown ? 'open' : ''}`} />
+              </button>
+              {showContinueModelDropdown && (
+                <div className="provider-model-dropdown">
+                  {[...groups.entries()].map(([prov, models]) => (
+                    <div key={prov} className="provider-tile">
+                      <div className="provider-tile-header">
+                        <span className="provider-tile-dot" style={{ backgroundColor: '#6366f1' }} />
+                        <span className="provider-tile-name">{prov}</span>
+                      </div>
+                      <div className="provider-tile-models">
+                        {models.map((m) => {
+                          const current = selProvider === prov && selModel === m.id;
+                          return (
+                            <button
+                              key={m.id}
+                              className={`model-option-btn ${current ? 'current' : ''}`}
+                              onClick={() => { setContinueModel({ provider: prov, model: m.id }); setShowContinueModelDropdown(false); }}
+                            >
+                              <span className="model-option-name">{m.name}</span>
+                              {current && <span className="model-check">&#10003;</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Staged Comment Input — visible while agents are generating */}
       {!isPaused && thinkingPersonas.length > 0 && (

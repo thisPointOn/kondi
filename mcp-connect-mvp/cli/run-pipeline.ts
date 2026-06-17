@@ -24,6 +24,7 @@ import type { PlatformAdapter } from '../src/pipeline/executor';
 import type { Pipeline, CouncilStepConfig, LlmStepConfig, ScriptStepConfig, ConditionStepConfig } from '../src/pipeline/types';
 import { migrateLlmConfig } from '../src/pipeline/types';
 import { callLLM } from './llm-caller';
+import { roleToPhase } from '../src/router/profile-options';
 import { createNodePlatform } from './node-platform';
 import { exportSession } from './session-export';
 
@@ -526,6 +527,7 @@ async function main() {
         conversationId: invocation.conversationId,
         allowedTools,
         timeoutMs,
+        routePhase: roleToPhase(persona.preferredDeliberationRole || 'worker'),
       });
       log(C.cyan, persona.name, `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);
       return { ...result, sessionId: result.sessionId };

@@ -23,6 +23,7 @@ import { detectTestCommand } from '../../pipeline/test-detect';
 import type { Persona, DeliberationRoleAssignment } from '../../council/types';
 import { allTemplates, templateCategories, createPersonaFromTemplate } from '../../council';
 import { getModelsForPersonaSelector, resolveDefaultModel } from '../../config/models';
+import { ROUTED_PROFILE_OPTIONS } from '../../router/profile-options';
 import type { ConfiguredProviders } from '../../hooks/useProviderConfig';
 import AddPersonaModal from '../council/AddPersonaModal';
 import type { ConnectedServerInfo } from './PipelineBuilder';
@@ -38,15 +39,24 @@ export interface AvailableInputStep {
 // Model selector data (shared between Execution and Council configs)
 // ============================================================================
 
-const AVAILABLE_MODELS = getModelsForPersonaSelector();
+const ROUTED_AS_MODELS = ROUTED_PROFILE_OPTIONS.map(o => ({
+  id: o.id, name: o.name, provider: o.provider, cost: 'auto',
+}));
+const AVAILABLE_MODELS = [...ROUTED_AS_MODELS, ...getModelsForPersonaSelector()];
 
 function getProviderDisplayName(provider: string): string {
   switch (provider) {
+    case 'router': return 'Smart Routing';
     case 'anthropic-cli': return 'Anthropic (CLI)';
     case 'anthropic-api': return 'Anthropic (API)';
     case 'openai-cli': return 'OpenAI (CLI)';
     case 'openai-api': return 'OpenAI (API)';
     case 'deepseek': return 'DeepSeek';
+    case 'xai': return 'xAI (Grok)';
+    case 'zai': return 'Z.AI (GLM)';
+    case 'google': return 'Google';
+    case 'nvidia-router': return 'NVIDIA';
+    case 'ollama': return 'Ollama';
     default: return provider;
   }
 }
@@ -60,7 +70,7 @@ const MODELS_BY_PROVIDER = AVAILABLE_MODELS.reduce((acc, model) => {
   return acc;
 }, {} as Record<string, typeof AVAILABLE_MODELS>);
 
-const PROVIDER_ORDER = ['Anthropic (CLI)', 'Anthropic (API)', 'OpenAI (CLI)', 'OpenAI (API)', 'DeepSeek'];
+const PROVIDER_ORDER = ['Smart Routing', 'Anthropic (CLI)', 'Anthropic (API)', 'OpenAI (CLI)', 'OpenAI (API)', 'DeepSeek', 'xAI (Grok)', 'Z.AI (GLM)', 'Google', 'NVIDIA', 'Ollama'];
 
 /**
  * InputSourcePicker: replaces raw {{input}} template with intuitive controls.

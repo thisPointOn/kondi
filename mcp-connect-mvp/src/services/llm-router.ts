@@ -22,9 +22,13 @@ import { claudeCliChat } from './claudeCliClient';
 import { openaiClient } from './openaiClient';
 import { codexClient } from './codexClient';
 import { codexCliChat } from './codexCliClient';
-import { deepseekClient, xaiClient, ollamaClient } from './openaiCompatibleClient';
+import { deepseekClient, xaiClient, ollamaClient, zaiClient, nvidiaRouterClient } from './openaiCompatibleClient';
 import { geminiClient } from './geminiClient';
 import { mcpClient } from './mcpClient';
+import { isRoutedModel, routeProfileName } from '../router/profile-options';
+import { resolveRoutedModel } from '../router/resolve';
+import type { LedgerPhase } from '../router/types';
+import { recordModelCallFailure, recordModelCallSuccess } from './modelProbe';
 
 // ============================================================================
 // Types
@@ -48,6 +52,20 @@ export interface ChatCompletionParams {
   serverSummary?: string;
   /** Chat ID for CLI session resumption (anthropic-cli) */
   chatId?: string;
+  /**
+   * Router phase hint. When provider/model select a routed profile
+   * (`route:<name>`), this tells the Smart Router which kind of work this
+   * call performs so it can pick an appropriately-priced model. Defaults to
+   * 'discuss' (chat) when omitted.
+   */
+  routePhase?: LedgerPhase;
+  /**
+   * Live streaming callback. When provided, supported providers (OpenAI &
+   * OpenAI-compatible: openai-api, deepseek, xai, zai, nvidia-router, ollama)
+   * stream the assistant's text token-by-token. Used by chat; council/pipeline
+   * leave it unset (buffered).
+   */
+  onToken?: (delta: string) => void;
 }
 
 /** Input for simple single-shot completion (council/pipeline) */
@@ -58,6 +76,8 @@ export interface SimpleCompletionParams {
   userMessage: string;
   availableTools?: Map<string, { serverId: string; tools: MCPTool[] }>;
   workingDirectory?: string;
+  /** Router phase hint for routed profiles (see ChatCompletionParams). */
+  routePhase?: LedgerPhase;
 }
 
 export interface SimpleCompletionResult {
@@ -76,8 +96,13 @@ export const DEFAULT_MODELS: Record<string, string> = {
   'anthropic-api': 'claude-sonnet-4-5-20250929',
   'openai': 'gpt-4o',
   'openai-api': 'gpt-4o',
-  'openai-cli': 'gpt-5.2-codex',
+  'openai-cli': 'gpt-5.5',
   'google': 'models/gemini-2.5-flash',
+  'deepseek': 'deepseek-chat',
+  'xai': 'grok-3',
+  'zai': 'glm-4.6',
+  'nvidia-router': 'nvidia/llama-3.3-nemotron-super-49b',
+  'ollama': 'llama3.1',
 };
 
 // ============================================================================
@@ -108,9 +133,22 @@ function resolveProvider(provider: string): string {
  * credential (OAuth token vs API key). They NEVER fall back to each other.
  */
 export async function chatCompletion(params: ChatCompletionParams): Promise<ChatResult> {
-  const prov = resolveProvider(params.provider);
+  let prov = resolveProvider(params.provider);
   const tools = params.availableTools || new Map();
-  const model = params.model || DEFAULT_MODELS[prov] || 'claude-sonnet-4-5-20250929';
+  let model = params.model || DEFAULT_MODELS[prov] || 'claude-sonnet-4-5-20250929';
+
+  // Smart Router: a `route:<profile>` model (or the 'router' pseudo-provider)
+  // defers model choice to the per-phase router. Resolve it to a concrete
+  // provider+model here, then fall through to the normal dispatch below.
+  if (isRoutedModel(prov, params.model)) {
+    const profileName = routeProfileName(prov, params.model);
+    const phase: LedgerPhase = params.routePhase || 'discuss';
+    const lastUser = [...params.messages].reverse().find(m => m.role === 'user');
+    const resolved = await resolveRoutedModel(profileName, phase, { prompt: lastUser?.content || '' });
+    console.log(`[llm-router] route:${profileName} (${phase}) → ${resolved.provider}/${resolved.model} — ${resolved.reason}`);
+    prov = resolved.provider;
+    model = resolved.model;
+  }
 
   // Ensure MCP proxies backing the provided tools are running and synced
   const toolServerIds = Array.from(tools.values()).map(t => t.serverId).filter(Boolean);
@@ -118,6 +156,10 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
     await mcpClient.ensureProxiesForServers(toolServerIds);
   }
 
+  // The whole dispatch is wrapped so a "model not supported / not found" error
+  // from any provider auto-hides that model (modelProbe), and a success clears
+  // any stale broken flag. See modelProbe.recordModelCallFailure.
+  const dispatch = async (): Promise<ChatResult> => {
   // Anthropic CLI — route through Claude CLI binary (OAuth tokens require it)
   if (prov === 'anthropic-cli') {
     return claudeCliChat(
@@ -165,19 +207,28 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
       params.systemPrompt,
       params.workingDirectory,
       prov,
+      params.onToken,
     );
   }
 
   if (prov === 'deepseek') {
-    return deepseekClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov);
+    return deepseekClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
   }
 
   if (prov === 'xai') {
-    return xaiClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov);
+    return xaiClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
+  }
+
+  if (prov === 'zai') {
+    return zaiClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
+  }
+
+  if (prov === 'nvidia-router') {
+    return nvidiaRouterClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
   }
 
   if (prov === 'ollama') {
-    return ollamaClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov);
+    return ollamaClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
   }
 
   if (prov === 'google') {
@@ -189,6 +240,16 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
     params.messages, tools, model,
     params.serverSummary, params.systemPrompt, params.workingDirectory, prov,
   );
+  };
+
+  try {
+    const result = await dispatch();
+    recordModelCallSuccess(model);
+    return result;
+  } catch (err) {
+    recordModelCallFailure(model, prov, err);
+    throw err;
+  }
 }
 
 // ============================================================================
@@ -221,6 +282,7 @@ export async function simpleCompletion(params: SimpleCompletionParams): Promise<
     availableTools: params.availableTools || new Map(),
     systemPrompt: params.systemPrompt,
     workingDirectory: params.workingDirectory,
+    routePhase: params.routePhase,
   });
 
   const latencyMs = Date.now() - startTime;

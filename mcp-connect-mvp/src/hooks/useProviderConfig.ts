@@ -28,6 +28,8 @@ export type ConfiguredProviders = {
   'openai-api': boolean;
   deepseek: boolean;
   xai: boolean;
+  zai: boolean;
+  'nvidia-router': boolean;
   google: boolean;
   ollama: boolean;
 };
@@ -59,6 +61,8 @@ export function useProviderConfig() {
   // New provider keys
   const [deepseekKey, setDeepseekKey] = useState('');
   const [xaiKey, setXaiKey] = useState('');
+  const [zaiKey, setZaiKey] = useState('');
+  const [nvidiaKey, setNvidiaKey] = useState('');
   const [ollamaAvailable, setOllamaAvailable] = useState(false);
 
   // Per-provider model state (for providers beyond anthropic/openai)
@@ -141,6 +145,14 @@ export function useProviderConfig() {
     const xaiApiProfile = listProfiles('xai').find(p => p.credential.type === 'api_key');
     if (xaiApiProfile?.credential.type === 'api_key' && !xaiKey) {
       setXaiKey(xaiApiProfile.credential.key);
+    }
+    const zaiApiProfile = listProfiles('zai').find(p => p.credential.type === 'api_key');
+    if (zaiApiProfile?.credential.type === 'api_key' && !zaiKey) {
+      setZaiKey(zaiApiProfile.credential.key);
+    }
+    const nvidiaApiProfile = listProfiles('nvidia-router').find(p => p.credential.type === 'api_key');
+    if (nvidiaApiProfile?.credential.type === 'api_key' && !nvidiaKey) {
+      setNvidiaKey(nvidiaApiProfile.credential.key);
     }
 
     // Check Ollama availability
@@ -279,6 +291,20 @@ export function useProviderConfig() {
     }
   }, [xaiKey, hasLoadedKeys]);
 
+  useEffect(() => {
+    if (!hasLoadedKeys) return;
+    if (zaiKey) {
+      upsertProfile(PROFILE_IDS.zaiApiKey, 'zai', { type: 'api_key', key: zaiKey }, 'API Key');
+    }
+  }, [zaiKey, hasLoadedKeys]);
+
+  useEffect(() => {
+    if (!hasLoadedKeys) return;
+    if (nvidiaKey) {
+      upsertProfile(PROFILE_IDS.nvidiaApiKey, 'nvidia-router', { type: 'api_key', key: nvidiaKey }, 'API Key');
+    }
+  }, [nvidiaKey, hasLoadedKeys]);
+
   // Persist API keys (backwards compat with Tauri store)
   useEffect(() => {
     if (!hasLoadedKeys) return;
@@ -343,6 +369,10 @@ export function useProviderConfig() {
       setDeepseekKey(config.apiKey || '');
     } else if (providerId === 'xai' && config.apiKey !== undefined) {
       setXaiKey(config.apiKey || '');
+    } else if (providerId === 'zai' && config.apiKey !== undefined) {
+      setZaiKey(config.apiKey || '');
+    } else if (providerId === 'nvidia-router' && config.apiKey !== undefined) {
+      setNvidiaKey(config.apiKey || '');
     }
   };
 
@@ -745,6 +775,24 @@ export function useProviderConfig() {
       models: getModelsForProviderSettings('xai'),
     },
     {
+      id: 'zai',
+      name: 'Z.AI (GLM)',
+      description: 'GLM models via the Z.AI Coding Plan (OpenAI-compatible)',
+      status: zaiKey ? 'active' as const : 'inactive' as const,
+      activeAuthMethod: zaiKey ? 'api_key' : undefined,
+      config: { apiKey: zaiKey },
+      models: getModelsForProviderSettings('zai'),
+    },
+    {
+      id: 'nvidia-router',
+      name: 'NVIDIA Router',
+      description: 'NVIDIA NIM / local router (OpenAI-compatible)',
+      status: nvidiaKey ? 'active' as const : 'inactive' as const,
+      activeAuthMethod: nvidiaKey ? 'api_key' : undefined,
+      config: { apiKey: nvidiaKey },
+      models: getModelsForProviderSettings('nvidia-router'),
+    },
+    {
       id: 'google',
       name: 'Google Gemini',
       description: 'Gemini models via Google Cloud Code Assist OAuth',
@@ -800,14 +848,24 @@ export function useProviderConfig() {
     'openai-api': !!openaiKey,
     deepseek: !!deepseekKey,
     xai: !!xaiKey,
+    zai: !!zaiKey,
+    'nvidia-router': !!nvidiaKey,
     google: googleHasOAuth,
     ollama: !!validationReport?.llmProviders.find(r => r.provider === 'Ollama' && (r.status === 'ok' || r.status === 'warning')),
   };
 
   // Derived: active model ID for the selected provider
   const chatModelId = (() => {
-    if (selectedProviderId.startsWith('anthropic')) return anthropicModel;
-    if (selectedProviderId.startsWith('openai')) return openaiModel;
+    // Validate the stored model is actually offered by the selected (API)
+    // provider — a retired CLI-only model id (e.g. claude-opus-4-6) must fall
+    // back to a real API model so the call doesn't reference a missing model.
+    const valid = (modelId: string | undefined): string | undefined => {
+      if (!modelId) return undefined;
+      const list = getModelsForProviderSettings(selectedProviderId as any);
+      return list.some(m => m.id === modelId) ? modelId : list[0]?.id;
+    };
+    if (selectedProviderId.startsWith('anthropic')) return valid(anthropicModel) || '';
+    if (selectedProviderId.startsWith('openai')) return valid(openaiModel) || '';
     if (providerModels[selectedProviderId]) return providerModels[selectedProviderId];
     // Fall back to first model from the provider's model list
     const providerInfo = providersList.find(p => p.id === selectedProviderId);

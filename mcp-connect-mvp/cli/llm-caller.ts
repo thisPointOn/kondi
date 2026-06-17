@@ -8,6 +8,11 @@
 
 import { callClaude, type CallerResult } from './claude-caller';
 import { callCodex } from './codex-caller';
+import { Router, buildRegistryModels } from '../src/router/index';
+import { getProfile } from '../src/router/profiles';
+import { isRoutedModel, routeProfileName } from '../src/router/profile-options';
+import type { LedgerPhase } from '../src/router/types';
+import type { ModelProvider } from '../src/config/models';
 
 interface CallLLMOpts {
   provider: string;
@@ -19,6 +24,8 @@ interface CallLLMOpts {
   skipTools?: boolean;
   conversationId?: string;
   timeoutMs?: number;
+  /** Router phase hint for routed (`route:<profile>`) models. */
+  routePhase?: LedgerPhase;
 }
 
 /**
@@ -30,6 +37,8 @@ function getApiKey(provider: string): string | undefined {
     case 'openai-api': return process.env.OPENAI_API_KEY;
     case 'deepseek': return process.env.DEEPSEEK_API_KEY;
     case 'xai': return process.env.XAI_API_KEY;
+    case 'zai': return process.env.ZAI_API_KEY;
+    case 'nvidia-router': return process.env.NVIDIA_API_KEY;
     case 'google': return process.env.GOOGLE_API_KEY;
     default: return undefined;
   }
@@ -43,8 +52,59 @@ const DEFAULT_MODELS: Record<string, string> = {
   'deepseek': 'deepseek-chat',
   'google': 'models/gemini-2.5-flash',
   'xai': 'grok-3',
+  'zai': 'glm-4.6',
+  'nvidia-router': 'nvidia/llama-3.3-nemotron-super-49b',
   'ollama': 'llama3.1',
 };
+
+/** Providers usable headlessly: CLI binaries + ollama always, API keys via env. */
+function cliConfiguredProviders(): Set<ModelProvider> {
+  const s = new Set<ModelProvider>(['anthropic-cli', 'openai-cli', 'ollama']);
+  if (process.env.ANTHROPIC_API_KEY) s.add('anthropic-api');
+  if (process.env.OPENAI_API_KEY) s.add('openai-api');
+  if (process.env.DEEPSEEK_API_KEY) s.add('deepseek');
+  if (process.env.XAI_API_KEY) s.add('xai');
+  if (process.env.ZAI_API_KEY) s.add('zai');
+  if (process.env.GOOGLE_API_KEY) s.add('google');
+  if (process.env.NVIDIA_API_KEY) s.add('nvidia-router');
+  return s;
+}
+
+/**
+ * Resolve a routed profile (`route:<name>`) to a concrete provider+model for
+ * the given phase. The intent classifier (when reached) recurses through
+ * callLLM with a concrete model, so OAuth CLI binaries and env keys both work.
+ */
+async function resolveCliRoute(
+  profileName: string,
+  phase: LedgerPhase,
+  prompt: string,
+): Promise<{ provider: string; model: string }> {
+  const profile = getProfile(profileName);
+  const models = buildRegistryModels({ configuredProviders: cliConfiguredProviders() });
+  const router = new Router(models, async (req) =>
+    (await callLLM({
+      provider: req.provider,
+      model: req.model,
+      systemPrompt: req.systemPrompt,
+      userMessage: req.userMessage,
+      skipTools: true,
+    })).content,
+  );
+  let candidates = models.filter(m => m.enabled);
+  if (profile.allowedProviders?.length) {
+    const allow = new Set(profile.allowedProviders);
+    candidates = candidates.filter(m => allow.has(m.provider));
+  }
+  const classifier = candidates.sort((a, b) => a.inputCostPer1M - b.inputCostPer1M)[0];
+  router.setProfileScope({
+    classifier: classifier ? { provider: classifier.provider, model: classifier.id } : undefined,
+    rolePinning: profile.rolePinning,
+    allowedProviders: profile.allowedProviders,
+  });
+  const decision = await router.select(phase, prompt || '');
+  return { provider: decision.model.provider, model: decision.model.id };
+}
 
 /**
  * Make a direct HTTP API call to an OpenAI-compatible endpoint.
@@ -196,8 +256,17 @@ async function callGeminiAPI(
  * Unified LLM caller for CLI. Routes by provider ID.
  */
 export async function callLLM(opts: CallLLMOpts): Promise<CallerResult> {
-  const provider = opts.provider || 'anthropic-cli';
-  const model = opts.model || DEFAULT_MODELS[provider] || 'claude-sonnet-4-5-20250929';
+  let provider = opts.provider || 'anthropic-cli';
+  let model = opts.model || DEFAULT_MODELS[provider] || 'claude-sonnet-4-5-20250929';
+
+  // Smart Router: resolve `route:<profile>` to a concrete provider+model.
+  if (isRoutedModel(provider, opts.model)) {
+    const profileName = routeProfileName(provider, opts.model);
+    const resolved = await resolveCliRoute(profileName, opts.routePhase || 'discuss', opts.userMessage);
+    console.log(`[CLI] route:${profileName} (${opts.routePhase || 'discuss'}) → ${resolved.provider}/${resolved.model}`);
+    provider = resolved.provider;
+    model = resolved.model || DEFAULT_MODELS[provider] || 'claude-sonnet-4-5-20250929';
+  }
 
   // CLI binary providers
   if (provider === 'anthropic-cli') {
@@ -227,6 +296,12 @@ export async function callLLM(opts: CallLLMOpts): Promise<CallerResult> {
   }
   if (provider === 'xai') {
     return callOpenAICompatible('https://api.x.ai/v1', apiKey, model, opts.systemPrompt, opts.userMessage);
+  }
+  if (provider === 'zai') {
+    return callOpenAICompatible('https://api.z.ai/api/coding/paas/v4', apiKey, model, opts.systemPrompt, opts.userMessage);
+  }
+  if (provider === 'nvidia-router') {
+    return callOpenAICompatible(process.env.NVIDIA_ROUTER_URL || 'http://localhost:8001/v1', apiKey, model, opts.systemPrompt, opts.userMessage);
   }
   if (provider === 'google') {
     return callGeminiAPI(apiKey, model, opts.systemPrompt, opts.userMessage);

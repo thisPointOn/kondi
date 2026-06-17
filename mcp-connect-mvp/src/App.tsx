@@ -1,14 +1,13 @@
 import { useState } from 'react';
 import Sidebar, { type AppView } from './components/Sidebar';
 import ChatArea from './components/ChatArea';
-import ToolsPanel from './components/ToolsPanel';
-import ProviderSettings from './components/ProviderSettings';
 import { PipelineLibrary, PipelineBuilder, PipelineExecutionView } from './components/pipeline';
-import SearchServicePanel from './components/SearchServicePanel';
 import { CouncilLibrary, CouncilView } from './components/council';
-import { CollapsibleSection } from './components/CollapsibleSection';
 import NewChatDialog from './components/NewChatDialog';
 import PermissionDialog from './components/PermissionDialog';
+import SettingsModal from './components/SettingsModal';
+import RightSidebar from './components/RightSidebar';
+import './services/appearanceStore'; // applies saved font-size CSS vars on load
 import { mcpClient } from './services/mcpClient';
 import { localToolsService } from './services/localTools';
 import { open as tauriOpen } from '@tauri-apps/plugin-dialog';
@@ -30,6 +29,8 @@ const APP_VERSION = (pkg?.version as string) || '0.0.0';
 
 function App() {
   const [currentView, setCurrentView] = useState<AppView>('chat');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [showRightSidebar, setShowRightSidebar] = useState(true);
 
   const { theme, setTheme } = useTheme();
   const updates = useAppUpdates(APP_VERSION);
@@ -74,8 +75,13 @@ function App() {
         onChatRename={chats.setChatName}
         chats={chats.sidebarChats}
         chatsSending={chats.chatsSending}
+        currentCouncilId={council.currentCouncilId}
+        onCouncilSelect={(id) => { council.setCurrentCouncilId(id); setCurrentView('council'); }}
+        onNewCouncil={() => { council.setCurrentCouncilId(null); setCurrentView('council'); }}
+        onShowCouncilLibrary={() => { council.setCurrentCouncilId(null); setCurrentView('council'); }}
         providerErrorCount={providerConfig.validationReport?.llmProviders.filter(r => r.status === 'error').length || 0}
         providerExpiredCount={providerConfig.providersList.filter(p => p.oauthExpired).length}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       <div className="main-column">
@@ -140,181 +146,13 @@ function App() {
               configuredProviders={providerConfig.configuredProviders}
             />
           )
-        ) : currentView === 'providers' ? (
-          <ProviderSettings
-            providers={providerConfig.providersList}
-            defaultProvider={providerConfig.selectedProviderId}
-            defaultModel={providerConfig.selectedProviderId.startsWith('anthropic') ? providerConfig.anthropicModel : providerConfig.openaiModel}
-            onProviderUpdate={providerConfig.handleProviderUpdate}
-            onDefaultChange={providerConfig.handleDefaultChange}
-            onValidateCredentials={providerConfig.handleValidateCredentials}
-            onRefreshStatus={providerConfig.handleRefreshStatus}
-            onAuthMethodChange={providerConfig.handleAuthMethodChange}
-            onDisconnectOAuth={providerConfig.handleDisconnectOAuth}
-            onStartOAuthLogin={providerConfig.handleStartOAuthLogin}
-            onSwitchAccount={providerConfig.handleSwitchAccount}
-            onCodexLogin={providerConfig.handleCodexLogin}
-            isCodexLoggingIn={providerConfig.isCodexLoggingIn}
-          />
-        ) : currentView === 'services' ? (
-          <div className="services-pane">
-            <h2>Built-in Services</h2>
-            <p className="services-description">
-              Manage built-in services that extend Kondi's capabilities. These services run locally
-              and provide tools for your AI agents.
-            </p>
-            <SearchServicePanel
-              mcpClient={mcpClient}
-              onStatusChange={serverHook.handleSearchServiceStatusChange}
-            />
-          </div>
-        ) : currentView === 'settings' ? (
-          <div className="settings-pane">
-            <h2>Settings</h2>
-
-            <CollapsibleSection title="AI Provider" defaultOpen>
-              <div className="provider-quick-status">
-                <div className="current-provider">
-                  <span className="provider-label">Current:</span>
-                  <span className="provider-value">
-                    {providerConfig.provider === 'claude' ? 'Anthropic Claude' : 'OpenAI ChatGPT'}
-                  </span>
-                  <span className={`status-dot ${(providerConfig.provider === 'claude' ? providerConfig.anthropicKey : providerConfig.openaiKey) ? 'active' : ''}`} />
-                </div>
-                <div className="current-model">
-                  <span className="model-label">Model:</span>
-                  <span className="model-value">
-                    {providerConfig.provider === 'claude' ? providerConfig.anthropicModel : providerConfig.openaiModel}
-                  </span>
-                </div>
-              </div>
-              <button
-                className="pill-btn full-width"
-                onClick={() => setCurrentView('providers')}
-              >
-                Configure LLM Providers (12 available)
-              </button>
-            </CollapsibleSection>
-
-            <CollapsibleSection title="Usage" defaultOpen>
-              <div className="usage-stats">
-                <div className="usage-stat">
-                  <span className="usage-value">{chats.messageCountToday}</span>
-                  <span className="usage-label">Messages sent today</span>
-                </div>
-                <div className="usage-stat">
-                  <span className="usage-value">{serverHook.connectedServersCount}</span>
-                  <span className="usage-label">MCP servers connected</span>
-                </div>
-              </div>
-            </CollapsibleSection>
-
-            <CollapsibleSection title="Working Directory" defaultOpen>
-              <div className="global-directory-setting">
-                <p className="settings-hint">Default working directory for new councils. Each council can override this in its Setup.</p>
-                <div className="directory-input-row">
-                  <input
-                    type="text"
-                    className="directory-input"
-                    placeholder="/path/to/projects"
-                    value={providerConfig.globalWorkingDirectory}
-                    onChange={(e) => providerConfig.setGlobalWorkingDirectory(e.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="directory-browse-btn"
-                    onClick={async () => {
-                      try {
-                        const selected = await tauriOpen({
-                          directory: true,
-                          multiple: false,
-                          title: 'Select Default Working Directory',
-                          defaultPath: providerConfig.globalWorkingDirectory || undefined,
-                        });
-                        if (selected && typeof selected === 'string') {
-                          providerConfig.setGlobalWorkingDirectory(selected);
-                        }
-                      } catch (err) {
-                        console.error('[Settings] Error selecting directory:', err);
-                      }
-                    }}
-                  >
-                    Browse...
-                  </button>
-                </div>
-              </div>
-            </CollapsibleSection>
-
-{/* Billing section hidden for now
-            <CollapsibleSection title="Billing" defaultOpen>
-              <div className="billing-content">
-                <div className="plan-options">
-                  <PlanCard
-                    label="Free"
-                    price="Free"
-                    desc="2 servers, 30 messages/day"
-                    active={currentPlan === 'free'}
-                    onSelect={() => setCurrentPlan('free')}
-                  />
-                  <PlanCard
-                    label="Pro"
-                    price="$2/month or $20/year"
-                    desc="Unlimited servers and messages"
-                    active={currentPlan === 'pro'}
-                    onSelect={() => setCurrentPlan('pro')}
-                  />
-                  <PlanCard
-                    label="Lifetime"
-                    price="$99 one-time"
-                    desc="Unlimited usage forever"
-                    active={currentPlan === 'lifetime'}
-                    onSelect={() => setCurrentPlan('lifetime')}
-                  />
-                </div>
-              </div>
-            </CollapsibleSection>
-*/}
-
-            <CollapsibleSection title="Updates" defaultOpen>
-              <div className="updates-block">
-                <p className="updates-message">
-                  Current version: {APP_VERSION}
-                  {updates.latestVersion ? ` • Latest: ${updates.latestVersion}` : ''}
-                  {updates.updateAvailable && <span className="update-chip">Update available</span>}
-                </p>
-                <p className="updates-message">{updates.updateMessage}</p>
-                <button className="pill-btn" onClick={updates.handleCheckUpdates} disabled={updates.updateStatus === 'checking'}>
-                  {updates.updateStatus === 'checking' ? 'Checking…' : 'Verify updates'}
-                </button>
-              </div>
-            </CollapsibleSection>
-
-            <CollapsibleSection title="Appearance" defaultOpen>
-              <div className="updates-block">
-                <p className="updates-message">Choose your theme</p>
-                <div className="theme-toggle">
-                  <button
-                    className={`pill-btn ${theme === 'dark' ? 'active' : ''}`}
-                    onClick={() => setTheme('dark')}
-                  >
-                    Dark
-                  </button>
-                  <button
-                    className={`pill-btn ${theme === 'light' ? 'active' : ''}`}
-                    onClick={() => setTheme('light')}
-                  >
-                    Light
-                  </button>
-                </div>
-              </div>
-            </CollapsibleSection>
-          </div>
         ) : (
           <ChatArea
             chatId={chats.currentChatId}
             messages={chats.chatMessages}
             onMessagesChange={(msgs) => chats.currentChatId && chats.handleChatMessagesChange(chats.currentChatId, msgs)}
             onChatUpdate={chats.handleChatMessagesChange}
+            onDeleteChat={chats.handleDeleteChat}
             servers={serverHook.servers}
             availableTools={serverHook.availableTools}
             pendingToolInsert={chats.pendingToolInsert}
@@ -359,9 +197,24 @@ function App() {
             onActiveProviderChange={(v) => chats.currentChatId && chats.setChatActiveProviderFor(chats.currentChatId, v)}
             onChatSendingChange={chats.setChatSendingFor}
             onChatActiveProviderChange={chats.setChatActiveProviderFor}
+            showRightSidebar={showRightSidebar}
+            onToggleRightSidebar={() => setShowRightSidebar(!showRightSidebar)}
           />
         )}
       </div>
+
+      {/* The Workspace panel is shared by chat and council. In council view it
+          gains a Setup tab (personas/roles/models) and keeps Files/Artifacts/
+          Tasks/Review/Context. Pipelines use their own full-width view. */}
+      {(currentView === 'chat' || (currentView === 'council' && council.currentCouncilId)) && (
+        <RightSidebar
+          workingDirectory={providerConfig.globalWorkingDirectory}
+          chatWorkingDir={chats.chatWorkingDirs[chats.currentChatId || ''] || null}
+          councilId={currentView === 'council' ? council.currentCouncilId : null}
+          isOpen={showRightSidebar}
+          onToggle={() => setShowRightSidebar(!showRightSidebar)}
+        />
+      )}
 
       {chats.showNewChatDialog && (
         <NewChatDialog
@@ -381,25 +234,49 @@ function App() {
         />
       )}
 
-      {serverHook.showToolsPanel && (
-        <ToolsPanel
-          className="tools-drawer"
-          servers={serverHook.servers}
-          onServerConnect={serverHook.handleConnectServer}
-          onServerReconnect={serverHook.handleReconnectServer}
-          onServerDisconnect={serverHook.handleDisconnectServer}
-          onServerDelete={serverHook.handleDeleteServer}
-          onServerUpdate={serverHook.handleUpdateServer}
-          onServerReauthenticate={serverHook.handleReauthenticateServer}
-          onServerAddLocal={serverHook.handleServerAddLocal}
-          onGithubCheck={chats.handleGithubCheck}
-          connectDeadlines={serverHook.connectDeadlines}
-          onToolClick={(toolName) => {
-            chats.setPendingToolInsert(toolName);
-            setCurrentView('chat');
-          }}
-        />
-      )}
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        theme={theme}
+        setTheme={setTheme}
+        globalWorkingDirectory={providerConfig.globalWorkingDirectory}
+        setGlobalWorkingDirectory={providerConfig.setGlobalWorkingDirectory}
+        messageCountToday={chats.messageCountToday}
+        providersList={providerConfig.providersList}
+        selectedProviderId={providerConfig.selectedProviderId}
+        anthropicModel={providerConfig.anthropicModel}
+        openaiModel={providerConfig.openaiModel}
+        chatModelId={providerConfig.chatModelId}
+        handleProviderUpdate={providerConfig.handleProviderUpdate}
+        handleDefaultChange={providerConfig.handleDefaultChange}
+        handleValidateCredentials={providerConfig.handleValidateCredentials}
+        handleRefreshStatus={providerConfig.handleRefreshStatus}
+        handleAuthMethodChange={providerConfig.handleAuthMethodChange}
+        handleDisconnectOAuth={providerConfig.handleDisconnectOAuth}
+        handleStartOAuthLogin={providerConfig.handleStartOAuthLogin}
+        handleCodexLogin={providerConfig.handleCodexLogin}
+        isCodexLoggingIn={providerConfig.isCodexLoggingIn}
+        configuredProvidersCount={Object.values(providerConfig.configuredProviders).filter(Boolean).length}
+        servers={serverHook.servers}
+        connectedServersCount={serverHook.connectedServersCount}
+        connectDeadlines={serverHook.connectDeadlines}
+        handleConnectServer={serverHook.handleConnectServer}
+        handleReconnectServer={serverHook.handleReconnectServer}
+        handleDisconnectServer={serverHook.handleDisconnectServer}
+        handleDeleteServer={serverHook.handleDeleteServer}
+        handleUpdateServer={serverHook.handleUpdateServer}
+        handleReauthenticateServer={serverHook.handleReauthenticateServer}
+        handleServerAddLocal={serverHook.handleServerAddLocal}
+        handleSearchServiceStatusChange={serverHook.handleSearchServiceStatusChange}
+        handleGithubCheck={chats.handleGithubCheck}
+        onToolClick={(toolName) => {
+          chats.setPendingToolInsert(toolName);
+          setCurrentView('chat');
+        }}
+        updates={updates}
+        appVersion={APP_VERSION}
+      />
     </div>
   );
 }

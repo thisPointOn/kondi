@@ -6,7 +6,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--bg-primary, #0f0f0f);
+  background: #0a0a0a;
   color: var(--text-primary, #e5e5e5);
   position: relative;
 }
@@ -17,20 +17,43 @@
   justify-content: center;
 }
 
-/* Header */
+/* No top bar — the only thing that remains is a minimal floating control
+   cluster (Back + run controls) top-right, so the main area reads like chat.
+   Title/status/mode/Artifacts/Context/Patches/stats are all hidden here:
+   navigation is the sidebar, and Artifacts/Context/Setup live in the workspace
+   panel. Usage shows in the bottom context bar (chat styling). */
+.deliberation-view { position: relative; }
 .deliberation-header {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  left: auto;
+  width: auto;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 1rem 1.5rem;
-  background: var(--bg-secondary, #1a1a1a);
-  border-bottom: 1px solid var(--border-color, #333);
+  gap: 6px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  min-height: 0;
+  z-index: 6;
 }
+.deliberation-header-left { margin: 0; }
+.deliberation-title-section,
+.deliberation-header .deliberation-mode,
+.deliberation-artifacts-btn,
+.deliberation-context-btn,
+.deliberation-patches-btn,
+.deliberation-stats { display: none !important; }
+
+/* No phase-indicator bar at the top — Setup is reachable from the floating
+   control cluster; progress/usage shows in the bottom context bar. */
+.deliberation-view .phase-indicator { display: none; }
 
 .deliberation-header-left {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.75rem;
 }
 
 .deliberation-back-btn {
@@ -38,9 +61,9 @@
   border: 1px solid var(--border-color, #333);
   color: var(--text-secondary, #999);
   cursor: pointer;
-  padding: 0.5rem 1rem;
+  padding: 0.35rem 0.75rem;
   border-radius: 6px;
-  font-size: 0.875rem;
+  font-size: 0.85rem;
 }
 
 .deliberation-back-btn:hover {
@@ -56,7 +79,7 @@
 
 .deliberation-title-section h2 {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: 1.05rem;
   font-weight: 600;
 }
 
@@ -185,10 +208,11 @@
 .deliberation-ledger {
   flex: 1;
   overflow-y: auto;
-  padding: 1.5rem;
+  padding: 0.85rem 1rem;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.65rem;
+  border-top: 1px solid #2a2a2a; /* full-width header line, matches the footer */
 }
 
 .deliberation-empty {
@@ -208,7 +232,7 @@
   justify-content: center;
   height: 100%;
   text-align: center;
-  max-width: 500px;
+  max-width: 800px;
   margin: 0 auto;
 }
 
@@ -243,8 +267,181 @@
   color: var(--text-secondary, #999);
 }
 
+/* Continue-the-conversation input (after a council is done) — chat-style:
+   prompt box with the model combo beneath it. */
+.council-continue {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-color, #2d2d44);
+  background: var(--bg-secondary, #16161f);
+}
+.council-continue-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 42px;
+  padding: 8px 10px;
+  background: var(--bg-tertiary, #1e1e2a);
+  border: 1px solid var(--border-color, #2d2d44);
+  border-radius: 8px;
+  color: var(--text-primary, #e4e4e7);
+  font-size: 13.5px;
+  line-height: 1.45;
+  font-family: inherit;
+}
+.council-continue-input:focus { outline: none; border-color: #6366f1; }
+.council-continue-controls { display: flex; align-items: center; gap: 8px; }
+.council-continue-model {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  background: var(--bg-tertiary, #1e1e2a);
+  border: 1px solid var(--border-color, #2d2d44);
+  border-radius: 8px;
+  color: var(--text-primary, #e4e4e7);
+  font-size: 12px;
+  cursor: pointer;
+}
+.council-continue-model:focus { outline: none; border-color: #6366f1; }
+.council-continue-send {
+  flex-shrink: 0;
+  padding: 7px 16px;
+  background: #6366f1;
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.council-continue-send:disabled { opacity: 0.5; cursor: default; }
+.council-continue-send:hover:not(:disabled) { background: #5457e0; }
+
+/* Edit button + status label at the end of the council context bar. */
+.ctx-edit-btn {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border-color, #333);
+  color: var(--text-secondary, #999);
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ctx-edit-btn:hover { color: var(--text-primary, #e5e5e5); border-color: var(--text-secondary, #999); }
+.chat-context-bar .deliberation-status { flex-shrink: 0; font-size: 0.7rem; padding: 0.1rem 0.45rem; }
+.ctx-empty-detail { font-size: 12px; color: #6b7280; padding: 4px 2px; }
+
+/* Cap council comments to the same centered column as chat. */
+.deliberation-ledger > .ledger-entry-card,
+.deliberation-ledger > .deliberation-empty {
+  max-width: 775px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  box-sizing: border-box;
+}
+
+/* Top context bar — mirrors the chat context bar (active dir + usage). */
+.deliberation-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--bg-secondary, #16161f);
+  flex-shrink: 0;
+}
+.deliberation-context-bar .dcb-dir {
+  font-family: ui-monospace, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 55%;
+  color: #94a3b8;
+}
+.deliberation-context-bar .dcb-spacer { flex: 1; }
+.deliberation-context-bar .dcb-stat {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.model-validation-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  color: #fca5a5;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.model-validation-banner .mv-text { flex: 1; min-width: 0; }
+.model-validation-banner .mv-dismiss {
+  background: transparent; border: none; color: #fca5a5; font-size: 18px;
+  line-height: 1; cursor: pointer; flex-shrink: 0;
+}
+
+/* Council setup, presented as a centered dialog */
+.council-setup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+.council-setup-dialog {
+  background: var(--bg-primary, #0f0f0f);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 680px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.council-setup-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-color, #333);
+  flex-shrink: 0;
+}
+.council-setup-dialog-head h3 { margin: 0; font-size: 1rem; font-weight: 600; }
+.setup-dialog-close {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #999);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.setup-dialog-close:hover { color: var(--text-primary, #e5e5e5); }
+.council-setup-dialog .main-setup-panel {
+  overflow-y: auto;
+  padding: 1rem;
+  margin: 0;
+}
+
 .deliberation-setup-btn {
-  padding: 0.75rem 1.5rem;
+  padding: 0.5rem 1rem;
   background: var(--accent-color, #3b82f6);
   color: white;
   border: none;
@@ -945,18 +1142,18 @@
 
 .directory-input-row {
   display: flex;
-  gap: 1rem;
+  gap: 0.5rem;
   align-items: center;
 }
 
 .directory-input {
   flex: 1;
-  padding: 0.625rem 0.875rem;
+  padding: 0.45rem 0.7rem;
   background: var(--bg-tertiary, #252525);
   border: 1px solid var(--border-color, #333);
   border-radius: 6px;
   color: var(--text-primary, #e5e5e5);
-  font-size: 0.875rem;
+  font-size: 0.8rem;
   font-family: monospace;
 }
 
@@ -970,21 +1167,20 @@
 }
 
 .directory-browse-btn {
-  padding: 0.625rem 1rem;
-  background: var(--bg-tertiary, #252525);
+  padding: 0.45rem 0.7rem;
+  background: #2a2a2a;
   border: 1px solid var(--border-color, #333);
   border-radius: 6px;
-  color: var(--text-primary, #e5e5e5);
-  font-size: 0.875rem;
+  color: #fff;
+  font-size: 0.75rem;
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.15s ease;
 }
 
 .directory-browse-btn:hover {
-  background: var(--bg-secondary, #1a1a1a);
-  border-color: var(--accent-color, #3b82f6);
-  color: var(--accent-color, #3b82f6);
+  background: #333;
+  border-color: var(--text-secondary, #999);
 }
 
 .constraint-toggle {
@@ -1002,9 +1198,9 @@
 }
 
 .constraint-label {
-  font-size: 0.8125rem;
+  font-size: 0.72rem;
   font-weight: 500;
-  padding: 0.25rem 0.5rem;
+  padding: 0.2rem 0.45rem;
   border-radius: 4px;
 }
 
@@ -1066,19 +1262,19 @@
 
 .main-setup-panel h3,
 .main-task-panel h3 {
-  margin: 0 0 1.5rem;
-  font-size: 1.25rem;
+  margin: 0 0 0.85rem;
+  font-size: 1rem;
   font-weight: 600;
   color: var(--text-primary, #e5e5e5);
 }
 
 .setup-section {
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.85rem;
 }
 
 .setup-section h4 {
-  margin: 0 0 0.75rem;
-  font-size: 0.875rem;
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-primary, #e5e5e5);
 }
@@ -1104,15 +1300,15 @@
 
 .task-input {
   width: 100%;
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 0.7rem;
   background: var(--bg-tertiary, #252525);
   border: 1px solid var(--border-color, #333);
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--text-primary, #e5e5e5);
-  font-size: 0.875rem;
+  font-size: 0.8rem;
   font-family: inherit;
   resize: vertical;
-  min-height: 100px;
+  min-height: 72px;
 }
 
 .task-input:focus {
@@ -1601,7 +1797,7 @@
 
 /* Setup Prompt */
 .deliberation-setup-prompt {
-  max-width: 500px;
+  max-width: 800px;
   margin: 0 auto;
   padding: 2rem;
 }
@@ -1753,12 +1949,12 @@
 /* Council Name Input */
 .council-name-input {
   width: 100%;
-  padding: 0.75rem 1rem;
+  padding: 0.45rem 0.7rem;
   background: var(--bg-tertiary, #252525);
   border: 1px solid var(--border-color, #333);
-  border-radius: 8px;
+  border-radius: 6px;
   color: var(--text-primary, #e5e5e5);
-  font-size: 1rem;
+  font-size: 0.85rem;
   font-weight: 500;
 }
 
@@ -1789,7 +1985,7 @@
 /* Save Output Selector */
 .save-output-selector {
   display: flex;
-  gap: 0.75rem;
+  gap: 0.4rem;
 }
 
 .save-output-option {
@@ -1797,13 +1993,13 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.375rem;
-  padding: 0.75rem;
+  gap: 0.2rem;
+  padding: 0.5rem 0.45rem;
   background: var(--bg-tertiary, #252525);
-  border: 2px solid var(--border-color, #333);
-  border-radius: 10px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
   text-align: center;
 }
 
@@ -1817,35 +2013,35 @@
 }
 
 .save-output-option .save-output-label {
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--text-primary, #e5e5e5);
 }
 
 .save-output-option .save-output-desc {
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   color: var(--text-secondary, #999);
-  line-height: 1.3;
+  line-height: 1.25;
 }
 
 /* Mode Selector */
 .mode-selector {
-  display: flex;
-  gap: 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.4rem;
 }
 
 .mode-option {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.5rem;
-  padding: 1rem;
+  gap: 0.2rem;
+  padding: 0.5rem 0.45rem;
   background: var(--bg-tertiary, #252525);
-  border: 2px solid var(--border-color, #333);
-  border-radius: 12px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
   text-align: center;
 }
 
@@ -1859,31 +2055,32 @@
 }
 
 .mode-option .mode-icon {
-  font-size: 1.5rem;
+  font-size: 1rem;
 }
 
 .mode-option .mode-label {
-  font-size: 0.925rem;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--text-primary, #e5e5e5);
 }
 
 .mode-option .mode-desc {
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   color: var(--text-secondary, #999);
+  line-height: 1.25;
 }
 
 /* Section Hint */
 .section-hint {
-  margin: 0 0 0.75rem;
-  font-size: 0.8125rem;
+  margin: 0 0 0.4rem;
+  font-size: 0.7rem;
   color: var(--text-tertiary, #666);
 }
 
 /* Execution Mode Selector */
 .execution-mode-selector {
   display: flex;
-  gap: 1rem;
+  gap: 0.4rem;
 }
 
 .execution-option {
@@ -1891,13 +2088,13 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.375rem;
-  padding: 1rem;
+  gap: 0.2rem;
+  padding: 0.5rem 0.45rem;
   background: var(--bg-tertiary, #252525);
-  border: 2px solid var(--border-color, #333);
-  border-radius: 12px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
   text-align: center;
 }
 
@@ -1911,38 +2108,38 @@
 }
 
 .execution-option .execution-icon {
-  font-size: 1.25rem;
+  font-size: 1rem;
 }
 
 .execution-option .execution-label {
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--text-primary, #e5e5e5);
 }
 
 .execution-option .execution-desc {
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   color: var(--text-secondary, #999);
-  line-height: 1.3;
+  line-height: 1.25;
 }
 
 /* Max Rounds Selector */
 .max-rounds-selector {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.35rem;
 }
 
 .rounds-option {
-  padding: 0.5rem 1rem;
+  padding: 0.3rem 0.6rem;
   background: var(--bg-tertiary, #252525);
-  border: 2px solid var(--border-color, #333);
-  border-radius: 6px;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 5px;
   color: var(--text-secondary, #999);
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
-  min-width: 3rem;
+  min-width: 2.2rem;
   text-align: center;
 }
 
@@ -1965,7 +2162,7 @@
 
 .rounds-row {
   display: flex;
-  gap: 2rem;
+  gap: 1.25rem;
 }
 
 .rounds-field {
@@ -1973,17 +2170,17 @@
 }
 
 .rounds-label {
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--text-primary, #e5e5e5);
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.2rem;
   display: block;
 }
 
 .rounds-validation-error {
   color: #f87171;
-  font-size: 0.8125rem;
-  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  margin-top: 0.4rem;
 }
 
 /* Participants Section */
@@ -1999,18 +2196,19 @@
 }
 
 .add-persona-btn {
-  background: var(--accent-color, #6366f1);
-  color: white;
-  border: none;
-  padding: 0.5rem 1rem;
+  background: #2a2a2a;
+  color: #fff;
+  border: 1px solid var(--border-color, #333);
+  padding: 0.3rem 0.7rem;
   border-radius: 6px;
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.15s;
 }
 
 .add-persona-btn:hover {
-  background: var(--accent-hover, #4f46e5);
+  background: #333;
+  border-color: var(--text-secondary, #999);
 }
 
 .participants-list {

@@ -10,6 +10,7 @@ import { simpleCompletion } from '../services/llm-router';
 import { LOCAL_SERVER_ID } from '../services/localTools';
 import { BUILTIN_SERVER_IDS, countTools } from '../utils/filterTools';
 import type { MCPTool } from '../types/mcp';
+import type { LedgerPhase } from '../router/types';
 
 /**
  * Maps abstract orchestrator tool names to local tool names.
@@ -83,6 +84,8 @@ export interface CallLLMOptions {
   timeoutMs?: number;
   /** Working directory override for local tool calls (bypasses singleton) */
   workingDirectory?: string;
+  /** Router phase hint for routed (`route:<profile>`) models. */
+  routePhase?: LedgerPhase;
 }
 
 // ============================================================================
@@ -268,6 +271,7 @@ function routeToProvider(opts: CallLLMOptions): Promise<CallerResult> {
       userMessage: opts.userMessage,
       availableTools: tools,
       workingDirectory: opts.workingDirectory,
+      routePhase: opts.routePhase,
     }),
     opts.timeoutMs,
     'LLM call',

@@ -22,6 +22,9 @@ import {
   ExternalLink,
   LogOut,
 } from 'lucide-react';
+import { getModelById } from '../config/models';
+import { probeAllModels, getModelStatus, useModelStatus, type ProbeResult } from '../services/modelProbe';
+import { syncAllCatalogs, isDiscoverable, type CatalogDiff } from '../services/modelCatalogSync';
 import './ProviderSettings.css';
 
 // ============================================================================
@@ -128,6 +131,12 @@ const ProviderSettings: FC<ProviderSettingsProps> = ({
   console.log('[ProviderSettings] Render with:', { defaultProvider, defaultModel });
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [validating, setValidating] = useState<string | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [probeProgress, setProbeProgress] = useState<{ done: number; total: number } | null>(null);
+  const [probeSummary, setProbeSummary] = useState<{ ok: number; broken: number; soft: number } | null>(null);
+  const [catalogDiffs, setCatalogDiffs] = useState<CatalogDiff[] | null>(null);
+  // Re-render when probe status changes (so the "hidden" count stays live).
+  useModelStatus();
   const [editingKeys, setEditingKeys] = useState<Record<string, boolean>>({});
   const [keyValues, setKeyValues] = useState<Record<string, string>>({});
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
@@ -161,6 +170,53 @@ const ProviderSettings: FC<ProviderSettingsProps> = ({
 
   // Get active providers (those with credentials configured)
   const activeProviders = providers.filter(p => p.status === 'active');
+
+  // "Refresh models" — refresh EVERYTHING for every configured provider:
+  //   1. Catalog discovery (API providers): fetch the live /models list and
+  //      reconcile against our catalog so stale/missing listings surface.
+  //   2. Live probe (all providers, CLI + API): one tiny call per model; hide
+  //      the ones that definitively fail (modelProbe, hide-only-proven-broken).
+  const handleProbeModels = async () => {
+    const targets = activeProviders
+      .flatMap((p) => p.models.map((m) => getModelById(m.id)))
+      .filter((d): d is NonNullable<typeof d> => !!d)
+      .map((d) => ({ id: d.id, provider: d.provider }));
+    if (targets.length === 0) return;
+
+    const discoverableProviders = Array.from(new Set(targets.map((t) => t.provider))).filter(isDiscoverable);
+
+    setProbing(true);
+    setProbeSummary(null);
+    setCatalogDiffs(null);
+    setProbeProgress({ done: 0, total: targets.length });
+    try {
+      // Kick off catalog discovery and the probe sweep together.
+      const catalogP = discoverableProviders.length > 0
+        ? syncAllCatalogs(discoverableProviders)
+        : Promise.resolve([] as CatalogDiff[]);
+
+      const results: ProbeResult[] = await probeAllModels({
+        models: targets,
+        concurrency: 4,
+        onProgress: (done, total) => setProbeProgress({ done, total }),
+      });
+      const ok = results.filter((r) => r.status === 'ok').length;
+      const broken = results.filter((r) => r.status === 'broken').length;
+      const soft = results.filter((r) => r.status === 'soft-fail').length;
+      setProbeSummary({ ok, broken, soft });
+
+      const diffs = await catalogP;
+      setCatalogDiffs(diffs);
+    } finally {
+      setProbing(false);
+      setProbeProgress(null);
+    }
+  };
+
+  // Count currently-hidden (proven-broken) models across configured providers.
+  const hiddenModels = activeProviders
+    .flatMap((p) => p.models)
+    .filter((m) => getModelStatus(m.id).status === 'broken');
   // Match provider by exact ID
   const currentProvider = providers.find(p => p.id === defaultProvider);
   const currentModel = currentProvider?.models.find(m => m.id === defaultModel);
@@ -172,10 +228,72 @@ const ProviderSettings: FC<ProviderSettingsProps> = ({
           <Cpu size={20} />
           <h2>LLM Providers</h2>
         </div>
-        <button className="refresh-btn" onClick={onRefreshStatus} title="Refresh status">
-          <RefreshCw size={16} />
-        </button>
+        <div className="header-actions">
+          <button
+            className="refresh-models-btn"
+            onClick={handleProbeModels}
+            disabled={probing || activeProviders.length === 0}
+            title="Test every model of each configured provider and hide the ones your account can't use"
+          >
+            <Zap size={14} className={probing ? 'spinning' : ''} />
+            {probing
+              ? probeProgress
+                ? `Testing ${probeProgress.done}/${probeProgress.total}…`
+                : 'Testing…'
+              : 'Refresh models'}
+          </button>
+          <button className="refresh-btn" onClick={onRefreshStatus} title="Refresh status">
+            <RefreshCw size={16} />
+          </button>
+        </div>
       </div>
+
+      {(probeSummary || hiddenModels.length > 0) && (
+        <div className="model-probe-status">
+          {probeSummary && (
+            <span className="probe-summary">
+              <Check size={13} /> {probeSummary.ok} working
+              {probeSummary.broken > 0 && <> · <X size={13} /> {probeSummary.broken} hidden</>}
+              {probeSummary.soft > 0 && <> · {probeSummary.soft} unverified</>}
+            </span>
+          )}
+          {hiddenModels.length > 0 && (
+            <span className="probe-hidden" title={hiddenModels.map((m) => m.name).join(', ')}>
+              {hiddenModels.length} model{hiddenModels.length === 1 ? '' : 's'} hidden as unsupported on your plan
+            </span>
+          )}
+        </div>
+      )}
+
+      {catalogDiffs && catalogDiffs.length > 0 && (
+        <div className="catalog-check">
+          <div className="catalog-check-title">
+            <GitBranch size={13} /> Catalog check (live provider model lists)
+          </div>
+          {catalogDiffs.map((d) => (
+            <div key={d.provider} className="catalog-check-row">
+              <span className="cc-provider">{d.provider}</span>
+              {!d.ok ? (
+                <span className="cc-warn" title={d.error}>could not fetch list — {d.error}</span>
+              ) : (
+                <>
+                  <span className="cc-ok"><Check size={12} /> {d.confirmed.length}/{d.confirmed.length + d.staleInCatalog.length} listed live</span>
+                  {d.staleInCatalog.length > 0 && (
+                    <span className="cc-warn" title={d.staleInCatalog.join(', ')}>
+                      {d.staleInCatalog.length} not in API list (verified by probe)
+                    </span>
+                  )}
+                  {d.missingFromCatalog.length > 0 && (
+                    <span className="cc-new" title={d.missingFromCatalog.slice(0, 25).join(', ')}>
+                      +{d.missingFromCatalog.length} new available
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Default LLM Display */}
       <div className="default-llm-selector">

@@ -1,5 +1,8 @@
-import { Plus, Settings, ChevronDown, MessageSquare, PanelLeftClose, PanelLeft, Workflow, Cpu, Users, AlertCircle, Server } from 'lucide-react';
+import { Plus, Settings, ChevronDown, ChevronLeft, ChevronRight, MessageSquare, Workflow, Cpu, Users, AlertCircle, Server, LayoutGrid, Folder, X } from 'lucide-react';
 import { useEffect, useState, type FC } from 'react';
+import { councilStore } from '../council';
+import type { Council } from '../council/types';
+import { useProjects, createProject, deleteProject, addChatToProject } from '../services/projectsStore';
 import './Sidebar.css';
 
 type SidebarChat = {
@@ -8,11 +11,12 @@ type SidebarChat = {
   timestamp?: string;
 };
 
-export type AppView = 'chat' | 'settings' | 'pipelines' | 'providers' | 'services' | 'council';
+export type AppView = 'chat' | 'pipelines' | 'council';
 
 interface SidebarProps {
   currentView: AppView;
   onViewChange: (view: AppView) => void;
+  onOpenSettings: () => void;
   currentChatId: string | null;
   onChatSelect: (id: string) => void;
   onNewChat: () => void;
@@ -21,6 +25,14 @@ interface SidebarProps {
   chats: SidebarChat[];
   /** Chat IDs that currently have in-flight LLM calls */
   chatsSending?: Record<string, boolean>;
+  /** Currently open council (when in council view) */
+  currentCouncilId?: string | null;
+  /** Open a specific council */
+  onCouncilSelect?: (id: string) => void;
+  /** Show the tile/grid view of all councils */
+  onShowCouncilLibrary?: () => void;
+  /** Start a new council */
+  onNewCouncil?: () => void;
   className?: string;
   /** Number of LLM providers with errors */
   providerErrorCount?: number;
@@ -38,12 +50,39 @@ const Sidebar: FC<SidebarProps> = ({
   onChatRename,
   chats,
   chatsSending = {},
+  currentCouncilId,
+  onCouncilSelect,
+  onNewCouncil,
+  onShowCouncilLibrary,
   className,
   providerErrorCount = 0,
   providerExpiredCount = 0,
+  onOpenSettings,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [chatsExpanded, setChatsExpanded] = useState(false);
+  const [councilsExpanded, setCouncilsExpanded] = useState(false);
+  const [councils, setCouncils] = useState<Council[]>([]);
+  const projects = useProjects();
+  const [projectsExpanded, setProjectsExpanded] = useState(true);
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  const handleCreateProject = () => {
+    const p = createProject(`Project ${projects.length + 1}`);
+    setProjectsExpanded(true);
+    setExpandedProjects((s) => new Set(s).add(p.id));
+  };
+  const toggleProject = (id: string) => setExpandedProjects((s) => {
+    const n = new Set(s);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    return n;
+  });
+
+  // Keep the council list in sync with the store (new/deleted councils).
+  useEffect(() => {
+    const load = () => setCouncils(councilStore.getAll().filter((c) => !c.pipelineId));
+    load();
+    return councilStore.subscribe(load);
+  }, []);
   const [showChatsPopover, setShowChatsPopover] = useState(false);
   const [chatMenu, setChatMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
@@ -64,7 +103,7 @@ const Sidebar: FC<SidebarProps> = ({
           onClick={() => setCollapsed((p) => !p)}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
-          {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
+          {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
         </button>
       </div>
 
@@ -114,6 +153,63 @@ const Sidebar: FC<SidebarProps> = ({
           </>
         )}
       </div>
+
+      {/* Projects — collections of chats, above Chats */}
+      {!collapsed && (
+        <div className="projects-section">
+          <div className="section-header">
+            <button className="section-header-toggle" onClick={() => setProjectsExpanded((p) => !p)}>
+              <ChevronDown size={16} className="chevron" style={{ transform: projectsExpanded ? 'rotate(0deg)' : 'rotate(-90deg)' }} />
+              <Folder size={14} />
+              <span className="section-label">Projects</span>
+            </button>
+            <button className="section-header-action" onClick={handleCreateProject} title="New Project">
+              <Plus size={14} />
+            </button>
+          </div>
+          {projectsExpanded && (
+            <div className="project-list">
+              {projects.map((proj) => {
+                const open = expandedProjects.has(proj.id);
+                const pchats = proj.chatIds.map((id) => chats.find((c) => c.id === id)).filter(Boolean) as SidebarChat[];
+                return (
+                  <div key={proj.id} className="project-group">
+                    <div className="project-row">
+                      <button className="project-toggle" onClick={() => toggleProject(proj.id)} title={proj.name}>
+                        <ChevronRight size={14} className="chevron" style={{ transform: open ? 'rotate(90deg)' : 'none' }} />
+                        <span className="project-name">{proj.name}</span>
+                        <span className="project-count">{proj.chatIds.length}</span>
+                      </button>
+                      <button className="project-mini-btn" title="Add the open chat to this project" onClick={() => currentChatId && addChatToProject(proj.id, currentChatId)}>
+                        <Plus size={12} />
+                      </button>
+                      <button className="project-mini-btn danger" title="Delete project" onClick={() => deleteProject(proj.id)}>
+                        <X size={12} />
+                      </button>
+                    </div>
+                    {open && (
+                      <div className="project-chats">
+                        {pchats.map((c) => (
+                          <button
+                            key={c.id}
+                            className={`chat-item ${c.id === currentChatId && currentView === 'chat' ? 'active' : ''}`}
+                            onClick={() => { onChatSelect(c.id); onViewChange('chat'); }}
+                            title={c.title}
+                          >
+                            <span className="chat-item-title">{c.title}</span>
+                          </button>
+                        ))}
+                        {pchats.length === 0 && <div className="chat-item empty">Open a chat and click + to add it</div>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {projects.length === 0 && <div className="chat-item empty">No projects yet</div>}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Expanded chats - shown when sidebar is expanded */}
       {!collapsed && (
@@ -189,47 +285,70 @@ const Sidebar: FC<SidebarProps> = ({
         {!collapsed && <span>Pipelines</span>}
       </button>
 
-      <button
-        className={`nav-btn ${currentView === 'council' ? 'active' : ''}`}
-        onClick={() => onViewChange('council')}
-        title="Council - Multi-Model Deliberation"
-      >
-        <Users size={18} />
-        {!collapsed && <span>Council</span>}
-      </button>
+      {collapsed ? (
+        <button
+          className={`nav-btn ${currentView === 'council' ? 'active' : ''}`}
+          onClick={() => onViewChange('council')}
+          title="Council - Multi-Model Deliberation"
+        >
+          <Users size={18} />
+        </button>
+      ) : (
+        <div className="council-section">
+          <div className="section-header">
+            <button
+              className="section-header-toggle"
+              onClick={() => setCouncilsExpanded((p) => !p)}
+            >
+              <ChevronDown
+                size={16}
+                className="chevron"
+                style={{ transform: councilsExpanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+              />
+              <Users size={15} />
+              <span className="section-label">Council</span>
+            </button>
+            <button
+              className="section-header-action"
+              onClick={() => onShowCouncilLibrary?.()}
+              title="All councils (tile view)"
+            >
+              <LayoutGrid size={14} />
+            </button>
+            <button
+              className="section-header-action"
+              onClick={() => { onNewCouncil?.(); setCouncilsExpanded(true); }}
+              title="New Council"
+            >
+              <Plus size={14} />
+            </button>
+          </div>
 
-      <button
-        className={`nav-btn ${currentView === 'providers' ? 'active' : ''} ${providerErrorCount > 0 ? 'has-error' : providerExpiredCount > 0 ? 'has-warning' : ''}`}
-        onClick={() => onViewChange('providers')}
-        title={providerErrorCount > 0 ? `LLM Providers (${providerErrorCount} error${providerErrorCount > 1 ? 's' : ''})` : providerExpiredCount > 0 ? `LLM Providers (${providerExpiredCount} expired)` : 'LLM Providers'}
-      >
-        <Cpu size={18} />
-        {!collapsed && <span>LLM Providers</span>}
-        {providerErrorCount > 0 ? (
-          <span className="error-badge" title={`${providerErrorCount} provider error${providerErrorCount > 1 ? 's' : ''}`}>
-            <AlertCircle size={14} />
-          </span>
-        ) : providerExpiredCount > 0 ? (
-          <span className="warning-badge" title={`${providerExpiredCount} expired token${providerExpiredCount > 1 ? 's' : ''}`}>
-            <AlertCircle size={14} />
-          </span>
-        ) : null}
-      </button>
-
-      <button
-        className={`nav-btn ${currentView === 'services' ? 'active' : ''}`}
-        onClick={() => onViewChange('services')}
-        title="Built-in Services"
-      >
-        <Server size={18} />
-        {!collapsed && <span>Built-in Services</span>}
-      </button>
+          {councilsExpanded && (
+            <div className="chat-list">
+              {councils.map((c) => (
+                <button
+                  key={c.id}
+                  className={`chat-item ${c.id === currentCouncilId && currentView === 'council' ? 'active' : ''}`}
+                  onClick={() => { onCouncilSelect?.(c.id); onViewChange('council'); }}
+                  title={c.name}
+                >
+                  <span className="chat-item-title">{c.name}</span>
+                </button>
+              ))}
+              {councils.length === 0 && (
+                <div className="chat-item empty">No councils yet</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="sidebar-spacer" />
 
       <button
-        className={`settings-btn ${currentView === 'settings' ? 'active' : ''}`}
-        onClick={() => onViewChange(currentView === 'settings' ? 'chat' : 'settings')}
+        className="settings-btn"
+        onClick={onOpenSettings}
         title="Settings"
       >
         <Settings size={18} />
@@ -314,7 +433,7 @@ const ChatItem: FC<{
     ) : (
       <>
         {isSending && <span className="chat-sending-dot" />}
-        <span className={`chat-title${chat.isRenamed ? ' renamed' : ''}`}>{chat.title}</span>
+        <span className={`chat-title${(chat as any).isRenamed ? ' renamed' : ''}`}>{chat.title}</span>
         <span className="chat-time">{chat.timestamp}</span>
       </>
     )}

@@ -7,6 +7,7 @@ import { ask } from '@tauri-apps/plugin-dialog';
 import type { Council } from '../../council/types';
 import { councilStore, suggestedCombinations, getTemplateByName, createPersonaFromTemplate, duplicateCouncil } from '../../council';
 import { createCouncilFromSetup } from '../../council/factory';
+import { requestCouncilSetup } from './councilSetupSignal';
 import { resolveDefaultModel } from '../../config/models';
 import type { ConfiguredProviders } from '../../hooks/useProviderConfig';
 import './CouncilLibrary.css';
@@ -49,8 +50,10 @@ export default function CouncilLibrary({
         (c.deliberation?.savedProblem || '').toLowerCase().includes(q);
     });
 
-  const handleCreate = () => {
-    if (!newCouncilName.trim()) return;
+  const handleCreate = (rawName?: string) => {
+    // Name is collected on the next screen (the setup dialog), so a fresh
+    // council just gets a placeholder name here.
+    const name = (rawName ?? 'New Council').trim() || 'New Council';
 
     // Resolve models based on available providers (CLI preferred, API fallback)
     const avail = configuredProviders || { 'anthropic-cli': true, 'anthropic-api': false, 'openai-cli': true, 'openai-api': false, deepseek: false };
@@ -62,8 +65,8 @@ export default function CouncilLibrary({
     const optimistFromTemplate = optimistTemplate ? createPersonaFromTemplate(optimistTemplate) : null;
 
     const council = createCouncilFromSetup({
-      name: newCouncilName.trim(),
-      topic: newCouncilName.trim(),  // Topic auto-set from name; updated when task is defined
+      name,
+      topic: name,  // Topic auto-set from name; updated when task is defined
       personas: [
         {
           name: 'Manager',
@@ -174,7 +177,7 @@ export default function CouncilLibrary({
           <h2>Council</h2>
           <span className="header-subtitle">Multi-Model Deliberation</span>
         </div>
-        <button className="create-council-btn" onClick={() => setShowCreateModal(true)}>
+        <button className="create-council-btn" onClick={() => handleCreate()}>
           + New Council
         </button>
       </div>
@@ -196,7 +199,7 @@ export default function CouncilLibrary({
             Create a council to start multi-model deliberation.
             Multiple AI personas will debate, collaborate, and synthesize ideas.
           </p>
-          <button className="create-council-btn" onClick={() => setShowCreateModal(true)}>
+          <button className="create-council-btn" onClick={() => handleCreate()}>
             Create Your First Council
           </button>
 
@@ -235,7 +238,7 @@ export default function CouncilLibrary({
                 <div className="council-badges">
                   {council.orchestration.mode === 'deliberation' && (
                     <span className="council-mode-badge deliberation">
-                      ⚖️ Deliberation
+                      Deliberation
                     </span>
                   )}
                   <span
@@ -324,10 +327,11 @@ export default function CouncilLibrary({
                   className="council-action"
                   onClick={(e) => {
                     e.stopPropagation();
+                    requestCouncilSetup(council.id);
                     onCouncilSelect(council.id);
                   }}
                 >
-                  Open
+                  Edit
                 </button>
                 <button
                   className="council-action"

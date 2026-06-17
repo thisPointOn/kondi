@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { PipelineExecutor, type PlatformAdapter } from '../pipeline';
 import { callLLM } from '../pipeline/gui-caller';
+import { roleToPhase } from '../router/profile-options';
 import { filterToolsByServerIds } from '../utils/filterTools';
 import { saveDeliberationOutput } from '../services/deliberationSaveService';
 import { pipelineStore } from '../pipeline/store';
@@ -96,6 +97,7 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
           availableTools: filteredTools,
           timeoutMs: invocation.timeoutMs, // set by invokeAgentSafe based on role
           workingDirectory: invocation.workingDirectory,
+          routePhase: roleToPhase(persona.preferredDeliberationRole || 'worker'),
         });
         return result;
       },

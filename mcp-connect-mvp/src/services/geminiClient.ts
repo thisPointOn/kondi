@@ -14,6 +14,7 @@ import { formatToolCallSummary } from './formatToolCallSummary';
 import {
   resolveApiKey,
   resolveApiKeySync,
+  getProfile,
   reportSuccess,
   reportFailure,
   PROFILE_IDS,
@@ -90,24 +91,23 @@ class GeminiClient {
   }
 
   getAuthMethod(): 'oauth' | 'none' {
-    const resolved = resolveApiKeySync('google');
-    return resolved ? 'oauth' : 'none';
+    // Gemini is OAuth-only — resolve the OAuth profile specifically, never the
+    // orphan google:api-key profile that rotation might otherwise return.
+    const p = getProfile(PROFILE_IDS.googleOAuth);
+    return p?.credential.type === 'gemini_oauth' ? 'oauth' : 'none';
   }
 
   private getProjectId(): string | null {
-    const resolved = resolveApiKeySync('google');
-    if (!resolved) return null;
-    if (resolved.credential.type === 'gemini_oauth') {
-      return resolved.credential.projectId;
-    }
-    return null;
+    const p = getProfile(PROFILE_IDS.googleOAuth);
+    return p?.credential.type === 'gemini_oauth' ? p.credential.projectId : null;
   }
 
   async validateConnection(): Promise<{ ok: boolean; error?: string }> {
     try {
-      const resolved = await resolveApiKey('google');
+      // Force the OAuth profile — never the orphan google:api-key one.
+      const resolved = await resolveApiKey('google', PROFILE_IDS.googleOAuth);
       if (!resolved) {
-        return { ok: false, error: 'No Google credentials configured' };
+        return { ok: false, error: 'No Google OAuth credentials configured' };
       }
       if (resolved.credential.type !== 'gemini_oauth') {
         return { ok: false, error: 'Google credentials are not OAuth type' };
@@ -115,10 +115,11 @@ class GeminiClient {
 
       const cred = resolved.credential as GeminiOAuthCredential;
 
-      // Simple test: send a minimal request
+      // Simple test: send a minimal request. cloudcode-pa wants the bare
+      // model id (no "models/" prefix), else it 404s "entity not found".
       const body = JSON.stringify({
         project: cred.projectId,
-        model: 'models/gemini-2.5-flash',
+        model: 'gemini-2.5-flash',
         request: {
           contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
           generationConfig: { maxOutputTokens: 1 },
@@ -224,7 +225,9 @@ class GeminiClient {
 
         const requestBody: any = {
           project: cred.projectId,
-          model,
+          // cloudcode-pa (Code Assist) wants the bare model id, not the
+          // generativelanguage-style "models/…" prefix → strip it.
+          model: model.replace(/^models\//, ''),
           request: {
             contents: currentContents,
             systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -361,9 +364,12 @@ class GeminiClient {
       if (!jsonStr || jsonStr === '[DONE]') continue;
 
       try {
-        const chunk: GeminiResponse = JSON.parse(jsonStr);
-        if (chunk.error) {
-          return { candidates: [], error: `Gemini API error ${chunk.error.code}: ${chunk.error.message}` };
+        const raw: any = JSON.parse(jsonStr);
+        // cloudcode-pa wraps each chunk under `response` — unwrap it.
+        const chunk: GeminiResponse = raw.response ?? raw;
+        const err = chunk.error || raw.error;
+        if (err) {
+          return { candidates: [], error: `Gemini API error ${err.code}: ${err.message}` };
         }
         if (chunk.candidates) {
           for (const c of chunk.candidates) {
@@ -382,15 +388,21 @@ class GeminiClient {
     // If no SSE lines found, try parsing as plain JSON
     if (allParts.length === 0) {
       try {
-        const response: GeminiResponse = JSON.parse(text);
-        if (response.error) {
-          return { candidates: [], error: `Gemini API error ${response.error.code}: ${response.error.message}` };
-        }
-        if (response.candidates) {
-          for (const c of response.candidates) {
-            if (c.content?.parts) {
-              for (const part of c.content.parts) {
-                allParts.push(part);
+        const raw: any = JSON.parse(text);
+        // May be a single object, or an array of {response:{...}} chunks.
+        const chunks: any[] = Array.isArray(raw) ? raw : [raw];
+        for (const item of chunks) {
+          const response: GeminiResponse = item.response ?? item;
+          const err = response.error || item.error;
+          if (err) {
+            return { candidates: [], error: `Gemini API error ${err.code}: ${err.message}` };
+          }
+          if (response.candidates) {
+            for (const c of response.candidates) {
+              if (c.content?.parts) {
+                for (const part of c.content.parts) {
+                  allParts.push(part);
+                }
               }
             }
           }

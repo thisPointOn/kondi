@@ -31,6 +31,7 @@ import { CodingOrchestrator } from '../src/council/coding-orchestrator';
 import { ledgerStore } from '../src/council/ledger-store';
 import { buildAbbreviatedSummary } from '../src/services/deliberationSummary';
 import { callLLM } from './llm-caller';
+import { roleToPhase } from '../src/router/profile-options';
 import { loadCouncilConfig, mergeConfigWithArgs } from './council-config';
 import { writeCouncilArtifacts, buildJsonResult } from './council-artifacts';
 import { exportCouncilSession } from './council-session-export';
@@ -348,6 +349,7 @@ async function main() {
       skipTools: invocation.skipTools,
       allowedTools: invocation.allowedTools,
       timeoutMs: invocation.timeoutMs || 900_000,
+      routePhase: roleToPhase(persona.preferredDeliberationRole || 'consultant'),
     });
 
     log(C.cyan, persona.name, `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);

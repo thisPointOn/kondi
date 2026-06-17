@@ -79,15 +79,48 @@ docs/
 | `anthropic-api` | API key | — | claude-sonnet-4-5-20250929, claude-haiku-4-5-20251001 |
 | `anthropic-cli` | Subscription | Claude Code | claude-opus-4-6, claude-sonnet-4-5-20250929, claude-opus-4-5-20251101 |
 | `openai-api` | API key | — | gpt-4o, gpt-4o-mini, o1-preview |
-| `openai-cli` | Subscription | Codex | gpt-5.3-codex, gpt-5.2-codex, gpt-5.2 |
+| `openai-cli` | Subscription | Codex | gpt-5.5 (default), gpt-5.5-pro, gpt-5.4, gpt-5.4-mini, gpt-5.4-nano, gpt-5.x-codex |
 | `deepseek` | API key | — | deepseek-reasoner, deepseek-chat |
 | `google` | API key | — | gemini-2.5-pro, gemini-2.5-flash |
 | `xai` | API key | — | grok-3, grok-3-mini |
+| `zai` | API key | — | glm-5.1, glm-4.6, glm-4.5-flash (Z.AI Coding Plan, OpenAI-compatible) |
+| `nvidia-router` | API key | — | NVIDIA NIM / local router (OpenAI-compatible; base URL via `VITE_NVIDIA_ROUTER_URL` / `NVIDIA_ROUTER_URL`) |
 | `ollama` | Local | — | llama3.1, qwen2.5-coder, mistral |
+| `router` (pseudo) | — | — | Smart Routing profiles: model id `route:<profile>` (see §3a) |
 
-Legacy provider names (`anthropic`, `openai`) are resolved via `resolveProvider()` in `config/models.ts`.
+Legacy provider names (`anthropic`, `openai`) are resolved via `resolveProvider()` in `config/models.ts`. `zai`/`nvidia-router` dispatch through the shared `OpenAICompatibleClient` (`openaiCompatibleClient.ts`), like deepseek/xai/ollama.
 
-Type: `ModelProvider = 'anthropic-api' | 'anthropic-cli' | 'openai-api' | 'openai-cli' | 'deepseek' | 'google' | 'xai' | 'ollama'`
+Type: `ModelProvider = 'anthropic-api' | 'anthropic-cli' | 'openai-api' | 'openai-cli' | 'deepseek' | 'google' | 'xai' | 'zai' | 'nvidia-router' | 'ollama'`
+
+`ModelDefinition` gained an optional `routingCapabilities?: string[]` field — richer capability tags (`planning`, `coding`, `fast-coding`, `code-review`, `summarization`, …) consumed by the Smart Router; the registry derives them from `capabilities` + `tier` when absent.
+
+`openai-cli` / `CODEX_MODELS` model IDs are kept current against the installed Codex binary (verified v0.139.0). `codex update` may bump the set; refresh `OPENAI_CLI_MODELS` (`config/models.ts`) and `CODEX_MODELS` (`codexClient.ts`) when it does.
+
+### 3b. Model Availability Probe (`src/services/modelProbe.ts`)
+
+Per-model availability tracking so dropdowns never offer a model the account/plan can't use (e.g. a ChatGPT Codex account rejecting `gpt-5.3-codex`). Status persists in localStorage `kondi-model-status` (`{ [modelId]: { status: 'ok'|'broken'|'soft-fail'|'untested', error?, checkedAt } }`).
+
+- **Policy — hide only proven-broken.** `filterVisibleModels()` drops a model ONLY when its status is `broken`. Untested, last-known-good, and soft-failed (auth/network) models stay visible. `classifyModelError()` maps an error to `broken` (model not supported/found/invalid, 404, 400-with-"model"), `auth` (401/403/credentials → blame the provider, not the model), or `soft` (timeout/network/429 → keep).
+- **Trigger 1 — automatic.** `chatCompletion()` wraps its dispatch; on throw it calls `recordModelCallFailure(model, prov, err)` (hides the model iff the error is `broken`), and on success `recordModelCallSuccess(model)` clears a stale flag.
+- **Trigger 2 — manual.** "Refresh models" button in `ProviderSettings` → `probeAllModels()` sweeps every configured-provider model with a tiny one-shot `simpleCompletion` (concurrency 4, skips the `router` pseudo-provider), shows progress + an ok/hidden/unverified summary.
+- **UI binding.** Selectors call `filterVisibleModels()` and subscribe via `useModelStatus()` (a `useSyncExternalStore` hook): `ChatArea`, `AddPersonaModal`, `RoleAssignment`. The pipeline persona picker reuses `AddPersonaModal`. The catalog in `config/models.ts` is never mutated.
+
+### 3c. Model Catalog Sync (`src/services/modelCatalogSync.ts`)
+
+The API-side equivalent of reading the Codex binary's model list: for API providers, the authoritative model set is the provider's own `GET /models`. The "Refresh models" button runs this alongside the probe — `syncAllCatalogs(providers)` fetches each discoverable provider's live list (via the clients' existing `listModels()` / Ollama `discoverModels()`) and reconciles vs the catalog into `CatalogDiff { confirmed, staleInCatalog, missingFromCatalog }`, persisted to `kondi-catalog-sync`.
+
+- **Discoverable providers:** `anthropic-api`, `openai-api`, `deepseek`, `xai`, `zai`, `nvidia-router`, `ollama`. Google (cloudcode-pa OAuth) and CLI providers are excluded (no clean public list; verified via binary + probe instead).
+- **Advisory only.** It surfaces drift (catalog IDs the API no longer lists; chat-capable IDs the API offers that we don't carry — filtered against a `NON_CHAT` regex to cut embeddings/tts/image/etc. noise) but never hides a model itself. `/models` lists can be incomplete (restricted key scopes, partial catalogs), so the live probe remains the sole authority for hiding. Anthropic/OpenAI keys resolve via `resolveApiKey(provider, PROFILE_IDS.*ApiKey)`; OpenAI-compatible clients use their own configured key.
+
+### 3a. Smart Router (`src/router/`)
+
+Ported from kondi-chat (de-Node-ified: seeds in-memory from `ALL_MODELS`, no fs; the intent classifier call is injected and runs through `simpleCompletion`, never a raw fetch — preserves OAuth/MCP-proxy routing). Surfaces six budget profiles (`balanced`, `quality`, `cheap`, `orchestra`, `best-value`, `zai`) as selectable pseudo-models `route:<profile>` in every model dropdown (`ROUTED_PROFILE_OPTIONS`).
+
+- **Selection**: a persona/step/chat with `provider:'router'`, `model:'route:<name>'` flows into `llm-router.ts`, which calls `resolveRoutedModel(profile, phase, prompt)` → concrete `{provider, model}`, then dispatches normally.
+- **Phase hint** (`routePhase`, type `LedgerPhase`): threaded from call sites. Council role → phase via `roleToPhase()`: manager→`dispatch`, consultant→`discuss`, worker→`execute`, reviewer→`reflect`; chat defaults to `discuss`. Persona role read from `persona.preferredDeliberationRole`.
+- **Tiers** (in `router/index.ts`): profile pin (`rolePinning[phase]`) → intent classifier (cheap LLM picks per phase) → rule fallback (capability/cost heuristics). The learned NN tier from kondi-chat is **not** ported (needs offline-trained weights).
+- **Files**: `router/{types,registry,profiles,rules,intent-router,index}.ts` (core), `router/profile-options.ts` (pure helpers, CLI/selector-safe), `router/resolve.ts` (webview resolution via simpleCompletion + auth-profiles). CLI routing lives in `cli/llm-caller.ts` (own resolution, classifier recurses through the CLI caller).
+- **Cost**: `services/cost.ts` estimates per-entry/total USD from ledger `tokensUsed` + `getModelCostRates` (blended rate; routed entries are approximate since the concrete model isn't recorded on the ledger). Shown in `DeliberationView` agent breakdown.
 
 ---
 
@@ -309,7 +342,11 @@ Pipeline ───→ simpleCompletion() → chatCompletion() ──┘
 | `deepseek` | `openaiCompatibleClient.ts` | OpenAI-compatible HTTP | Stateless |
 | `google` | `geminiClient.ts` | Gemini API | Stateless |
 | `xai` | `openaiCompatibleClient.ts` | OpenAI-compatible HTTP | Stateless |
+| `zai` | `openaiCompatibleClient.ts` | OpenAI-compatible HTTP (z.ai Coding Plan) | Stateless |
+| `nvidia-router` | `openaiCompatibleClient.ts` | OpenAI-compatible HTTP (NIM/local) | Stateless |
 | `ollama` | `openaiCompatibleClient.ts` | Local HTTP | Stateless |
+
+A `route:<profile>` model (or `provider:'router'`) is resolved to a concrete provider+model by the Smart Router **before** this dispatch (see §3a); `chatCompletion()`/`simpleCompletion()` accept an optional `routePhase` hint for that resolution.
 
 ### CLI Provider Details
 
@@ -349,6 +386,8 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 | `kondi-openai-model` | hooks/useProviderConfig.ts | Selected OpenAI model |
 | `kondi-global-working-directory` | hooks/useProviderConfig.ts | Global working directory |
 | `kondi-input-history` | components/ChatArea.tsx | Chat input history |
+| `kondi-model-status` | services/modelProbe.ts | Per-model availability (ok/broken/soft-fail) — hides proven-broken models |
+| `kondi-catalog-sync` | services/modelCatalogSync.ts | Last live `/models` reconciliation per API provider (advisory drift report) |
 | `context-{councilId}` | council/context-store.ts | Current ContextArtifact |
 | `context-history-{councilId}` | council/context-store.ts | ContextArtifact[] (all versions) |
 | `context-patches-{councilId}` | council/context-store.ts | ContextPatch[] |

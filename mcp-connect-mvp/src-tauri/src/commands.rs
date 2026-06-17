@@ -3040,8 +3040,13 @@ async fn wait_for_oauth_callback(port: u16, timeout_secs: u64) -> Result<(String
 
                     let url_str = format!("http://localhost:{}{}", port, request.url());
 
-                    // Skip non-callback requests (favicon, etc)
-                    if !request.url().starts_with("/callback") && !request.url().starts_with("/auth/callback") {
+                    // Skip non-callback requests (favicon, etc). Accept all the
+                    // redirect paths our OAuth flows use — including Gemini's
+                    // /oauth2callback (port 8085) which was previously skipped,
+                    // leaving the connect spinner hanging forever.
+                    if !request.url().starts_with("/callback")
+                        && !request.url().starts_with("/auth/callback")
+                        && !request.url().starts_with("/oauth2callback") {
                         println!("[OAuth Callback] Skipping non-callback request");
                         let _ = request.respond(tiny_http::Response::from_string(""));
                         continue;
@@ -3142,9 +3147,18 @@ pub async fn run_claude_command(
     let mut cmd = Command::new("claude");
     cmd.args(&args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "true")
-        .env_remove("CLAUDECODE");
+        .stderr(Stdio::piped());
+    // Fully isolate the nested claude from any parent Claude Code session.
+    // If kondi was launched from a Claude Code shell, it inherits the outer
+    // session's CLAUDE_CODE_* vars (session id, SSE port, todo state, …) — and
+    // without removing them the spawned claude attaches to that session and
+    // renders the outer agent's todo list / context. Strip the whole namespace.
+    for (key, _) in std::env::vars() {
+        if key.starts_with("CLAUDE_CODE") || key == "CLAUDECODE" {
+            cmd.env_remove(&key);
+        }
+    }
+    cmd.env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "true");
 
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -3212,9 +3226,18 @@ pub async fn run_claude_streaming(
     let mut cmd = Command::new("claude");
     cmd.args(&args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "true")
-        .env_remove("CLAUDECODE");
+        .stderr(Stdio::piped());
+    // Fully isolate the nested claude from any parent Claude Code session.
+    // If kondi was launched from a Claude Code shell, it inherits the outer
+    // session's CLAUDE_CODE_* vars (session id, SSE port, todo state, …) — and
+    // without removing them the spawned claude attaches to that session and
+    // renders the outer agent's todo list / context. Strip the whole namespace.
+    for (key, _) in std::env::vars() {
+        if key.starts_with("CLAUDE_CODE") || key == "CLAUDECODE" {
+            cmd.env_remove(&key);
+        }
+    }
+    cmd.env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "true");
 
     // If we have stdin input, pipe it; otherwise inherit (no stdin needed)
     if stdin_input.is_some() {
@@ -5364,7 +5387,10 @@ pub async fn start_gemini_oauth() -> Result<GeminiOAuthResult, String> {
     let project_id = if provision_resp.status().is_success() {
         let pv: serde_json::Value = provision_resp.json().await.unwrap_or_default();
         println!("[Gemini OAuth] Provision response: {:?}", pv);
-        pv.get("project")
+        // Code Assist returns the project under `cloudaicompanionProject`
+        // (older shape used `project`). Read both.
+        pv.get("cloudaicompanionProject")
+            .or_else(|| pv.get("project"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| {
@@ -5394,8 +5420,12 @@ pub async fn start_gemini_oauth() -> Result<GeminiOAuthResult, String> {
         if onboard_resp.status().is_success() {
             let ov: serde_json::Value = onboard_resp.json().await.unwrap_or_default();
             println!("[Gemini OAuth] Onboard response: {:?}", ov);
-            ov.get("project")
-                .and_then(|v| v.as_str())
+            // onboardUser returns a long-running op; the project can be nested
+            // under response.cloudaicompanionProject.id or at the top level.
+            ov.get("cloudaicompanionProject")
+                .or_else(|| ov.pointer("/response/cloudaicompanionProject"))
+                .and_then(|v| v.get("id").and_then(|i| i.as_str()).or_else(|| v.as_str()))
+                .or_else(|| ov.get("project").and_then(|v| v.as_str()))
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "default-project".to_string())
         } else {
@@ -5484,7 +5514,12 @@ pub async fn gemini_request(
     accessToken: String,
 ) -> Result<String, String> {
     let url = format!("{}{}", GEMINI_CLOUDCODE_BASE, path);
-    let client = reqwest::Client::new();
+    println!("[Gemini Request] {} {}", method, path);
+    // A real timeout so a slow/stuck cloudcode-pa stream can't hang the chat forever.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| e.to_string())?;
 
     let mut request = match method.to_uppercase().as_str() {
         "GET" => client.get(&url),
@@ -5503,9 +5538,10 @@ pub async fn gemini_request(
         request = request.body(body);
     }
 
-    let resp = request.send().await.map_err(|e| e.to_string())?;
+    let resp = request.send().await.map_err(|e| format!("Gemini request failed: {}", e))?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
+    println!("[Gemini Request] {} -> HTTP {} ({} bytes)", path, status, text.len());
     if !status.is_success() {
         return Err(format!("HTTP {}: {}", status, text));
     }

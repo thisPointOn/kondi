@@ -12,8 +12,16 @@ import {
   OPENAI_CLI_MODELS,
   OPENAI_API_MODELS,
   DEEPSEEK_MODELS,
+  XAI_MODELS,
+  ZAI_MODELS,
+  GOOGLE_MODELS,
+  NVIDIA_MODELS,
+  OLLAMA_MODELS,
   type ModelDefinition,
 } from '../../config/models';
+import { getRoutedProfileOptions } from '../../router/profile-options';
+import { filterVisibleModels, useModelStatus } from '../../services/modelProbe';
+import { useRouterProfilesVersion } from '../../hooks/useRouterProfiles';
 import './RoleAssignment.css';
 
 interface RoleAssignmentProps {
@@ -31,6 +39,11 @@ interface RoleAssignmentProps {
     'openai-cli': boolean;
     'openai-api': boolean;
     deepseek: boolean;
+    xai?: boolean;
+    zai?: boolean;
+    'nvidia-router'?: boolean;
+    google?: boolean;
+    ollama?: boolean;
   };
   /** Render inline without modal overlay */
   inline?: boolean;
@@ -89,34 +102,52 @@ const toModelOption = (m: ModelDefinition): ModelOption => ({
   provider: m.provider,
 });
 
-// Build models list from central config, organized by provider
+// Concrete models from the central config. Routed ("Smart Routing") profiles
+// are prepended dynamically at render so user-added profiles appear live.
 const ALL_MODELS: ModelOption[] = [
   ...ANTHROPIC_CLI_MODELS.map(toModelOption),
   ...ANTHROPIC_API_MODELS.map(toModelOption),
   ...OPENAI_CLI_MODELS.map(toModelOption),
   ...OPENAI_API_MODELS.map(toModelOption),
   ...DEEPSEEK_MODELS.map(toModelOption),
+  ...XAI_MODELS.map(toModelOption),
+  ...ZAI_MODELS.map(toModelOption),
+  ...GOOGLE_MODELS.map(toModelOption),
+  ...NVIDIA_MODELS.map(toModelOption),
+  ...OLLAMA_MODELS.map(toModelOption),
 ];
 
 const PROVIDER_LABELS: Record<string, string> = {
+  'router': '🔀 Smart Routing',
   'anthropic-cli': 'Claude CLI (Subscription)',
   'anthropic-api': 'Anthropic API',
   'openai-cli': 'Codex CLI (Subscription)',
   'openai-api': 'OpenAI API',
   'deepseek': 'DeepSeek',
+  'xai': 'xAI (Grok)',
+  'zai': 'Z.AI (GLM)',
+  'google': 'Google Gemini',
+  'nvidia-router': 'NVIDIA Router',
+  'ollama': 'Ollama (Local)',
 };
 
 // Short provider labels for compact display
 const PROVIDER_SHORT_LABELS: Record<string, string> = {
+  'router': 'Router',
   'anthropic-cli': 'Claude CLI',
   'anthropic-api': 'Anthropic',
   'openai-cli': 'Codex CLI',
   'openai-api': 'OpenAI',
   'deepseek': 'DeepSeek',
+  'xai': 'Grok',
+  'zai': 'GLM',
+  'google': 'Gemini',
+  'nvidia-router': 'NVIDIA',
+  'ollama': 'Ollama',
 };
 
 // Order for provider groups in dropdown
-const PROVIDER_ORDER = ['anthropic-cli', 'anthropic-api', 'openai-cli', 'openai-api', 'deepseek'];
+const PROVIDER_ORDER = ['router', 'anthropic-cli', 'anthropic-api', 'openai-cli', 'openai-api', 'deepseek', 'xai', 'zai', 'google', 'nvidia-router', 'ollama'];
 
 export default function RoleAssignment({
   council,
@@ -226,6 +257,9 @@ export default function RoleAssignment({
   const [modelChanges, setModelChanges] = useState<Record<string, { model: string; provider: string }>>({});
 
 
+  useModelStatus(); // re-render model list when a model is hidden/restored
+  const routerProfilesVersion = useRouterProfilesVersion(); // live router-profile updates
+
   // Saved starts false — the user must always explicitly save after opening setup.
   // This prevents the "nothing saves" issue where saved=true on mount blocks handleSave.
   const [saved, setSaved] = useState(false);
@@ -233,11 +267,22 @@ export default function RoleAssignment({
   // Track which persona has model dropdown open
   const [openModelDropdown, setOpenModelDropdown] = useState<string | null>(null);
 
-  // Get available models based on configured providers
-  const availableModels = ALL_MODELS.filter(m => {
-    const providerKey = m.provider as keyof typeof configuredProviders;
-    return configuredProviders[providerKey];
-  });
+  // Get available models based on configured providers, dropping any model the
+  // probe has proven broken (hide-only-proven-broken). Routed profiles stay.
+  // Prepend live routed profiles (Settings → Routing), then the configured
+  // concrete models (probe-broken ones dropped). routerProfilesVersion in the
+  // dependency keeps custom profiles appearing without a reload.
+  void routerProfilesVersion;
+  const routedModels: ModelOption[] = getRoutedProfileOptions().map(o => ({
+    id: o.id, name: o.name, provider: o.provider,
+  }));
+  const availableModels = [
+    ...routedModels,
+    ...filterVisibleModels(ALL_MODELS.filter(m => {
+      const providerKey = m.provider as keyof typeof configuredProviders;
+      return configuredProviders[providerKey];
+    })),
+  ];
 
   // Group models by provider, maintaining order
   const modelsByProvider = PROVIDER_ORDER.reduce((acc, provider) => {

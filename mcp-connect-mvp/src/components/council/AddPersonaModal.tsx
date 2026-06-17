@@ -3,9 +3,12 @@
  * Supports deliberation mode with role/focus/stance/suppress options
  */
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import type { PresetPersona, Persona, DeliberationRole, DeliberationRoleAssignment } from '../../council/types';
 import { getModelsForPersonaSelector } from '../../config/models';
+import { getRoutedProfileOptions } from '../../router/profile-options';
+import { filterVisibleModels, useModelStatus } from '../../services/modelProbe';
+import { useRouterProfilesVersion } from '../../hooks/useRouterProfiles';
 import { BUILTIN_SERVER_IDS } from '../../utils/filterTools';
 import type { ConnectedServerInfo } from '../pipeline/PipelineBuilder';
 import './AddPersonaModal.css';
@@ -36,29 +39,37 @@ interface AddPersonaModalProps {
   connectedServers?: ConnectedServerInfo[];
 }
 
-// Get available models from central config
-const AVAILABLE_MODELS = getModelsForPersonaSelector();
-
-// Group models by provider for display
-const MODELS_BY_PROVIDER = AVAILABLE_MODELS.reduce((acc, model) => {
-  const providerName = getProviderDisplayName(model.provider);
-  if (!acc[providerName]) {
-    acc[providerName] = [];
-  }
-  acc[providerName].push(model);
-  return acc;
-}, {} as Record<string, typeof AVAILABLE_MODELS>);
+// Group models by provider for display. Built at render so user-added router
+// profiles (Settings → Routing) appear live; routed profiles are listed first.
+type SelectorModel = { id: string; name: string; provider: string; cost: string };
+function buildModelsByProvider(): Record<string, SelectorModel[]> {
+  const routed: SelectorModel[] = getRoutedProfileOptions().map(o => ({
+    id: o.id, name: o.name, provider: o.provider, cost: 'auto',
+  }));
+  const all: SelectorModel[] = [...routed, ...getModelsForPersonaSelector()];
+  return all.reduce((acc, model) => {
+    const providerName = getProviderDisplayName(model.provider);
+    (acc[providerName] ||= []).push(model);
+    return acc;
+  }, {} as Record<string, SelectorModel[]>);
+}
 
 // Provider display order
-const PROVIDER_ORDER = ['Anthropic (CLI)', 'Anthropic (API)', 'OpenAI (CLI)', 'OpenAI (API)', 'DeepSeek'];
+const PROVIDER_ORDER = ['Smart Routing', 'Anthropic (CLI)', 'Anthropic (API)', 'OpenAI (CLI)', 'OpenAI (API)', 'DeepSeek', 'xAI (Grok)', 'Z.AI (GLM)', 'Google', 'NVIDIA', 'Ollama'];
 
 function getProviderDisplayName(provider: string): string {
   switch (provider) {
+    case 'router': return 'Smart Routing';
     case 'anthropic-cli': return 'Anthropic (CLI)';
     case 'anthropic-api': return 'Anthropic (API)';
     case 'openai-cli': return 'OpenAI (CLI)';
     case 'openai-api': return 'OpenAI (API)';
     case 'deepseek': return 'DeepSeek';
+    case 'xai': return 'xAI (Grok)';
+    case 'zai': return 'Z.AI (GLM)';
+    case 'google': return 'Google';
+    case 'nvidia-router': return 'NVIDIA';
+    case 'ollama': return 'Ollama';
     default: return provider;
   }
 }
@@ -79,6 +90,9 @@ export default function AddPersonaModal({
 }: AddPersonaModalProps) {
   const isEditMode = !!editingPersona;
 
+  useModelStatus(); // re-render model list when a model is hidden/restored
+  const routerProfilesVersion = useRouterProfilesVersion();
+  const MODELS_BY_PROVIDER = useMemo(() => buildModelsByProvider(), [routerProfilesVersion]);
   const [activeCategory, setActiveCategory] = useState(categories[0]?.id || '');
   const [selectedTemplate, setSelectedTemplate] = useState<PresetPersona | null>(null);
   const [customName, setCustomName] = useState(editingPersona?.name || '');
@@ -316,7 +330,7 @@ export default function AddPersonaModal({
                     <div key={providerName} className="model-provider-group">
                       <div className="provider-header">{providerName}</div>
                       <div className="model-options">
-                        {MODELS_BY_PROVIDER[providerName].map((model) => (
+                        {filterVisibleModels(MODELS_BY_PROVIDER[providerName]).map((model) => (
                           <div
                             key={`${model.provider}:${model.id}`}
                             className={`model-option ${selectedModel === model.id && selectedProvider === model.provider ? 'selected' : ''}`}

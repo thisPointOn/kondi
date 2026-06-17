@@ -5,6 +5,7 @@
 
 import { useState, useCallback } from 'react';
 import type { LedgerEntry, LedgerEntryType, DeliberationRole, Persona } from '../../council/types';
+import { getModelById } from '../../config/models';
 import './LedgerEntryCard.css';
 
 interface LedgerEntryCardProps {
@@ -173,7 +174,7 @@ function generateSummary(content: string, _entryType: LedgerEntryType): string {
 }
 
 /** Small copy-to-clipboard button used for entry cards and code blocks */
-function CopyButton({ text, className = '' }: { text: string; className?: string }) {
+function CopyButton({ text, className = '', label }: { text: string; className?: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -191,7 +192,7 @@ function CopyButton({ text, className = '' }: { text: string; className?: string
       onClick={handleCopy}
       title={copied ? 'Copied!' : 'Copy'}
     >
-      {copied ? '✓' : '⧉'}
+      {copied ? '✓' : '⧉'}{label ? ` ${copied ? 'Copied' : label}` : ''}
     </button>
   );
 }
@@ -206,6 +207,7 @@ export default function LedgerEntryCard({
 }: LedgerEntryCardProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const [showContextDetail, setShowContextDetail] = useState(false);
+  const [showModelDetail, setShowModelDetail] = useState(false);
   const typeStyle = ENTRY_TYPE_STYLES[entry.entryType] || { icon: '📄', label: entry.entryType, colorClass: 'system' };
   const summary = generateSummary(entry.content, entry.entryType);
   const providerColor = getProviderColor(persona?.provider);
@@ -295,102 +297,78 @@ export default function LedgerEntryCard({
 
   return (
     <div
-      className={`ledger-entry-card ledger-entry-${typeStyle.colorClass} ${isCollapsed ? 'collapsed' : ''}`}
+      className={`ledger-entry-card council-comment ledger-entry-${typeStyle.colorClass}`}
       onClick={() => onEntryClick?.(entry)}
       style={borderColor ? { borderLeftColor: borderColor } : undefined}
     >
-      <div className="entry-header">
-        <div className="entry-meta">
-          <button
-            type="button"
-            className="entry-collapse-toggle"
-            onClick={toggleCollapse}
-            aria-label={isCollapsed ? 'Expand' : 'Collapse'}
-          >
-            <span className={`collapse-arrow ${isCollapsed ? 'collapsed' : ''}`}>▼</span>
-          </button>
-          <span className="entry-icon">{typeStyle.icon}</span>
-          <span className="entry-type">{typeStyle.label}</span>
-          {entry.roundNumber !== undefined && (
-            <span className="entry-round">Round {entry.roundNumber}</span>
-          )}
-          <CopyButton text={cleanedEntryContent} className="entry-copy-btn" />
-        </div>
-        <div className="entry-author">
-          {persona && (
-            <>
-              <span
-                className="entry-author-badge"
-                style={{
-                  backgroundColor: (providerColor || persona.color) + '20',
-                  color: providerColor || persona.color,
-                }}
-              >
-                {persona.avatar || '🤖'} {persona.name}
-              </span>
-              {persona.provider && (
-                <span
-                  className="entry-provider-model"
-                  style={{ color: providerColor || undefined }}
-                >
-                  {getProviderLabel(persona.provider)}
-                  {persona.model && <span className="entry-model-id"> / {persona.model}</span>}
-                </span>
-              )}
-            </>
-          )}
-          <span className="entry-role">{ROLE_LABELS[entry.authorRole]}</span>
-          {showTimestamp && (
-            <span className="entry-timestamp">{formatTimestamp(entry.timestamp)}</span>
-          )}
-        </div>
+      <div className="entry-content">
+        {formatContent(entry.content)}
       </div>
 
-      {isCollapsed ? (
-        <div className="entry-summary" onClick={toggleCollapse}>
-          <span className="summary-text">{summary}</span>
-          <span className="expand-hint">Click to expand</span>
-        </div>
-      ) : (
-        <div className="entry-content">
-          {formatContent(entry.content)}
-        </div>
-      )}
+      {/* Footer — same shape as the chat message footer. Labels like the
+          artifact ("output v1") and review outcome live inline here too. */}
+      <div className="msg-footer">
+        <button
+          type="button"
+          className={`entry-role-btn role-${entry.authorRole}`}
+          onClick={(e) => { e.stopPropagation(); setShowModelDetail(v => !v); }}
+          title="Click for model details"
+        >
+          {ROLE_LABELS[entry.authorRole]}
+        </button>
+        {persona && (
+          <button
+            type="button"
+            className="msg-model"
+            style={{ color: providerColor || persona.color }}
+            onClick={(e) => { e.stopPropagation(); setShowModelDetail(v => !v); }}
+            title="Click for model details"
+          >
+            {persona.name}{persona.model ? ` · ${persona.model}` : ''}
+          </button>
+        )}
+        {entry.artifactRefs && entry.artifactRefs.map((ref, i) => (
+          <span key={i} className="entry-artifact-badge">
+            {ref.artifactType}{ref.version !== undefined ? ` v${ref.version}` : ''}
+          </span>
+        ))}
+        {entry.reviewOutcome && (
+          <span className={`entry-outcome entry-outcome-${entry.reviewOutcome}`}>
+            {entry.reviewOutcome === 'accept' && 'Accepted'}
+            {entry.reviewOutcome === 'revise' && 'Revision Requested'}
+            {entry.reviewOutcome === 're_deliberate' && 'Re-deliberation Required'}
+          </span>
+        )}
+        {entry.tokensUsed !== undefined && entry.tokensUsed > 0 && (
+          <span className="msg-tokens">{entry.tokensUsed.toLocaleString()} tokens</span>
+        )}
+        {entry.latencyMs !== undefined && entry.latencyMs > 0 && (
+          <span className="msg-tokens">{(entry.latencyMs / 1000).toFixed(1)}s</span>
+        )}
+        <CopyButton text={cleanedEntryContent} className="msg-action" label="Copy" />
+        {entry.structured?.contextInspection && (
+          <button className="msg-action msg-ctx" onClick={(e) => { e.stopPropagation(); setShowContextDetail(!showContextDetail); }}>
+            {showContextDetail ? '▾ context' : '▸ context'}
+          </button>
+        )}
+      </div>
 
-      {entry.artifactRefs && entry.artifactRefs.length > 0 && (
-        <div className="entry-artifacts">
-          {entry.artifactRefs.map((ref, i) => (
-            <span key={i} className="entry-artifact-badge">
-              {ref.artifactType}
-              {ref.version !== undefined && ` v${ref.version}`}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {entry.reviewOutcome && (
-        <div className={`entry-outcome entry-outcome-${entry.reviewOutcome}`}>
-          {entry.reviewOutcome === 'accept' && 'Accepted'}
-          {entry.reviewOutcome === 'revise' && 'Revision Requested'}
-          {entry.reviewOutcome === 're_deliberate' && 'Re-deliberation Required'}
-        </div>
-      )}
-
-      {(entry.tokensUsed || entry.latencyMs) && (
-        <div className="entry-stats">
-          {entry.tokensUsed !== undefined && (
-            <span>{entry.tokensUsed.toLocaleString()} tokens</span>
-          )}
-          {entry.latencyMs !== undefined && (
-            <span>{(entry.latencyMs / 1000).toFixed(1)}s</span>
-          )}
-          {entry.structured?.contextInspection && (
-            <span className="entry-stats-detail-toggle" onClick={(e) => { e.stopPropagation(); setShowContextDetail(!showContextDetail); }}>
-              {showContextDetail ? '▾ context' : '▸ context'}
-            </span>
-          )}
-        </div>
-      )}
+      {showModelDetail && persona && (() => {
+        const md = persona.model ? getModelById(persona.model) : undefined;
+        return (
+          <div className="entry-model-detail">
+            <div className="emd-row"><span>Role</span><span>{ROLE_LABELS[entry.authorRole]}</span></div>
+            <div className="emd-row"><span>Persona</span><span>{persona.name}</span></div>
+            <div className="emd-row"><span>Model</span><span className="emd-mono">{persona.model || '—'}</span></div>
+            <div className="emd-row"><span>Provider</span><span>{persona.provider}</span></div>
+            {md && <>
+              <div className="emd-row"><span>Context window</span><span>{(md.contextWindow / 1000).toFixed(0)}K tokens</span></div>
+              <div className="emd-row"><span>Cost</span><span>${md.inputCostPer1K}/1K in · ${md.outputCostPer1K}/1K out</span></div>
+              {md.capabilities?.length > 0 && <div className="emd-row"><span>Capabilities</span><span>{md.capabilities.join(', ')}</span></div>}
+            </>}
+          </div>
+        );
+      })()}
 
       {showContextDetail && entry.structured?.contextInspection && (() => {
         const ci = entry.structured.contextInspection as any;

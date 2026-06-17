@@ -734,9 +734,6 @@ const ToolsPanel: FC<ToolsPanelProps> = ({
                 <Plus size={18} />
               </button>
             )}
-            <button className="collapse-panel-btn" onClick={() => setCollapsed(true)} title="Collapse panel">
-              <PanelRightClose size={18} />
-            </button>
           </div>
         </div>
 
@@ -1357,15 +1354,7 @@ const ServerCard: FC<{
   return (
     <div className={`server-card ${hasError ? 'has-error' : ''}`}>
       <div className="server-header">
-        <div
-          className="server-header-main"
-          onClick={() => setExpanded((p) => !p)}
-        >
-          <ChevronRight
-            size={16}
-            className="chevron"
-            style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
-          />
+        <div className="server-header-main">
           <span className="server-icon">
             {server.id === 'kondi-search' ? (
               <Search size={16} className="server-icon-svg builtin" />
@@ -1375,13 +1364,7 @@ const ServerCard: FC<{
               <Globe size={16} className="server-icon-svg remote" />
             )}
           </span>
-          <span
-            className="server-name clickable"
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowDetails((p) => !p);
-            }}
-          >
+          <span className="server-name">
             {server.name}
           </span>
           {/* Error indicator dot - full error shown when expanded */}
@@ -1389,6 +1372,20 @@ const ServerCard: FC<{
             <span className="server-error-dot" title="Connection error - expand for details" />
           )}
         </div>
+        <button
+          className={`server-action-btn ${showDetails ? 'active' : ''}`}
+          onClick={(e) => { e.stopPropagation(); setShowDetails((p) => !p); if (!showDetails) setExpanded(false); }}
+          title="Settings & status"
+        >
+          <Settings2 size={15} />
+        </button>
+        <button
+          className={`server-action-btn ${expanded ? 'active' : ''}`}
+          onClick={(e) => { e.stopPropagation(); setExpanded((p) => !p); if (!expanded) setShowDetails(false); }}
+          title="Available tools"
+        >
+          <Zap size={15} />
+        </button>
         <div
           ref={menuRef}
           className="status-menu-wrapper"

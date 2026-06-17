@@ -19,6 +19,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Message, MCPTool } from '../types/mcp';
 import type { ChatResult } from './llm-router';
 import { parseStreamJsonOutput } from '../pipeline/output-parsers';
+import { captureGeneratedFiles } from './artifactManifest';
 
 interface ClaudeCommandResult {
   success: boolean;
@@ -29,6 +30,10 @@ interface ClaudeCommandResult {
 
 /** Map chatId → CLI sessionId for session resumption */
 const sessionMap = new Map<string, string>();
+/** Map chatId → messages.length the CLI session is in sync with. Lets us
+ *  detect when other models answered in between (the user switched models)
+ *  so we can replay history instead of trusting the CLI's --resume session. */
+const sessionSyncMap = new Map<string, number>();
 
 /** Get the stored CLI session ID for a chat */
 export function getCliSessionId(chatId: string): string | undefined {
@@ -38,6 +43,7 @@ export function getCliSessionId(chatId: string): string | undefined {
 /** Clear the stored CLI session (e.g. when starting a new chat) */
 export function clearCliSession(chatId: string): void {
   sessionMap.delete(chatId);
+  sessionSyncMap.delete(chatId);
 }
 
 /**
@@ -76,6 +82,12 @@ export async function claudeCliChat(
   chatId?: string,
 ): Promise<ChatResult> {
   const existingSessionId = chatId ? sessionMap.get(chatId) : undefined;
+  const lastSyncedLen = chatId ? sessionSyncMap.get(chatId) : undefined;
+  // The CLI's --resume session only contains the turns IT processed. If other
+  // models answered earlier in this chat (the user switched models), that
+  // session is stale — so only resume when the just-added user message is the
+  // single new turn since the last CLI reply. Otherwise replay full history.
+  const resume = !!existingSessionId && lastSyncedLen !== undefined && messages.length === lastSyncedLen + 1;
 
   // For council/pipeline calls (no chatId), clear prior project sessions
   // to prevent context contamination between independent deliberations.
@@ -98,12 +110,12 @@ export async function claudeCliChat(
     args.push('--add-dir', workingDirectory);
   }
 
-  if (existingSessionId) {
+  if (resume && existingSessionId) {
     args.push('--resume', existingSessionId);
   }
 
-  // System prompt only on first message (CLI remembers it across --resume)
-  if (!existingSessionId) {
+  // System prompt only when NOT resuming (a fresh session needs it again)
+  if (!resume) {
     const systemParts = [
       additionalSystemPrompt,
       serverSummary,
@@ -133,10 +145,26 @@ export async function claudeCliChat(
     }
   }
 
-  // When resuming, only send the latest user message.
-  // On first call, send the last user message (earlier history doesn't exist yet).
   const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
-  const stdinInput = lastUserMessage?.content || '';
+  let stdinInput: string;
+  if (resume) {
+    // The CLI session already has the prior turns — send only the new message.
+    stdinInput = lastUserMessage?.content || '';
+  } else {
+    // Fresh session: replay the full conversation so context is fluid across
+    // model switches (the CLI session doesn't contain other models' turns).
+    const turns = messages.filter(m => m.role === 'user' || m.role === 'assistant');
+    if (turns.length > 1) {
+      const history = turns.slice(0, -1)
+        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+        .join('\n\n');
+      stdinInput =
+        `Here is the conversation so far in this chat (it may include replies from other models):\n\n` +
+        `${history}\n\n----\n\nUser: ${lastUserMessage?.content || ''}`;
+    } else {
+      stdinInput = lastUserMessage?.content || '';
+    }
+  }
 
   console.log(`[ClaudeCliClient] model=${model}, resume=${existingSessionId || 'new'}, stdin=${stdinInput.length} chars`);
 
@@ -158,9 +186,19 @@ export async function claudeCliChat(
     throw new Error(errorMsg);
   }
 
-  // Store session ID for future --resume calls
+  // Store session ID for future --resume calls, and record the message count
+  // this session is now in sync with (+1 for the assistant reply the chat
+  // appends after we return). A later call with exactly one more message is
+  // a normal follow-up (resume); more than that means another model answered.
   if (result.session_id && chatId) {
     sessionMap.set(chatId, result.session_id);
+    sessionSyncMap.set(chatId, messages.length + 1);
+  }
+
+  // Capture files this agent wrote during the run (it uses its own tools, not
+  // Kondi's write_file) so they show up as artifacts.
+  if (workingDirectory) {
+    void captureGeneratedFiles(workingDirectory, startTime, 'cli-agent', model);
   }
 
   // Parse the stream-json output

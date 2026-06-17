@@ -678,6 +678,24 @@
   min-width: 0;
 }
 
+/* Two consolidated actions per server: Settings & status, Available tools. */
+.server-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  color: var(--text-secondary, #999);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.server-action-btn:hover { color: var(--text-primary, #e5e5e5); border-color: var(--text-secondary, #999); }
+.server-action-btn.active { color: #818cf8; border-color: #818cf8; background: rgba(99, 102, 241, 0.12); }
+
 .server-header:hover {
   background: #252525;
 }

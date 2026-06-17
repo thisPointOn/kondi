@@ -12,30 +12,30 @@
 .new-chat-dialog {
   background: #1a1a1a;
   border: 1px solid #333;
-  border-radius: 12px;
-  padding: 24px;
+  border-radius: 10px;
+  padding: 16px;
   width: 100%;
-  max-width: 480px;
+  max-width: 440px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
 }
 
 .new-chat-dialog h3 {
-  margin: 0 0 4px;
-  font-size: 16px;
+  margin: 0 0 3px;
+  font-size: 14px;
   font-weight: 600;
   color: #e0e0e0;
 }
 
 .new-chat-hint {
-  margin: 0 0 16px;
-  font-size: 12.5px;
+  margin: 0 0 12px;
+  font-size: 12px;
   color: #888;
 }
 
 .new-chat-dir-row {
   display: flex;
-  gap: 8px;
-  margin-bottom: 20px;
+  gap: 6px;
+  margin-bottom: 14px;
 }
 
 .new-chat-dir-input {
@@ -43,8 +43,8 @@
   background: #0d0d0d;
   border: 1px solid #333;
   border-radius: 6px;
-  padding: 8px 12px;
-  font-size: 13px;
+  padding: 6px 10px;
+  font-size: 12px;
   font-family: 'SF Mono', 'Fira Code', monospace;
   color: #e0e0e0;
   outline: none;
@@ -61,8 +61,8 @@
   background: #252525;
   border: 1px solid #333;
   border-radius: 6px;
-  padding: 8px 14px;
-  font-size: 12.5px;
+  padding: 6px 10px;
+  font-size: 12px;
   color: #ccc;
   cursor: pointer;
   white-space: nowrap;
@@ -83,8 +83,8 @@
   background: transparent;
   border: 1px solid #333;
   border-radius: 6px;
-  padding: 8px 16px;
-  font-size: 13px;
+  padding: 5px 12px;
+  font-size: 12px;
   color: #999;
   cursor: pointer;
 }
@@ -98,8 +98,8 @@
   background: #2563eb;
   border: none;
   border-radius: 6px;
-  padding: 8px 20px;
-  font-size: 13px;
+  padding: 5px 14px;
+  font-size: 12px;
   font-weight: 500;
   color: #fff;
   cursor: pointer;
