@@ -2406,8 +2406,15 @@ export class DeliberationOrchestrator {
         this.config.onAgentThinkingEnd?.(persona);
 
         const errMsg = error instanceof Error ? error.message : String(error);
-        const isTransient = /\b(429|529|rate.limit|overloaded|too many requests)\b/i.test(errMsg);
-        const isTimeout = /\btimed?\s*out\b/i.test(errMsg);
+        // Cause chains (Node fetch wraps the real network error in error.cause).
+        const causeMsg = (error as any)?.cause?.message || (error as any)?.cause?.code || '';
+        const full = `${errMsg} ${causeMsg}`;
+        // Transient = worth retrying: rate limits, server 5xx, and network blips.
+        // A single "fetch failed" must NOT kill the whole council (durability).
+        const isTransient =
+          /\b(429|500|502|503|504|529)\b/.test(full) ||
+          /rate.?limit|overloaded|too many requests|fetch failed|networkerror|network error|socket hang up|connection (reset|refused|closed|error)|econnreset|etimedout|econnrefused|enotfound|eai_again|epipe|und_err|terminated/i.test(full);
+        const isTimeout = /\btimed?\s*out\b/i.test(full);
 
         // Timeout: retry once, then fail
         if (isTimeout && attempt === 0) {
