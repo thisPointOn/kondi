@@ -23,3 +23,6 @@ mcp-connect-mvp/integrations/content/
 mcp-connect-mvp/integrations/LAUNCH-PLAN.md
 mcp-connect-mvp/integrations/NEXT-STEPS.md
 mcp-connect-mvp/integrations/.generated-posts/
+
+# Test scaffolding (labeled TEST, local only)
+TEST-runs/
