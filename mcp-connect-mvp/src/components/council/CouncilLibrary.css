@@ -30,6 +30,30 @@
   color: var(--text-secondary, #999);
 }
 
+.header-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.import-council-btn {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.75rem;
+  background: transparent;
+  color: var(--text-secondary, #999);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.import-council-btn:hover {
+  background: #1f1f1f;
+  color: #fff;
+  border-color: var(--text-secondary, #999);
+}
+
 .create-council-btn {
   padding: 0.3rem 0.7rem;
   font-size: 0.75rem;

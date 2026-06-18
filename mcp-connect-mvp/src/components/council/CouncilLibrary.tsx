@@ -30,6 +30,7 @@ export default function CouncilLibrary({
 }: CouncilLibraryProps) {
   const [councils, setCouncils] = useState<Council[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [newCouncilName, setNewCouncilName] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -187,9 +188,14 @@ export default function CouncilLibrary({
           <h2>Council</h2>
           <span className="header-subtitle">Multi-Model Deliberation</span>
         </div>
-        <button className="create-council-btn" onClick={() => handleCreate()}>
-          + New Council
-        </button>
+        <div className="header-actions">
+          <button className="import-council-btn" onClick={() => setShowImportModal(true)}>
+            Import CLI run
+          </button>
+          <button className="create-council-btn" onClick={() => handleCreate()}>
+            + New Council
+          </button>
+        </div>
       </div>
 
       <div className="council-library-search">
@@ -387,6 +393,16 @@ export default function CouncilLibrary({
             </div>
           </div>
         </div>
+      )}
+
+      {showImportModal && (
+        <CouncilImportModal
+          onClose={() => setShowImportModal(false)}
+          onImported={(councilId) => {
+            setShowImportModal(false);
+            onCouncilSelect(councilId);
+          }}
+        />
       )}
     </div>
   );
