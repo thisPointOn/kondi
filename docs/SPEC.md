@@ -314,6 +314,7 @@ Entry point: `npx tsx cli/run-pipeline.ts <pipeline.json> [options]`
 3. **`--print` requires `--verbose`** when using `--output-format stream-json`
 4. **Codex resume**: `codex exec resume <thread_id>` — no `--sandbox`/`--full-auto` flags on resume
 5. **Per-persona session persistence** via `personaSessionIds` Map (cleared on new council/step)
+6. **Write containment is enforced by a PreToolUse hook, NOT by Claude Code permission flags.** Empirically (headless `--print`): `--permission-mode acceptEdits` still writes files outside the working dir, absolute `--allowedTools "Write(//abs/**)"` rules silently fail to match, and `bypassPermissions` disables confinement entirely — a worker escaped and wrote into the parent git repo's `docs/`. The fix (`src/services/cli-workdir-guard.ts`, `buildWorkdirGuardSettings()`) installs a `PreToolUse` hook via `--settings` (matcher `Write|Edit|MultiEdit|NotebookEdit|Bash`) that resolves the real target path and **denies any write whose resolved path is outside the working dir** (root = hook payload `cwd`, fallback `KONDI_WORKDIR`); Bash redirects/mutations to absolute paths outside the dir are blocked too (reads allowed). The hook is a self-contained base64 `node -e` command (no on-disk file → works from the webview). Installed by BOTH `cli/claude-caller.ts` and `src/services/claudeCliClient.ts`. Workers keep `bypassPermissions` + full tools; they just cannot escape. The system-prompt "working directory override" text is advisory only.
 
 ### Output
 - Execution report: `<working-dir>/kondi-execution-report.json`
@@ -428,6 +429,8 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 11. **Coding step worker describes instead of implementing**: Worker prompts said "text-only agent" even with `writePermissions=true`. Fixed: all worker/manager prompts check write permissions.
 12. **Provider validation no retry**: Fixed: auto-retry after 15s, dismissible yellow banner.
 13. **CLI resume missing `--print`**: Without `--print`, CLI runs interactive mode causing tool rejections. Fixed: always pass `--print`.
+14. **Council workers escaped the working directory**: With `bypassPermissions`, a Claude CLI worker resolved a "docs/" directive against the parent git repo and wrote into the real project `docs/`, outside its `directoryConstrained` working dir. Claude Code's permission flags do not confine writes headlessly (see §7 gotcha 6). Fixed: a `PreToolUse` hook (`src/services/cli-workdir-guard.ts`) installed on both CLI and webview claude paths denies any write resolving outside the working dir.
+15. **Text-council artifacts wrapped in file-creation junk**: Weak workers (e.g. gemini) obey the manager's "create a file" directive regardless of worker-prompt overrides, emitting `write_file("path", """…""")` dumps + a "COMPLETION SUMMARY" block around the real answer. Fixed: `sanitizeDeliverable()` (deliberation-orchestrator.ts) extracts the content from XML/triple-quoted/quoted `write_file(...)` forms and strips the summary block — deterministic, model-independent, applied on the no-write `createOutput`/`reviseWork` path.
 
 ---
 
