@@ -899,10 +899,11 @@ export class DeliberationOrchestrator {
     const evalContext = this.buildManagerEvalContext(council);
     const pendingPatches = getPendingPatches(council.id);
     const expectedOutput = council.deliberation?.expectedOutput;
+    const originalTask = (council.deliberation?.savedProblem || council.topic || '').trim();
 
     // Build prompts
     const systemPrompt = manager.predisposition.systemPrompt;
-    const userMessage = buildManagerEvaluationPrompt(evalContext, pendingPatches, expectedOutput);
+    const userMessage = buildManagerEvaluationPrompt(evalContext, pendingPatches, expectedOutput, originalTask);
 
     const response = await this.invokeAgentSafe(
       { personaId: manager.id, systemPrompt, userMessage },
@@ -1164,7 +1165,7 @@ export class DeliberationOrchestrator {
     // Build prompts
     const systemPrompt = manager.predisposition.systemPrompt;
     const stepType = council.deliberation?.stepType;
-    const userMessage = buildManagerDecisionPrompt(fullContext, decisionCriteria, expectedOutput, stepType);
+    const userMessage = buildManagerDecisionPrompt(fullContext, decisionCriteria, expectedOutput, stepType, (council.deliberation?.savedProblem || council.topic || '').trim());
 
     const response = await this.invokeAgentSafe(
       { personaId: manager.id, systemPrompt, userMessage },

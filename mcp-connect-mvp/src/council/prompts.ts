@@ -528,7 +528,8 @@ ${rawProblem}`;
 export function buildManagerEvaluationPrompt(
   ledgerContext: string,
   pendingPatches: ContextPatch[],
-  expectedOutput?: string
+  expectedOutput?: string,
+  originalTask?: string
 ): string {
   const patchesSection = pendingPatches.length > 0
     ? `\n---\n\nPENDING CONTEXT PROPOSALS:\n${pendingPatches.map((p) =>
@@ -540,26 +541,37 @@ export function buildManagerEvaluationPrompt(
     ? `\n---\n\nEXPECTED OUTPUT (the final deliverable must satisfy this):\n${expectedOutput}`
     : '';
 
-  return `${ledgerContext}
+  // Re-anchor to the objective EVERY evaluation — this is how the manager
+  // guarantees focus and catches drift (compare the deliberation against THIS).
+  const objectiveSection = originalTask
+    ? `THE OBJECTIVE — the one thing this council must deliver (re-read it now and judge everything against it):\n"""\n${originalTask}\n"""\n\n---\n`
+    : '';
+
+  return `${objectiveSection}${ledgerContext}
 ${patchesSection}
 ${expectedOutputSection}
 
 ---
 
-Evaluate this round of deliberation.
+Evaluate this round of deliberation. First, restate the OBJECTIVE above in one sentence, then judge whether the consultants are actually producing THAT — if they have drifted into process, missing-information, or an unrelated problem, you MUST REDIRECT them back to the objective.
 
 YOUR RESPONSIBILITIES AS MANAGER:
 1. Keep the conversation focused on the task and expected output
 2. If the discussion is getting derailed or fixated on irrelevant topics, use REDIRECT
-3. Ensure progress is being made toward a solution that meets the expected output
-4. Move the conversation forward productively
+3. Match the DEPTH to the task: give a hard problem the rounds it needs, but recognize when
+   the answer is already complete and stop there. Quality is doing exactly as much as the
+   task requires — neither cutting depth short nor padding it with needless rounds.
 
 Decide:
-1. CONTINUE — positions are still evolving, run another round
-   Include a question to focus and advance the discussion.
-2. DECIDE — enough clarity exists to make a decision that will meet the expected output
-3. REDIRECT — consultants are off-track, unfocused, or fixated on irrelevant details.
-   Use this to get the conversation back on track with a specific refocusing question.
+1. CONTINUE — choose this ONLY when there are genuinely unresolved questions, materially
+   conflicting positions, or quality gaps that another round would actually close. Include a
+   specific question that advances the work. Do NOT continue just to deliberate more.
+2. DECIDE — choose this AS SOON AS the consultants have produced a complete, correct answer
+   that fully satisfies the task and the expected output. If a single round already did the
+   job, DECIDE now and declare the work ready — extra rounds add nothing.
+3. REDIRECT — consultants are off-track, have not addressed the ACTUAL task, or are debating
+   process/missing-information instead of producing the answer. Refocus them on delivering
+   the requested result directly.
 
 Respond as JSON:
 {
@@ -581,8 +593,12 @@ export function buildManagerDecisionPrompt(
   ledgerContext: string,
   decisionCriteria?: string[],
   expectedOutput?: string,
-  stepType?: CouncilStepType
+  stepType?: CouncilStepType,
+  originalTask?: string
 ): string {
+  const objectiveSection = originalTask
+    ? `THE OBJECTIVE — your decision and the worker's deliverable must directly fulfill THIS, nothing else:\n"""\n${originalTask}\n"""\n\n---\n`
+    : '';
   const criteriaBlock = decisionCriteria?.length
     ? `\n---\n\nDECISION CRITERIA (evaluate against these):\n${decisionCriteria.map((c) => `- ${c}`).join('\n')}`
     : '';
@@ -608,7 +624,7 @@ The worker must NOT modify any source code. The worker should read the codebase 
     ? `\n\nCRITICAL: This is a PLANNING step. Your decision must direct the worker to produce a DETAILED PLAN DOCUMENT — NOT code or implementation. The worker output should be a comprehensive specification covering architecture, dependencies, step-by-step implementation instructions, data flows, edge cases, and acceptance criteria. Think of it as a product/engineering spec that another developer could follow to implement the feature without ambiguity. Do NOT ask the worker to write code, create files, or implement anything.`
     : '';
 
-  return `${ledgerContext}
+  return `${objectiveSection}${ledgerContext}
 ${criteriaBlock}
 ${expectedOutputBlock}
 
