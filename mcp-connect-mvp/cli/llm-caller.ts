@@ -257,7 +257,11 @@ async function callGeminiAPI(
  */
 export async function callLLM(opts: CallLLMOpts): Promise<CallerResult> {
   let provider = opts.provider || 'anthropic-cli';
-  let model = opts.model || DEFAULT_MODELS[provider] || 'claude-sonnet-4-5-20250929';
+  // Provider-aware fallback: openai-cli's default is '' (let codex pick its
+  // account model) — it must NOT fall through to a Claude model, which codex
+  // rejects ("model is not supported when using Codex with a ChatGPT account").
+  const modelFallback = (p: string) => (p.startsWith('anthropic') ? 'claude-sonnet-4-5-20250929' : '');
+  let model = opts.model || DEFAULT_MODELS[provider] || modelFallback(provider);
 
   // Smart Router: resolve `route:<profile>` to a concrete provider+model.
   if (isRoutedModel(provider, opts.model)) {
@@ -265,7 +269,7 @@ export async function callLLM(opts: CallLLMOpts): Promise<CallerResult> {
     const resolved = await resolveCliRoute(profileName, opts.routePhase || 'discuss', opts.userMessage);
     console.log(`[CLI] route:${profileName} (${opts.routePhase || 'discuss'}) → ${resolved.provider}/${resolved.model}`);
     provider = resolved.provider;
-    model = resolved.model || DEFAULT_MODELS[provider] || 'claude-sonnet-4-5-20250929';
+    model = resolved.model || DEFAULT_MODELS[provider] || modelFallback(provider);
   }
 
   // CLI binary providers

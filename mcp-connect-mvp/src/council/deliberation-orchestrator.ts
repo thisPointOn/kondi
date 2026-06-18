@@ -117,6 +117,11 @@ export type AgentInvoker = (invocation: AgentInvocation, persona: Persona) => Pr
 
 export interface OrchestratorConfig {
   invokeAgent: AgentInvoker;
+  /** Whether this runtime can actually EXECUTE tools for a persona's provider.
+   *  Default true (app, where API clients run tool loops). The headless CLI
+   *  runner returns true only for the claude/codex binaries so API-provider
+   *  personas don't get advertised tools they can't use (→ hallucination). */
+  canUseTools?: (persona: Persona) => boolean;
   onPhaseChange?: (from: DeliberationPhase, to: DeliberationPhase) => void;
   onEntryAdded?: (entry: LedgerEntry) => void;
   onError?: (error: Error, context: string) => void;
@@ -1355,11 +1360,27 @@ export class DeliberationOrchestrator {
 
     const userMessage = buildWorkerExecutionPrompt(directive.content, workerPermissions, stepType);
 
-    const response = await this.invokeAgentSafe(
+    let response = await this.invokeAgentSafe(
       { personaId: worker.id, systemPrompt, userMessage },
       worker,
       'execution'
     );
+
+    // Output guarantee: the worker MUST return a non-empty deliverable. If it
+    // returns nothing (e.g. only a tool call, or blank), retry once with an
+    // explicit demand, then fail loudly rather than writing an empty output.md.
+    if (!response.content || response.content.trim().length < 20) {
+      console.warn('[Orchestrator] Worker returned empty/short output — retrying once.');
+      const retryMessage = `${userMessage}\n\n[RETRY — YOUR PREVIOUS RESPONSE WAS EMPTY] You returned no usable content. Output the COMPLETE deliverable now as plain text in your reply. Do not call tools, do not return an empty message, and do not just describe what you would do — produce the actual result.`;
+      response = await this.invokeAgentSafe(
+        { personaId: worker.id, systemPrompt, userMessage: retryMessage },
+        worker,
+        'execution'
+      );
+    }
+    if (!response.content || !response.content.trim()) {
+      throw new Error('Worker produced no output after a retry — the deliverable could not be generated.');
+    }
 
     // Create output artifact
     const output = createOutput(council.id, response.content, directive.id);
@@ -2233,50 +2254,57 @@ export class DeliberationOrchestrator {
     const readOnlyToolPhases = ['independent_analysis', 'deliberation_response', 'code_review'];
     const managerToolPhases = ['problem_framing', 'directive', 'review'];
 
-    if (workerToolPhases.includes(context)) {
-      // Planning workers get limited tools (no Edit, Bash, Grep — prevents code writing)
-      // Coding/other workers get full tools
-      if (stepType === 'code_planning') {
-        invocation = { ...invocation, allowedTools: PLAN_TOOLS };
-      } else {
-        invocation = { ...invocation, allowedTools: FULL_TOOLS };
-      }
-    } else if (readOnlyToolPhases.includes(context)) {
-      invocation = { ...invocation, allowedTools: READ_ONLY_TOOLS };
-    } else if (managerToolPhases.includes(context)) {
-      invocation = { ...invocation, allowedTools: MANAGER_TOOLS };
-    } else if (!invocation.skipTools) {
-      invocation = { ...invocation, skipTools: true };
-    }
+    const roleAssignment = council?.deliberation?.roleAssignments
+      ?.find(r => r.personaId === persona.id);
 
-    // Compute effective allowed servers (intersection of step + persona)
+    // Effective MCP servers (intersection of step + persona), honoring role override.
     const stepServers = council?.deliberation?.allowedServerIds;
-    const personaServers = persona.allowedServerIds;
+    const personaServers = roleAssignment?.allowedServerIds ?? persona.allowedServerIds;
     let effectiveServers: string[] | undefined;
     if (stepServers && personaServers) {
       effectiveServers = stepServers.filter(id => personaServers.includes(id));
     } else {
       effectiveServers = personaServers || stepServers;
     }
-    if (effectiveServers) {
-      invocation = { ...invocation, allowedServerIds: effectiveServers };
-    }
 
-    // Apply per-persona tool access overrides from role assignment
-    const roleAssignment = council?.deliberation?.roleAssignments
-      ?.find(r => r.personaId === persona.id);
+    // Tools are OPT-IN per role config (prevents managers/consultants from
+    // "exploring"/"searching" and hallucinating tool results → off-task drift).
+    // A role gets tools only when it explicitly opts in (toolAccess === 'full'),
+    // a worker is granted write permissions, or it has MCP servers assigned.
+    const writePermissions = !!roleAssignment?.writePermissions;
+    const configGrantsTools =
+      roleAssignment?.toolAccess === 'full' ||
+      (workerToolPhases.includes(context) && writePermissions) ||
+      (!!effectiveServers && effectiveServers.length > 0);
+    // The runtime must also be able to EXECUTE tools for this provider (e.g. the
+    // headless runner only runs tools via the claude/codex binaries).
+    const runtimeCanExecute = this.config.canUseTools ? this.config.canUseTools(persona) : true;
+    const toolsOn = roleAssignment?.toolAccess !== 'none' && configGrantsTools && runtimeCanExecute;
 
-    console.log(`[Orchestrator:ToolAccess] persona=${persona.name} context=${context} roleAssignment.toolAccess=${roleAssignment?.toolAccess} roleAssignment.found=${!!roleAssignment} totalAssignments=${council?.deliberation?.roleAssignments?.length}`);
+    console.log(`[Orchestrator:ToolAccess] persona=${persona.name} context=${context} toolAccess=${roleAssignment?.toolAccess} write=${writePermissions} grants=${configGrantsTools} runtimeOK=${runtimeCanExecute} → toolsOn=${toolsOn}`);
 
-    if (roleAssignment?.toolAccess === 'none') {
-      invocation = { ...invocation, skipTools: true };
-    } else if (roleAssignment?.toolAccess === 'full') {
-      const { skipTools: _, ...rest } = invocation;
-      invocation = rest as AgentInvocation;
-    }
-
-    if (roleAssignment?.allowedServerIds) {
-      invocation = { ...invocation, allowedServerIds: roleAssignment.allowedServerIds };
+    if (toolsOn) {
+      let allowedTools: string[];
+      if (workerToolPhases.includes(context)) {
+        allowedTools = stepType === 'code_planning' ? PLAN_TOOLS : FULL_TOOLS;
+      } else if (readOnlyToolPhases.includes(context)) {
+        allowedTools = READ_ONLY_TOOLS;
+      } else if (managerToolPhases.includes(context)) {
+        allowedTools = MANAGER_TOOLS;
+      } else {
+        allowedTools = BUILTIN_TOOLS;
+      }
+      const { skipTools: _drop, ...rest } = invocation;
+      invocation = { ...rest, allowedTools, ...(effectiveServers ? { allowedServerIds: effectiveServers } : {}) } as AgentInvocation;
+    } else {
+      // No tools: drop tool advertising and hard-override any tool-encouraging
+      // language in the already-built prompt so the model answers directly.
+      invocation = {
+        ...invocation,
+        skipTools: true,
+        allowedTools: undefined,
+        systemPrompt: `${invocation.systemPrompt || ''}\n\n[TOOL POLICY] You have NO tools in this run. Do NOT call or simulate read_file, list_directory, run_command, web search, or any other tool, and do NOT invent their results. Work only from the information already provided and your own knowledge, and answer the task directly. Do not assume a codebase or files exist unless their contents are quoted above.`.trim(),
+      };
     }
 
     // Inject brevity instruction if maxWordsPerResponse is configured

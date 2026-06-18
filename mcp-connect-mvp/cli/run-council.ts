@@ -316,6 +316,14 @@ async function main() {
   const rawProblem = task!;
   const effectiveWorkingDir = workingDir || process.cwd();
 
+  // Durability: ensure the working directory exists before the orchestrator
+  // spawns CLI tools with cwd=workingDir. Otherwise the spawn fails with a
+  // misleading "spawn claude ENOENT" (ENOENT = missing cwd, not missing binary).
+  if (workingDir && !fs.existsSync(workingDir)) {
+    fs.mkdirSync(workingDir, { recursive: true });
+    log(C.dim, 'Setup', `Created working directory: ${workingDir}`);
+  }
+
   // ── Dry run ──
   if (args.dryRun) {
     printCouncilStructure(council, councilType, rawProblem, workingDir);
@@ -358,6 +366,10 @@ async function main() {
 
   const callbacks = {
     invokeAgent,
+    // Headless runner executes tools only via the claude/codex binaries. API
+    // providers (deepseek/gemini/*-api) get no tool loop here, so don't advertise
+    // tools to them — otherwise they hallucinate tool results and drift off-task.
+    canUseTools: (p: Persona) => p.provider === 'anthropic-cli' || p.provider === 'openai-cli',
     onPhaseChange: (from: string, to: string) => log(C.yellow, 'Phase', `${from} → ${to}`),
     onError: (err: Error, ctx: string) => log(C.red, 'Error', `${ctx}: ${err.message}`),
     onAgentThinkingStart: (_persona: Persona) => {},

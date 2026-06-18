@@ -496,15 +496,20 @@ Rules:
 /**
  * Manager frames the problem - Section 9.1
  */
-export function buildManagerFramingPrompt(rawProblem: string): string {
-  return `You are framing a problem for a team of consultants who will analyze it
-from different perspectives, then debate approaches.
-
-You have read_file, list_directory, and run_command tools available. USE THEM to examine the
+export function buildManagerFramingPrompt(rawProblem: string, toolsAvailable: boolean = true): string {
+  const toolGuidance = toolsAvailable
+    ? `You have read_file, list_directory, and run_command tools available. USE THEM to examine the
 project structure and existing code before framing the problem. Understanding
 what already exists is critical for framing an accurate problem statement.
 DO NOT modify any files. Use run_command only for read-only commands (ls, find, cat) or
-package installation (npm install, pip install) if prerequisites are needed.
+package installation (npm install, pip install) if prerequisites are needed.`
+    : `You have NO tools — do not attempt to read files, list directories, run commands, or
+search the web, and do not invent their results. Frame the problem using ONLY the task text
+below and your own knowledge. Answer the task as stated; do not assume a codebase exists.`;
+  return `You are framing a problem for a team of consultants who will analyze it
+from different perspectives, then debate approaches.
+
+${toolGuidance}
 
 Write a structured problem statement that includes:
 - CONTEXT: What background does the team need?

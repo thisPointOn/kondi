@@ -102,13 +102,27 @@ export async function callCodex(opts: {
       }
 
       // Check for model/API errors in the JSONL stream before parsing
-      // (codex may exit 0 but include error events)
-      const errorMatch = rawStdout.match(/"type":"error","message":"(.*?)"/);
-      if (errorMatch && !rawStdout.includes('"type":"agent_message"')) {
-        let errMsg = errorMatch[1];
-        try { errMsg = JSON.parse(`"${errMsg}"`); } catch { /* use raw */ }
-        reject(new Error(`Codex error: ${errMsg}`));
-        return;
+      // (codex may exit 0 but include error events). Parse each JSONL line
+      // properly so error messages that themselves contain escaped JSON aren't
+      // truncated (the old naive regex stopped at the first escaped quote).
+      const hasAgentMessage = rawStdout.includes('"type":"agent_message"');
+      if (!hasAgentMessage) {
+        let errMsg: string | null = null;
+        for (const line of rawStdout.split('\n')) {
+          const t = line.trim();
+          if (!t.startsWith('{')) continue;
+          try {
+            const j = JSON.parse(t);
+            const ev = j?.msg ?? j;
+            if (ev?.type === 'error') {
+              errMsg = typeof ev.message === 'string' ? ev.message : (ev.error ?? JSON.stringify(ev));
+            }
+          } catch { /* not JSON, skip */ }
+        }
+        if (errMsg) {
+          reject(new Error(`Codex error: ${errMsg}`));
+          return;
+        }
       }
 
       const { text, tokensUsed, sessionId } = parseCodexJsonOutput(rawStdout);
