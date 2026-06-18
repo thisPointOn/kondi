@@ -180,23 +180,43 @@ export function sanitizeDeliverable(raw: string): string {
   if (!raw) return raw;
   let t = raw;
 
-  // 1. If the worker "wrote a file", the file content is the real deliverable.
-  const wf = t.match(/<write_file>[\s\S]*?<content>\s*([\s\S]*?)\s*<\/content>[\s\S]*?<\/write_file>/i);
-  if (wf && wf[1].trim().length > 30) {
-    t = wf[1];
+  // 1. If the worker "wrote a file", the file content IS the real deliverable —
+  // extract it from however the model framed the (hallucinated) write call.
+  const extractors: RegExp[] = [
+    // XML-ish: <write_file>…<content>X</content>…</write_file>
+    /<write_file>[\s\S]*?<content>\s*([\s\S]*?)\s*<\/content>[\s\S]*?<\/write_file>/i,
+    // Python/JS call: write_file("path", """X""")  or  write_file('path', '''X''')
+    /\bwrite_file\s*\([^,]*,\s*(?:"""|''')([\s\S]*?)(?:"""|''')\s*\)/i,
+    // write_file("path", "X")  /  write_file('path', 'X')
+    /\bwrite_file\s*\([^,]*,\s*"((?:[^"\\]|\\.)*)"\s*\)/i,
+    /\bwrite_file\s*\([^,]*,\s*'((?:[^'\\]|\\.)*)'\s*\)/i,
+  ];
+  let extracted = '';
+  for (const re of extractors) {
+    const m = t.match(re);
+    if (m && m[1].trim().length > extracted.trim().length) extracted = m[1];
+  }
+  if (extracted.trim().length > 40) {
+    // Unescape common JS/Python string escapes when the content came from a quoted call.
+    t = extracted.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"').replace(/\\'/g, "'");
   } else {
     // Otherwise just drop stray pseudo-tool tags, keep surrounding prose.
     t = t.replace(/<\/?(write_file|read_file|run_command|list_directory|edit_file|bash|path|content|command)>/gi, '');
   }
 
-  // 2. Drop tool-apology / file-bookkeeping meta lines.
+  // 2. Drop a trailing "## COMPLETION SUMMARY" / file-bookkeeping block entirely —
+  // it is process narration, not part of the deliverable.
+  t = t.replace(/\n#+\s*COMPLETION SUMMARY[\s\S]*$/i, '\n');
+
+  // 3. Drop tool-apology / file-bookkeeping / "I will now create" meta lines.
   t = t.split('\n').filter((line) => !new RegExp(
     '^\\s*(' +
     "I (cannot|can't|can not|don't have|do not have|am unable to) (call|use|access)|" +
     'No tools? (are|is)? ?available|Since I have no tools|Because I have no tools|' +
     'the file (already )?exists|If you (can )?confirm|Otherwise,? the file|' +
-    "I'll (start by|first)|Let me (first|start)|" +
-    '\\*\\*Files (created|modified):\\*\\*|- /[\\w./-]+ (—|-) ' +
+    "I'll (start by|first)|Let me (first|start)|I will now (create|write)|" +
+    '\\*\\*(Status|Files? (created|modified)|What was (built|revised)|Known issues|Deliverable):\\*\\*|' +
+    '- /[\\w./-]+ (—|-) ' +
     ')', 'i').test(line)).join('\n');
 
   return t.replace(/\n{3,}/g, '\n\n').trim() || raw.trim();

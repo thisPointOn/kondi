@@ -8,6 +8,7 @@ import type { Council } from '../../council/types';
 import { councilStore, suggestedCombinations, getTemplateByName, createPersonaFromTemplate, duplicateCouncil } from '../../council';
 import { createCouncilFromSetup } from '../../council/factory';
 import { requestCouncilSetup } from './councilSetupSignal';
+import CouncilImportModal from './CouncilImportModal';
 import { resolveDefaultModel } from '../../config/models';
 import type { ConfiguredProviders } from '../../hooks/useProviderConfig';
 import './CouncilLibrary.css';

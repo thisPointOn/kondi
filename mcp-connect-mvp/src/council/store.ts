@@ -992,6 +992,11 @@ export class CouncilStore {
     this.listeners.forEach((listener) => listener());
   }
 
+  /** Public refresh — for callers that wrote council data directly (e.g. CLI import). */
+  touch(): void {
+    this.notify();
+  }
+
   getAll = getAllCouncils;
   get = getCouncil;
   getWorkflow = getWorkflowCouncils;

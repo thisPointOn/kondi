@@ -1,0 +1,20 @@
+.council-import-modal {
+  width: 100%; max-width: 560px;
+  background: #141414; border: 1px solid var(--border-color, #333);
+  border-radius: 12px; padding: 1rem 1.2rem;
+}
+.ci-head { display: flex; align-items: center; justify-content: space-between; }
+.ci-head h2 { margin: 0; font-size: 1.05rem; font-weight: 600; color: #fff; }
+.ci-sub { font-size: 0.78rem; color: #9ca3af; margin: 0.4rem 0 0.8rem; line-height: 1.45; }
+.ci-sub code { background: #1f1f1f; border: 1px solid #333; border-radius: 3px; padding: 0 4px; }
+.ci-error { font-size: 0.78rem; color: #f87171; margin-bottom: 0.6rem; }
+.ci-empty { font-size: 0.82rem; color: #6b7280; padding: 1rem 0; text-align: center; }
+.ci-list { display: flex; flex-direction: column; gap: 0.4rem; max-height: 50vh; overflow-y: auto; }
+.ci-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.6rem; background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; }
+.ci-info { flex: 1; min-width: 0; }
+.ci-name { font-size: 0.84rem; font-weight: 600; color: #f1f1f3; display: flex; align-items: center; gap: 0.4rem; }
+.ci-tag { font-size: 0.6rem; padding: 0.05rem 0.35rem; border-radius: 4px; background: rgba(148,163,184,0.18); color: #94a3b8; }
+.ci-meta { font-size: 0.7rem; color: #6b7280; margin-top: 0.15rem; }
+.ci-import-btn { flex-shrink: 0; padding: 0.3rem 0.8rem; font-size: 0.75rem; background: #1f1f1f; color: #fff; border: 1px solid #333; border-radius: 6px; cursor: pointer; }
+.ci-import-btn:hover:not(:disabled) { background: #2a2a2a; border-color: #818cf8; }
+.ci-import-btn:disabled { opacity: 0.5; cursor: default; }

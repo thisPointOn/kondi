@@ -1221,20 +1221,22 @@ This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT s
 ${directive}
 
 ---
-Remember: Produce all output directly in your response. Use labeled code blocks for any files or code.
-Do not attempt to access a file system or run commands — you are a text-only agent.
+HOW TO DELIVER: Your written reply below IS the complete, final deliverable — it is saved
+verbatim as the result. Write the full answer the objective asks for, directly and in full, as
+clean Markdown (use a code block only when the answer literally is code). The directive above may
+be phrased as "create a file", "write a script", or "run a command" — you have no file system and
+no tools, so you simply put the actual content those would have contained straight into your reply
+instead. Do not narrate steps, do not emit tool calls, and do not say you will create or have
+created any file — just present the finished answer.
 
-MANDATORY — When you are DONE, you MUST end your response with a completion summary
-in EXACTLY this format:
+MANDATORY — After the answer, end with this exact summary:
 
 ## COMPLETION SUMMARY
 **Status:** [Complete | Partial — explain what's missing]
-**Files/sections produced:**
-- filename or section — brief description
-**What was built:** 1-3 sentence description of the result
+**Deliverable:** 1-2 sentence description of what your answer above contains
 **Known issues:** [None | list any issues]
 
-This summary is CRITICAL — the manager uses it to evaluate your work. Do NOT skip it.`;
+This summary is how the manager evaluates your work. Do NOT skip it, and keep it AFTER the answer.`;
 }
 
 /**
