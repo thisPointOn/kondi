@@ -736,6 +736,12 @@ Tell the worker this is mandatory.\n`;
     outputNote = `\nCRITICAL: The worker has tools to create and edit files on disk.
 Your directive MUST tell the worker to ACTUALLY WRITE THE CODE — not describe it, not outline it, not summarize it.
 The worker should create every file, write every line of code, and produce a working implementation.\n`;
+  } else {
+    outputNote = `\nCRITICAL: The worker has NO file tools — the deliverable is the worker's TEXT RESPONSE itself.
+Your directive MUST instruct the worker to produce the COMPLETE final answer directly in its reply
+(e.g. the actual recommendations / analysis / content the objective asks for). Do NOT tell the worker
+to write, save, or create any file, do NOT name file paths, and do NOT ask for a script that "outputs"
+the answer. The worker's written response IS the final artifact.\n`;
   }
 
   return `Based on your decision, write a concrete work directive.

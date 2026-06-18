@@ -164,6 +164,45 @@ const PHASE_TRANSITIONS: Record<DeliberationPhase, {
 };
 
 // ============================================================================
+// Deliverable sanitizer
+// ============================================================================
+
+/**
+ * Clean a worker's text deliverable for any model. Weaker models (e.g. deepseek)
+ * sometimes hallucinate tool calls and "I can't write the file" boilerplate even
+ * when told they have no tools. This:
+ *  - extracts the intended content from a hallucinated <write_file><content>…</content>
+ *    block (that content IS the deliverable), then
+ *  - strips stray tool-call tags and tool-apology / file-summary meta lines.
+ * Returns the original text unchanged if nothing matches.
+ */
+export function sanitizeDeliverable(raw: string): string {
+  if (!raw) return raw;
+  let t = raw;
+
+  // 1. If the worker "wrote a file", the file content is the real deliverable.
+  const wf = t.match(/<write_file>[\s\S]*?<content>\s*([\s\S]*?)\s*<\/content>[\s\S]*?<\/write_file>/i);
+  if (wf && wf[1].trim().length > 30) {
+    t = wf[1];
+  } else {
+    // Otherwise just drop stray pseudo-tool tags, keep surrounding prose.
+    t = t.replace(/<\/?(write_file|read_file|run_command|list_directory|edit_file|bash|path|content|command)>/gi, '');
+  }
+
+  // 2. Drop tool-apology / file-bookkeeping meta lines.
+  t = t.split('\n').filter((line) => !new RegExp(
+    '^\\s*(' +
+    "I (cannot|can't|can not|don't have|do not have|am unable to) (call|use|access)|" +
+    'No tools? (are|is)? ?available|Since I have no tools|Because I have no tools|' +
+    'the file (already )?exists|If you (can )?confirm|Otherwise,? the file|' +
+    "I'll (start by|first)|Let me (first|start)|" +
+    '\\*\\*Files (created|modified):\\*\\*|- /[\\w./-]+ (—|-) ' +
+    ')', 'i').test(line)).join('\n');
+
+  return t.replace(/\n{3,}/g, '\n\n').trim() || raw.trim();
+}
+
+// ============================================================================
 // Deliberation Orchestrator
 // ============================================================================
 
@@ -1384,7 +1423,7 @@ export class DeliberationOrchestrator {
     }
 
     // Create output artifact
-    const output = createOutput(council.id, response.content, directive.id);
+    const output = createOutput(council.id, workerPermissions.writePermissions ? response.content : sanitizeDeliverable(response.content), directive.id);
 
     // Update state
     councilStore.setCurrentOutput(council.id, output.id);
@@ -1748,7 +1787,7 @@ export class DeliberationOrchestrator {
     );
 
     // Create output artifact
-    const output = createOutput(council.id, response.content, directive.id);
+    const output = createOutput(council.id, workerPermissions.writePermissions ? response.content : sanitizeDeliverable(response.content), directive.id);
     councilStore.setCurrentOutput(council.id, output.id);
 
     this.createEntry(
