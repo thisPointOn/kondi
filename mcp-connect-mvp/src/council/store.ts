@@ -601,6 +601,71 @@ export function duplicateCouncil(councilId: string, newName?: string): Council |
 }
 
 // ============================================================================
+// Workflow (a pipeline = an ordered series of councils)
+// ============================================================================
+
+/**
+ * The ordered list of councils in the same workflow as `councilId`. A council
+ * with no workflowId is its own 1-step workflow.
+ */
+export function getWorkflowCouncils(councilId: string): Council[] {
+  const c = getCouncil(councilId);
+  if (!c) return [];
+  if (!c.workflowId) return [c];
+  return getAllCouncils()
+    .filter((x) => x.workflowId === c.workflowId)
+    .sort((a, b) => (a.workflowOrder ?? 0) - (b.workflowOrder ?? 0));
+}
+
+/**
+ * Append a new council step after `councilId`, forming/extending a workflow.
+ * The new step is seeded from the source (same personas/roles/models) with a
+ * fresh task, and is wired to take the previous step's output as input.
+ */
+export function appendCouncilToWorkflow(councilId: string): Council | null {
+  const source = getCouncil(councilId);
+  if (!source) return null;
+
+  // Ensure the source anchors a workflow — seed the overall name from its name.
+  let workflowId = source.workflowId;
+  if (!workflowId) {
+    workflowId = crypto.randomUUID();
+    updateCouncil(source.id, {
+      workflowId,
+      workflowOrder: 0,
+      workflowName: source.workflowName || source.name,
+    });
+  }
+  const workflowName = getCouncil(source.id)?.workflowName || source.name;
+
+  const members = getWorkflowCouncils(source.id);
+  const maxOrder = members.reduce((m, c) => Math.max(m, c.workflowOrder ?? 0), 0);
+
+  // Duplicate keeps the personas/role assignments so the next step is ready to edit.
+  const dup = duplicateCouncil(source.id, `Step ${members.length + 1}`);
+  if (!dup) return null;
+
+  return updateCouncil(dup.id, {
+    workflowId,
+    workflowOrder: maxOrder + 1,
+    workflowName,
+    topic: 'Takes the previous step’s output as input.',
+  });
+}
+
+/** The overall council/workflow name — stored on the anchor step, falls back to its name. */
+export function getWorkflowName(councilId: string): string {
+  const anchor = getWorkflowCouncils(councilId)[0] || getCouncil(councilId);
+  return anchor?.workflowName || anchor?.name || '';
+}
+
+/** Rename the whole workflow (updates the anchor's workflowName). */
+export function renameWorkflow(councilId: string, name: string): void {
+  const anchor = getWorkflowCouncils(councilId)[0] || getCouncil(councilId);
+  if (anchor) updateCouncil(anchor.id, { workflowName: name.trim() || anchor.name });
+}
+
+// ============================================================================
 // Deliberation State Operations
 // ============================================================================
 
@@ -929,10 +994,23 @@ export class CouncilStore {
 
   getAll = getAllCouncils;
   get = getCouncil;
+  getWorkflow = getWorkflowCouncils;
+  getWorkflowName = getWorkflowName;
+
+  renameWorkflow(councilId: string, name: string): void {
+    renameWorkflow(councilId, name);
+    this.notify();
+  }
 
   create(params: Parameters<typeof createCouncil>[0]): Council {
     const council = createCouncil(params);
     this.notify();
+    return council;
+  }
+
+  appendToWorkflow(councilId: string): Council | null {
+    const council = appendCouncilToWorkflow(councilId);
+    if (council) this.notify();
     return council;
   }
 

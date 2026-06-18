@@ -98,6 +98,15 @@ export default function AddPersonaModal({
   const [customName, setCustomName] = useState(editingPersona?.name || '');
   const [selectedModel, setSelectedModel] = useState(editingPersona?.model || '');
   const [selectedProvider, setSelectedProvider] = useState(editingPersona?.provider || '');
+  const [modelExpanded, setModelExpanded] = useState(false);
+  // Display name for the currently-selected model (shown in the collapsed header).
+  const selectedModelName = useMemo(() => {
+    for (const list of Object.values(MODELS_BY_PROVIDER)) {
+      const m = list.find((x) => x.id === selectedModel && x.provider === selectedProvider);
+      if (m) return m.name;
+    }
+    return selectedModel || 'Select a model';
+  }, [MODELS_BY_PROVIDER, selectedModel, selectedProvider]);
   const [customPrompt, setCustomPrompt] = useState(editingPersona?.predisposition?.systemPrompt || '');
   const [temperature, setTemperature] = useState(editingPersona?.temperature || 0.7);
   const [verbosity, setVerbosity] = useState<'concise' | 'balanced' | 'thorough'>(editingPersona?.verbosity || 'balanced');
@@ -324,39 +333,51 @@ export default function AddPersonaModal({
               </div>
 
               <div className="config-section">
-                <label>Model</label>
-                <div className="model-groups">
-                  {PROVIDER_ORDER.filter(p => MODELS_BY_PROVIDER[p]).map((providerName) => (
-                    <div key={providerName} className="model-provider-group">
-                      <div className="provider-header">{providerName}</div>
-                      <div className="model-options">
-                        {filterVisibleModels(MODELS_BY_PROVIDER[providerName]).map((model) => (
-                          <div
-                            key={`${model.provider}:${model.id}`}
-                            className={`model-option ${selectedModel === model.id && selectedProvider === model.provider ? 'selected' : ''}`}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setSelectedModel(model.id);
-                              setSelectedProvider(model.provider);
-                            }}
-                            role="button"
-                            tabIndex={0}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
+                <button
+                  type="button"
+                  className="model-collapse-header"
+                  onClick={() => setModelExpanded((v) => !v)}
+                >
+                  <span className="model-collapse-title">Model</span>
+                  <span className="model-collapse-selected">{selectedModelName}</span>
+                  <span className="model-collapse-caret">{modelExpanded ? '▾' : '▸'}</span>
+                </button>
+                {modelExpanded && (
+                  <div className="model-groups">
+                    {PROVIDER_ORDER.filter(p => MODELS_BY_PROVIDER[p]).map((providerName) => (
+                      <div key={providerName} className="model-provider-group">
+                        <div className="provider-header">{providerName}</div>
+                        <div className="model-options">
+                          {filterVisibleModels(MODELS_BY_PROVIDER[providerName]).map((model) => (
+                            <div
+                              key={`${model.provider}:${model.id}`}
+                              className={`model-option ${selectedModel === model.id && selectedProvider === model.provider ? 'selected' : ''}`}
+                              onClick={(e) => {
                                 e.preventDefault();
+                                e.stopPropagation();
                                 setSelectedModel(model.id);
-                              setSelectedProvider(model.provider);
-                              }
-                            }}
-                          >
-                            <span className="model-name">{model.name}</span>
-                          </div>
-                        ))}
+                                setSelectedProvider(model.provider);
+                                setModelExpanded(false);
+                              }}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  setSelectedModel(model.id);
+                                  setSelectedProvider(model.provider);
+                                  setModelExpanded(false);
+                                }
+                              }}
+                            >
+                              <span className="model-name">{model.name}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="config-section">

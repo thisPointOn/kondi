@@ -14,6 +14,8 @@ import { councilStore } from '../council';
 import type { Council } from '../council/types';
 import { getCurrentContext, getAllOutputs, getLatestOutput, getDecision } from '../council/context-store';
 import CouncilSetupPanel from './council/CouncilSetupPanel';
+import CouncilSetupDetailPanel from './council/CouncilSetupDetailPanel';
+import { useActiveSetupSection } from './council/setupDetailStore';
 import { addTask } from '../services/taskSync';
 import { enqueueTask, getQueue, pauseTask, resumeTask, removeQueuedTask, type QueuedTask } from '../services/taskQueue';
 import './RightSidebar.css';
@@ -93,6 +95,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<TabId>('files');
   const [tabMenuOpen, setTabMenuOpen] = useState(false);
+  // Non-null while a council's setup form is open in the main area — switches the
+  // Setup tab from the read-only summary to per-control details.
+  const editingSetupSection = useActiveSetupSection();
   const tabComboRef = useRef<HTMLDivElement | null>(null);
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
@@ -622,7 +627,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
       {/* Tab Panels */}
       <div className="right-sidebar-content">
         {activeTab === 'setup' && councilId ? (
-          <CouncilSetupPanel councilId={councilId} embedded />
+          editingSetupSection ? <CouncilSetupDetailPanel /> : <CouncilSetupPanel councilId={councilId} embedded />
         ) : !effectiveDir ? (
           <div className="empty-panel-state">
             <Folder size={32} />

@@ -146,12 +146,26 @@
 
 .persona-details {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
 }
 
 .persona-name {
   font-weight: 600;
   font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.persona-details .persona-model-selector {
+  margin-left: auto;
+}
+
+.suppress-badge.inline {
+  font-size: 0.62rem;
+  padding: 0.1rem 0.4rem;
 }
 
 .persona-model {
@@ -518,7 +532,7 @@
 }
 
 .participants-header .add-persona-btn {
-  background: #2a2a2a;
+  background: #1f1f1f;
   color: #fff;
   border: 1px solid var(--border-color, #333);
   padding: 0.3rem 0.7rem;
@@ -529,7 +543,7 @@
 }
 
 .participants-header .add-persona-btn:hover {
-  background: #333;
+  background: #2a2a2a;
   border-color: var(--text-secondary, #999);
 }
 
@@ -634,4 +648,36 @@
 .save-mode-hint {
   font-size: 0.75rem;
   color: var(--text-tertiary, #666);
+}
+
+/* Consultant focus/stance shown abbreviated on the card (edited in the workspace panel) */
+.consultant-abbrev {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-color, #333);
+}
+.abbrev-chip {
+  font-size: 0.68rem;
+  color: #cbd5e1;
+  background: var(--bg-secondary, #1a1a1a);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  padding: 0.12rem 0.4rem;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.abbrev-key {
+  color: #6b7280;
+  font-weight: 600;
+  margin-right: 0.2rem;
+}
+.abbrev-empty {
+  font-size: 0.66rem;
+  color: #6b7280;
+  font-style: italic;
 }

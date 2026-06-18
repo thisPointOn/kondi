@@ -440,6 +440,50 @@
   margin: 0;
 }
 
+/* Inline setup — rendered in the main area (not a modal), like the pipeline builder. */
+.council-setup-inline {
+  max-width: 775px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+.council-setup-inline-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem 0;
+}
+.council-setup-inline-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary, #e5e5e5);
+}
+.setup-inline-done {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.78rem;
+  background: #1f1f1f;
+  color: #fff;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.setup-inline-done:hover { background: #2a2a2a; border-color: var(--text-secondary, #999); }
+.council-setup-inline .main-setup-panel {
+  padding: 1rem;
+  max-width: none;
+  margin: 0;
+}
+.council-setup-inline .setup-section {
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+/* Subtle highlight on the section whose details are showing in the workspace panel. */
+.council-setup-inline .setup-section:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
 .deliberation-setup-btn {
   padding: 0.5rem 1rem;
   background: var(--accent-color, #3b82f6);
@@ -587,7 +631,7 @@
 }
 
 .terminal-btn:hover:not(:disabled) {
-  background: #333;
+  background: #2a2a2a;
 }
 
 .terminal-btn:disabled {
@@ -1168,7 +1212,7 @@
 
 .directory-browse-btn {
   padding: 0.45rem 0.7rem;
-  background: #2a2a2a;
+  background: #1f1f1f;
   border: 1px solid var(--border-color, #333);
   border-radius: 6px;
   color: #fff;
@@ -1179,7 +1223,7 @@
 }
 
 .directory-browse-btn:hover {
-  background: #333;
+  background: #2a2a2a;
   border-color: var(--text-secondary, #999);
 }
 
@@ -1218,6 +1262,13 @@
   margin: 0.5rem 0 0;
   font-size: 0.75rem;
   color: var(--text-tertiary, #666);
+}
+
+.checkbox-hint {
+  margin: 0.3rem 0 0 1.6rem;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--text-secondary, #999);
 }
 
 /* Main Output Panel */
@@ -2196,7 +2247,7 @@
 }
 
 .add-persona-btn {
-  background: #2a2a2a;
+  background: #1f1f1f;
   color: #fff;
   border: 1px solid var(--border-color, #333);
   padding: 0.3rem 0.7rem;
@@ -2207,7 +2258,7 @@
 }
 
 .add-persona-btn:hover {
-  background: #333;
+  background: #2a2a2a;
   border-color: var(--text-secondary, #999);
 }
 
@@ -2342,3 +2393,70 @@
 .panel-content-block + .settings-section-header {
   margin-top: 0.75rem;
 }
+
+/* Output type selector (reuses .rounds-option chip styling) */
+.output-type-selector {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+.output-type-selector .rounds-option { text-transform: capitalize; }
+
+/* MCP server checkboxes in the Tools setup section */
+.tools-server-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+.tools-server-item .constraint-label {
+  background: transparent;
+  padding: 0;
+}
+
+/* Inline "Advanced" link button + code spans in setup hints */
+.link-btn {
+  display: inline-block;
+  margin-top: 0.4rem;
+  padding: 0;
+  background: none;
+  border: none;
+  color: #818cf8;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.link-btn:hover { color: #a5b4fc; text-decoration: underline; }
+.checkbox-hint code {
+  background: #1f1f1f;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 0.92em;
+  color: #cbd5e1;
+}
+
+/* Delete button in the inline setup header */
+.setup-inline-delete {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.78rem;
+  background: transparent;
+  color: #f87171;
+  border: 1px solid #dc262640;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.setup-inline-delete:hover { background: rgba(239, 68, 68, 0.12); border-color: #ef4444; }
+
+/* "Add step" button in the setup header */
+.setup-inline-addstep {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.78rem;
+  background: transparent;
+  color: #a5b4fc;
+  border: 1px dashed #6366f1;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.setup-inline-addstep:hover { background: rgba(99,102,241,0.12); border-style: solid; }

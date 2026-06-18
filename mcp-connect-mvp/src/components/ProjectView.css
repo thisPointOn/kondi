@@ -1,0 +1,125 @@
+.project-view {
+  height: 100%;
+  overflow-y: auto;
+  padding: 1rem 1.2rem;
+  background: #0a0a0a;
+  box-sizing: border-box;
+}
+
+.pv-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.pv-name {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 1.3rem;
+  font-weight: 600;
+  padding: 0.1rem 0.2rem;
+  border-radius: 6px;
+  min-width: 0;
+}
+.pv-name:hover { background: #141414; }
+.pv-name:focus { outline: none; background: #141414; border: 1px solid #333; }
+.pv-sub { font-size: 0.78rem; color: #6b7280; }
+
+.pv-section { margin-bottom: 1.4rem; }
+.pv-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+.pv-section-head h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e5e5e5;
+}
+.pv-add-btn {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.72rem;
+  background: #1f1f1f;
+  color: #fff;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.pv-add-btn:hover { background: #2a2a2a; border-color: #818cf8; }
+
+.pv-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 6px;
+}
+.pv-picker-item {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.74rem;
+  background: #1f1f1f;
+  color: #e5e5e5;
+  border: 1px solid #333;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.pv-picker-item:hover { background: #2a2a2a; border-color: #6366f1; }
+.pv-picker-empty { font-size: 0.74rem; color: #6b7280; }
+
+.pv-empty {
+  font-size: 0.8rem;
+  color: #6b7280;
+  padding: 0.6rem 0.2rem;
+}
+
+/* Project tables reuse the council-table grid but with a trailing actions column */
+.project-view .council-table-head,
+.project-view .pv-council-row {
+  grid-template-columns: 1fr 90px 64px 110px 150px;
+}
+.project-view .pv-chat-row {
+  display: grid;
+  grid-template-columns: 1fr 150px;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  cursor: default;
+}
+.pv-rowactions { display: flex; gap: 0.3rem; justify-content: flex-end; }
+.project-view .council-row { cursor: default; }
+
+.pv-artifacts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.5rem;
+}
+.pv-artifact {
+  text-align: left;
+  background: #0d0d0d;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.pv-artifact:hover { border-color: #6366f1; }
+.pv-artifact-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.3rem; }
+.pv-artifact-name { font-size: 0.78rem; font-weight: 600; color: #fff; }
+.pv-artifact-ver { font-size: 0.66rem; color: #a5b4fc; }
+.pv-artifact-snippet {
+  font-size: 0.7rem;
+  color: #9ca3af;
+  line-height: 1.4;
+  font-family: ui-monospace, monospace;
+  white-space: pre-wrap;
+  max-height: 80px;
+  overflow: hidden;
+}

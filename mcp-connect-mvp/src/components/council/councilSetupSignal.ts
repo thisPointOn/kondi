@@ -1,12 +1,17 @@
 /**
- * One-shot signal so the tile "Edit" button can open a council straight into
- * its Setup dialog. CouncilLibrary sets it right before selecting the council;
- * DeliberationView consumes it on mount and opens the setup panel.
+ * Signal to open a council's Setup/edit screen. Two paths:
+ *  - One-shot flag (consumed on mount): the tile "Edit" button sets it right
+ *    before selecting the council; DeliberationView consumes it on mount.
+ *  - Event (live): the workspace Setup panel's Edit button fires it for an
+ *    already-open council; DeliberationView listens and opens setup in place.
  */
+export const EDIT_COUNCIL_SETUP_EVENT = 'kondi-edit-council-setup';
+
 let pendingId: string | null = null;
 
 export function requestCouncilSetup(id: string): void {
   pendingId = id;
+  try { window.dispatchEvent(new CustomEvent(EDIT_COUNCIL_SETUP_EVENT, { detail: id })); } catch { /* no window */ }
 }
 
 /** Returns true once if a setup was requested for this council, then clears it. */

@@ -15,7 +15,7 @@
   align-items: center;
   gap: 8px;
   padding: 12px 14px;
-  font-size: 13px;
+  font-size: var(--font-chat, 13.5px);
   font-weight: 600;
   color: var(--text-primary, #e4e4e7);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -32,22 +32,29 @@
 /* When docked as the Workspace "Setup" tab, the panel chrome is gone. */
 .council-setup-panel .cs-body { flex: 1; overflow-y: auto; }
 
-.cs-name { font-size: 14px; font-weight: 600; color: var(--text-primary, #e4e4e7); }
+.cs-name { font-size: 15px; font-weight: 600; color: var(--text-primary, #e4e4e7); }
 .cs-meta { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 6px 0 8px; align-items: center; }
-.cs-mode { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 7px; border-radius: 4px; background: rgba(99,102,241,0.18); color: #a5b4fc; }
-.cs-status { font-size: 11.5px; text-transform: capitalize; padding: 1px 7px; border-radius: 4px; }
+.cs-mode { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 7px; border-radius: 4px; background: rgba(99,102,241,0.18); color: #a5b4fc; }
+.cs-status { font-size: 12px; text-transform: capitalize; padding: 1px 7px; border-radius: 4px; }
+/* Colors mirror .deliberation-status-* in DeliberationView.css for cross-panel consistency. */
+.cs-status-planning { background: rgba(59,130,246,0.13); color: #60a5fa; }
+.cs-status-running { background: rgba(22,163,74,0.13); color: #16a34a; }
+.cs-status-completed { background: rgba(139,92,246,0.13); color: #a78bfa; }
+.cs-status-paused { background: rgba(202,138,4,0.13); color: #ca8a04; }
+.cs-status-failed { background: rgba(239,68,68,0.13); color: #ef4444; }
+.cs-status-cancelled { background: rgba(107,114,128,0.13); color: #9ca3af; }
+/* Legacy council-level statuses (fallback) */
 .cs-status-active { background: rgba(34,197,94,0.15); color: #4ade80; }
-.cs-status-paused { background: rgba(251,191,36,0.15); color: #fbbf24; }
-.cs-status-resolved { background: rgba(148,163,184,0.15); color: #94a3b8; }
-.cs-count { font-size: 11px; color: #6b7280; }
-.cs-topic { font-size: 12px; color: #e4e4e7; line-height: 1.45; margin-bottom: 12px; word-break: break-word; }
+.cs-status-resolved { background: rgba(139,92,246,0.13); color: #a78bfa; }
+.cs-count { font-size: 12px; color: #6b7280; }
+.cs-topic { font-size: var(--font-chat, 13.5px); color: #e4e4e7; line-height: 1.45; margin-bottom: 12px; word-break: break-word; }
 
-.cs-section-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; margin-bottom: 6px; }
+.cs-section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #6b7280; margin-bottom: 6px; }
 
 .cs-workdir { display: flex; align-items: center; gap: 6px; min-width: 0; color: #cbd5e1; }
 .cs-workdir svg { flex-shrink: 0; color: #f59e0b; }
-.cs-workdir-path { font-family: ui-monospace, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.cs-workdir-tag { flex-shrink: 0; font-size: 9px; font-weight: 600; padding: 1px 5px; border-radius: 4px; background: rgba(245,158,11,0.15); color: #fbbf24; }
+.cs-workdir-path { font-family: ui-monospace, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cs-workdir-tag { flex-shrink: 0; font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 4px; background: rgba(245,158,11,0.15); color: #fbbf24; }
 
 .cs-personas { display: flex; flex-direction: column; gap: 6px; }
 .cs-persona {
@@ -59,19 +66,114 @@
   min-width: 0;
 }
 .cs-persona-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.cs-avatar { font-size: 14px; flex-shrink: 0; }
-.cs-persona-name { font-size: 12.5px; font-weight: 600; color: var(--text-primary, #e4e4e7); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cs-role { font-size: 9.5px; font-weight: 600; padding: 1px 6px; border-radius: 4px; flex-shrink: 0; background: rgba(148,163,184,0.15); color: #94a3b8; }
+.cs-avatar { font-size: 15px; flex-shrink: 0; }
+.cs-persona-name { font-size: var(--font-chat, 13.5px); font-weight: 600; color: var(--text-primary, #e4e4e7); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-role { font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 4px; flex-shrink: 0; background: rgba(148,163,184,0.15); color: #94a3b8; }
 .cs-role.role-manager { background: rgba(99,102,241,0.18); color: #a5b4fc; }
 .cs-role.role-consultant { background: rgba(34,197,94,0.15); color: #4ade80; }
 .cs-role.role-worker { background: rgba(245,158,11,0.15); color: #fbbf24; }
 .cs-role.role-reviewer { background: rgba(14,165,233,0.15); color: #38bdf8; }
 .cs-persona-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 4px; }
-.cs-model { font-family: ui-monospace, monospace; font-size: 10.5px; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.cs-provider { font-size: 10px; color: #6b7280; }
+.cs-model { font-family: ui-monospace, monospace; font-size: 12px; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.cs-provider { font-size: 11px; color: #6b7280; }
 
-.cs-empty { font-size: 12px; color: #6b7280; padding: 8px 2px; }
+.cs-empty { font-size: 13px; color: #6b7280; padding: 8px 2px; }
 
 .light-theme .council-setup-panel { background: #ffffff; border-left-color: #e2e8f0; }
 .light-theme .cs-header, .light-theme .cs-name, .light-theme .cs-persona-name { color: #1e293b; }
 .light-theme .cs-persona { background: #f8fafc; border-color: #e2e8f0; }
+
+/* Setup detail panel (workspace panel while editing a council) */
+.setup-detail-eyebrow {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+.setup-detail-summary {
+  font-size: var(--font-chat, 13.5px);
+  color: #e4e4e7;
+  line-height: 1.5;
+  margin: 6px 0 0;
+}
+.setup-detail-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.setup-detail-control {
+  background: var(--bg-tertiary, #1d1d1d);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-left: 3px solid #6366f1;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.setup-detail-control-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #f1f1f3;
+  margin-bottom: 2px;
+}
+.setup-detail-control-text {
+  font-size: 12px;
+  color: #cbd5e1;
+  line-height: 1.45;
+}
+
+/* Editable role fields (focus / stance) in the workspace detail panel */
+.role-edit-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+.role-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.role-edit-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #9ca3af;
+}
+.role-edit-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  background: var(--bg-tertiary, #1d1d1d);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  color: #f1f1f3;
+  font-size: 13px;
+  font-family: inherit;
+}
+.role-edit-input:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+.role-edit-hint {
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+/* Edit button in the workspace Setup panel */
+.cs-name-row { display: flex; align-items: center; gap: 8px; }
+.cs-name-row .cs-name { flex: 1; min-width: 0; }
+.cs-edit-btn {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  font-size: 12px;
+  background: #1f1f1f;
+  color: #fff;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cs-edit-btn:hover { background: #2a2a2a; border-color: #818cf8; color: #c7d2fe; }

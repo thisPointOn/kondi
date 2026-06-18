@@ -342,7 +342,7 @@
   position: absolute;
   top: 6px;
   right: 6px;
-  background: #252525;
+  background: #1d1d1d;
   border: 1px solid #3a3a3a;
   color: #888;
   cursor: pointer;
@@ -361,7 +361,7 @@
 
 .chat-copy-btn:hover {
   color: #e5e5e5;
-  background: #333;
+  background: #2a2a2a;
   border-color: #555;
 }
 
@@ -528,7 +528,7 @@
 }
 
 .send-btn:disabled {
-  background: #2a2a2a;
+  background: #1f1f1f;
   cursor: not-allowed;
 }
 
@@ -564,7 +564,7 @@
 }
 
 .tool-autocomplete-item:hover {
-  background: #252525;
+  background: #1d1d1d;
 }
 
 .tool-autocomplete-item.disabled {
@@ -762,7 +762,7 @@
 }
 
 .chat-dir-clear-btn:hover {
-  background: #2a2a2a;
+  background: #1f1f1f;
   color: #ef4444;
 }
 
@@ -795,7 +795,7 @@
 .chat-bar-divider {
   width: 1px;
   height: 16px;
-  background: #2a2a2a;
+  background: #1f1f1f;
   margin: 0 4px;
   flex-shrink: 0;
 }
@@ -925,11 +925,11 @@
 }
 
 .pin-model-btn:hover {
-  background: #252525;
+  background: #1d1d1d;
 }
 
 .pin-model-btn.current {
-  background: #252525;
+  background: #1d1d1d;
   color: #fff;
 }
 
@@ -1048,7 +1048,7 @@
 }
 
 .model-option-btn:hover {
-  background: #2a2a2a;
+  background: #1f1f1f;
 }
 
 .model-option-btn.current {
@@ -1223,7 +1223,7 @@
 }
 
 .remove-file-btn:hover {
-  background: #2a2a2a;
+  background: #1f1f1f;
   color: #ef4444;
 }
 
@@ -1248,7 +1248,7 @@
 }
 
 .attach-btn:hover:not(:disabled) {
-  background: #252525;
+  background: #1d1d1d;
   color: #e8e8e8;
 }
 

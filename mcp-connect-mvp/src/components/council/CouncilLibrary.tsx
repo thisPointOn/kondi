@@ -31,6 +31,12 @@ export default function CouncilLibrary({
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newCouncilName, setNewCouncilName] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpanded = (id: string) => setExpanded((s) => {
+    const n = new Set(s);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    return n;
+  });
 
   // Load councils
   useEffect(() => {
@@ -44,6 +50,7 @@ export default function CouncilLibrary({
 
   const filteredCouncils = councils
     .filter((c) => !c.pipelineId)  // Hide pipeline-generated councils
+    .filter((c) => !c.workflowId || (c.workflowOrder ?? 0) === 0)  // One tile per workflow (its first council)
     .filter((c) => {
       const q = searchQuery.toLowerCase();
       return c.name.toLowerCase().includes(q) ||
@@ -120,10 +127,12 @@ export default function CouncilLibrary({
   };
 
   const handleDelete = async (id: string) => {
-    const ok = await ask('Delete this council? This cannot be undone.', {
-      title: 'Delete Council',
-      kind: 'warning',
-    });
+    const council = councils.find((c) => c.id === id);
+    const name = council?.name ? `"${council.name}"` : 'this council';
+    const ok = await ask(
+      `Deleting ${name} will permanently remove the council and all of its output. This cannot be undone.`,
+      { title: 'Delete council?', kind: 'warning', okLabel: 'Delete', cancelLabel: 'Cancel' }
+    );
     if (ok) {
       councilStore.delete(id);
     }
@@ -226,143 +235,119 @@ export default function CouncilLibrary({
           </div>
         </div>
       ) : (
-        <div className="council-library-grid">
-          {filteredCouncils.map((council) => (
-            <div
-              key={council.id}
-              className="council-card"
-              onClick={() => onCouncilSelect(council.id)}
-            >
-              <div className="council-card-header">
-                <h3>{council.name}</h3>
-                <div className="council-badges">
-                  {council.orchestration.mode === 'deliberation' && (
-                    <span className="council-mode-badge deliberation">
-                      Deliberation
-                    </span>
-                  )}
-                  <span
-                    className="council-status-badge"
-                    style={{ backgroundColor: getStatusColor(council.status) + '20', color: getStatusColor(council.status) }}
-                  >
-                    {council.status}
+        <div className="council-table">
+          <div className="council-table-head">
+            <span className="ct-col ct-expand" />
+            <span className="ct-col ct-name">Name</span>
+            <span className="ct-col ct-status">Status</span>
+            <span className="ct-col ct-type">Type</span>
+            <span className="ct-col ct-agents">Agents</span>
+            <span className="ct-col ct-updated">Updated</span>
+          </div>
+          {filteredCouncils.map((council) => {
+            const isOpen = expanded.has(council.id);
+            const roleOf = (pid: string) => council.deliberation?.roleAssignments?.find((r) => r.personaId === pid)?.role;
+            const task = council.deliberation?.savedProblem || council.topic;
+            const stepCount = councilStore.getWorkflow(council.id).length;
+            return (
+              <div key={council.id} className="council-row-group">
+                <div
+                  className={`council-row ${isOpen ? 'open' : ''}`}
+                  onClick={() => toggleExpanded(council.id)}
+                >
+                  <span className="ct-col ct-expand">{isOpen ? '▾' : '▸'}</span>
+                  <span className="ct-col ct-name" title={council.workflowName || council.name}>
+                    {council.workflowName || council.name}
+                    {stepCount > 1 && <span className="ct-steps">{stepCount} steps</span>}
                   </span>
-                </div>
-              </div>
-
-              {(council.deliberation?.savedProblem || council.topic) !== council.name && (
-                <p className="council-topic">{council.deliberation?.savedProblem || council.topic}</p>
-              )}
-
-              <div className="council-personas-preview">
-                {council.personas
-                  .filter((persona) => {
-                    // Show only non-suppressed personas (consultants)
-                    const roleAssignment = council.deliberation?.roleAssignments?.find(
-                      (r) => r.personaId === persona.id
-                    );
-                    return !roleAssignment?.suppressPersona;
-                  })
-                  .slice(0, 4)
-                  .map((persona) => (
+                  <span className="ct-col ct-status">
                     <span
-                      key={persona.id}
-                      className="persona-chip"
-                      style={{ backgroundColor: persona.color + '30', borderColor: persona.color }}
+                      className="council-status-badge"
+                      style={{ backgroundColor: getStatusColor(council.status) + '20', color: getStatusColor(council.status) }}
                     >
-                      {persona.avatar || '🤖'} {persona.name}
+                      {council.status}
                     </span>
-                  ))}
-                {council.personas.filter((p) => {
-                  const ra = council.deliberation?.roleAssignments?.find((r) => r.personaId === p.id);
-                  return !ra?.suppressPersona;
-                }).length > 4 && (
-                  <span className="persona-chip more">
-                    +{council.personas.filter((p) => {
-                      const ra = council.deliberation?.roleAssignments?.find((r) => r.personaId === p.id);
-                      return !ra?.suppressPersona;
-                    }).length - 4}
                   </span>
+                  <span className="ct-col ct-type">{council.orchestration.mode === 'deliberation' ? 'Deliberation' : council.orchestration.mode}</span>
+                  <span className="ct-col ct-agents">{council.personas.length}</span>
+                  <span className="ct-col ct-updated">{formatDate(council.updatedAt)}</span>
+                </div>
+
+                {isOpen && (
+                  <div className="council-row-detail">
+                    {task && task !== council.name && (
+                      <div className="crd-block">
+                        <div className="crd-label">Task</div>
+                        <div className="crd-task">{task}</div>
+                      </div>
+                    )}
+
+                    <div className="crd-block">
+                      <div className="crd-label">Participants</div>
+                      <div className="crd-personas">
+                        {council.personas.map((p) => (
+                          <div key={p.id} className="crd-persona">
+                            <span className="crd-persona-avatar" style={{ backgroundColor: (p.color || '#666') + '30', color: p.color || '#bbb' }}>
+                              {p.avatar || '🤖'}
+                            </span>
+                            <span className="crd-persona-name">{p.name}</span>
+                            {roleOf(p.id) && <span className={`crd-role role-${roleOf(p.id)}`}>{roleOf(p.id)}</span>}
+                            <span className="crd-persona-model">{(p.model || '').replace(/^models\//, '')}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="crd-meta">
+                      <div className="crd-meta-item">
+                        <span className="crd-label">Working dir</span>
+                        <span className="crd-meta-val">{council.deliberation?.workingDirectory || '—'}</span>
+                      </div>
+                      <div className="crd-meta-item">
+                        <span className="crd-label">Messages</span>
+                        <span className="crd-meta-val">{council.messages.length}</span>
+                      </div>
+                      <div className="crd-meta-item" onClick={(e) => e.stopPropagation()}>
+                        <span className="crd-label">Save output</span>
+                        <select
+                          className="save-output-select"
+                          value={
+                            !council.deliberation?.saveDeliberation ? 'none'
+                              : council.deliberation.saveDeliberationMode === 'abbreviated' ? 'abbreviated'
+                              : 'full'
+                          }
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (council.deliberation) {
+                              councilStore.update(council.id, {
+                                deliberation: {
+                                  ...council.deliberation,
+                                  saveDeliberation: val !== 'none',
+                                  saveDeliberationMode: val === 'abbreviated' ? 'abbreviated' : 'full',
+                                },
+                              });
+                            }
+                          }}
+                        >
+                          <option value="none">None</option>
+                          <option value="abbreviated">Summary</option>
+                          <option value="full">Full</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="crd-actions">
+                      <button className="council-action" onClick={() => onCouncilSelect(council.id)}>Open</button>
+                      <button className="council-action" onClick={() => { requestCouncilSetup(council.id); onCouncilSelect(council.id); }}>Edit</button>
+                      <button className="council-action" onClick={() => handleDuplicate(council.id)}>Duplicate</button>
+                      <button className="council-action" onClick={() => handleExport(council.id)}>Export</button>
+                      <button className="council-action danger" onClick={() => handleDelete(council.id)}>Delete</button>
+                    </div>
+                  </div>
                 )}
               </div>
-
-              {/* Save Output */}
-              <div className="council-save-output" onClick={(e) => e.stopPropagation()}>
-                <span className="save-output-label">Save output:</span>
-                <select
-                  className="save-output-select"
-                  value={
-                    !council.deliberation?.saveDeliberation ? 'none'
-                      : council.deliberation.saveDeliberationMode === 'abbreviated' ? 'abbreviated'
-                      : 'full'
-                  }
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (council.deliberation) {
-                      councilStore.update(council.id, {
-                        deliberation: {
-                          ...council.deliberation,
-                          saveDeliberation: val !== 'none',
-                          saveDeliberationMode: val === 'abbreviated' ? 'abbreviated' : 'full',
-                        },
-                      });
-                    }
-                  }}
-                >
-                  <option value="none">None</option>
-                  <option value="abbreviated">Summary</option>
-                  <option value="full">Full</option>
-                </select>
-              </div>
-
-              <div className="council-card-footer">
-                <span className="council-stats">
-                  {council.messages.length} messages
-                </span>
-                <span className="council-date">{formatDate(council.updatedAt)}</span>
-              </div>
-
-              <div className="council-card-actions">
-                <button
-                  className="council-action"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    requestCouncilSetup(council.id);
-                    onCouncilSelect(council.id);
-                  }}
-                >
-                  Edit
-                </button>
-                <button
-                  className="council-action"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDuplicate(council.id);
-                  }}
-                >
-                  Duplicate
-                </button>
-                <button
-                  className="council-action"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleExport(council.id);
-                  }}
-                >
-                  Export
-                </button>
-                <button
-                  className="council-action danger"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete(council.id);
-                  }}
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

@@ -190,6 +190,11 @@ export const councilSchema = z.object({
   deliberationState: z.lazy(() => deliberationStateSchema).optional(),
   // Pipeline linkage (set when council was created by a pipeline step)
   pipelineId: z.string().optional(),
+  // Workflow sequencing: councils sharing a workflowId form an ordered series
+  // (a pipeline). A council with no workflowId is a standalone 1-step workflow.
+  workflowId: z.string().optional(),
+  workflowOrder: z.number().int().optional(),
+  workflowName: z.string().optional(),
 });
 
 // ============================================================================
@@ -461,6 +466,11 @@ export const deliberationConfigSchema = z.object({
   maxReviewCycles: z.number().int().optional(),
   allowedServerIds: z.array(z.string()).optional(),
   bootstrapContext: z.boolean().optional(),
+  evolveContext: z.boolean().optional(),
+  // Workflow step contract
+  inputTemplate: z.string().optional(),
+  outputType: z.enum(['string', 'file', 'directory', 'json']).optional(),
+  includePipelineInput: z.boolean().optional(),
 });
 
 export const deliberationStateSchema = z.object({

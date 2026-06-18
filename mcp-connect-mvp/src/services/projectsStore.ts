@@ -1,6 +1,7 @@
 /**
- * Projects — named collections of chats, shown above Chats in the left sidebar.
- * Persisted in localStorage. A chat can belong to at most one project.
+ * Projects — named collections of chats AND councils, shown above Chats in the
+ * left sidebar. Persisted in localStorage. A chat/council belongs to at most one
+ * project. Viewing a project lists its councils, chats, and generated artifacts.
  */
 import { useSyncExternalStore } from 'react';
 
@@ -8,6 +9,7 @@ export interface Project {
   id: string;
   name: string;
   chatIds: string[];
+  councilIds: string[];
 }
 
 const KEY = 'kondi-projects';
@@ -17,7 +19,9 @@ function load(): Project[] {
   try {
     const raw = localStorage.getItem(KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    // Backward-compat: older projects had no councilIds.
+    return parsed.map((p) => ({ ...p, chatIds: p.chatIds || [], councilIds: p.councilIds || [] }));
   } catch {
     return [];
   }
@@ -37,10 +41,14 @@ export function getProjects(): Project[] {
 }
 
 export function createProject(name: string): Project {
-  const p: Project = { id: `proj-${version}-${projects.length}-${name.length}-${Math.round(performance.now())}`, name: name.trim() || 'Untitled Project', chatIds: [] };
+  const p: Project = { id: `proj-${version}-${projects.length}-${name.length}-${Math.round(performance.now())}`, name: name.trim() || 'Untitled Project', chatIds: [], councilIds: [] };
   projects = [...projects, p];
   persist();
   return p;
+}
+
+export function getProject(id: string): Project | undefined {
+  return projects.find((p) => p.id === id);
 }
 
 export function renameProject(id: string, name: string): void {
@@ -71,6 +79,26 @@ export function removeChatFromProject(chatId: string): void {
 
 export function getProjectForChat(chatId: string): Project | undefined {
   return projects.find((p) => p.chatIds.includes(chatId));
+}
+
+/** Add a council to a project (removing it from any other project first). */
+export function addCouncilToProject(projectId: string, councilId: string): void {
+  projects = projects.map((p) => ({
+    ...p,
+    councilIds: p.id === projectId
+      ? Array.from(new Set([...p.councilIds, councilId]))
+      : p.councilIds.filter((c) => c !== councilId),
+  }));
+  persist();
+}
+
+export function removeCouncilFromProject(councilId: string): void {
+  projects = projects.map((p) => ({ ...p, councilIds: p.councilIds.filter((c) => c !== councilId) }));
+  persist();
+}
+
+export function getProjectForCouncil(councilId: string): Project | undefined {
+  return projects.find((p) => p.councilIds.includes(councilId));
 }
 
 const subscribe = (cb: () => void) => {

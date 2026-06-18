@@ -9,6 +9,7 @@ import { useEffect, useState, type FC } from 'react';
 import { Users, FolderOpen } from 'lucide-react';
 import { councilStore } from '../../council';
 import type { Council, Persona } from '../../council/types';
+import { requestCouncilSetup } from './councilSetupSignal';
 import './CouncilSetupPanel.css';
 
 const ROLE_LABEL: Record<string, string> = {
@@ -27,6 +28,34 @@ const ROLE_CLASS: Record<string, string> = {
 
 function personaRole(p: Persona): string {
   return p.preferredDeliberationRole ? ROLE_LABEL[p.preferredDeliberationRole] : 'Participant';
+}
+
+/**
+ * Status label + class consistent with the deliberation context bar at the top
+ * of the council view (DeliberationView). That bar keys off the live
+ * deliberation phase, so a finished council reads "completed" (purple) — not the
+ * council-level "resolved" (grey). Fall back to council.status when there is no
+ * deliberation phase yet (e.g. freeform or not-yet-started councils).
+ */
+function statusBadge(council: Council): { label: string; cls: string } {
+  const phase = council.deliberationState?.currentPhase;
+  switch (phase) {
+    case 'completed': return { label: 'completed', cls: 'completed' };
+    case 'failed': return { label: 'failed', cls: 'failed' };
+    case 'cancelled': return { label: 'cancelled', cls: 'cancelled' };
+    case 'paused': return { label: 'paused', cls: 'paused' };
+    case 'created':
+    case 'problem_framing': return { label: 'planning', cls: 'planning' };
+    case undefined: break;
+    default: return { label: 'running', cls: 'running' };
+  }
+  // No deliberation phase — map the council-level status into the same vocabulary.
+  switch (council.status) {
+    case 'resolved': return { label: 'completed', cls: 'completed' };
+    case 'paused': return { label: 'paused', cls: 'paused' };
+    case 'active': return { label: 'running', cls: 'running' };
+    default: return { label: council.status || 'planning', cls: 'planning' };
+  }
 }
 
 const CouncilSetupPanel: FC<{ councilId: string; embedded?: boolean }> = ({ councilId, embedded }) => {
@@ -50,10 +79,15 @@ const CouncilSetupPanel: FC<{ councilId: string; embedded?: boolean }> = ({ coun
 
   const body = (
       <div className="cs-body">
-        <div className="cs-name">{council.name}</div>
+        <div className="cs-name-row">
+          <div className="cs-name">{council.name}</div>
+          <button className="cs-edit-btn" onClick={() => requestCouncilSetup(councilId)}>✎ Edit</button>
+        </div>
         <div className="cs-meta">
           <span className="cs-mode">{council.orchestration.mode}</span>
-          <span className={`cs-status cs-status-${council.status}`}>{council.status}</span>
+          {(() => { const s = statusBadge(council); return (
+            <span className={`cs-status cs-status-${s.cls}`}>{s.label}</span>
+          ); })()}
           <span className="cs-count">{council.personas.length} persona{council.personas.length !== 1 ? 's' : ''}</span>
         </div>
         {council.topic && <div className="cs-topic">{council.topic}</div>}

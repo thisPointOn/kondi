@@ -1,4 +1,4 @@
-import { Plus, Settings, ChevronDown, ChevronLeft, ChevronRight, MessageSquare, Workflow, Cpu, Users, AlertCircle, Server, LayoutGrid, Folder, X } from 'lucide-react';
+import { Plus, Settings, ChevronDown, ChevronLeft, ChevronRight, MessageSquare, Cpu, Users, AlertCircle, Server, LayoutGrid, Folder, X } from 'lucide-react';
 import { useEffect, useState, type FC } from 'react';
 import { councilStore } from '../council';
 import type { Council } from '../council/types';
@@ -11,7 +11,7 @@ type SidebarChat = {
   timestamp?: string;
 };
 
-export type AppView = 'chat' | 'pipelines' | 'council';
+export type AppView = 'chat' | 'pipelines' | 'council' | 'project';
 
 interface SidebarProps {
   currentView: AppView;
@@ -33,6 +33,19 @@ interface SidebarProps {
   onShowCouncilLibrary?: () => void;
   /** Start a new council */
   onNewCouncil?: () => void;
+  /** Currently open pipeline (when in pipelines view) */
+  currentPipelineId?: string | null;
+  /** Open a specific pipeline (goes to its builder) */
+  onPipelineSelect?: (id: string) => void;
+  /** Show the tile/grid view of all pipelines */
+  onShowPipelineLibrary?: () => void;
+  /** Start a new pipeline (opens the setup dialog) */
+  onNewPipeline?: () => void;
+  /** Currently open project (when in project view) */
+  currentProjectId?: string | null;
+  /** Open a project's view (councils + chats + artifacts) */
+  onSelectProject?: (id: string) => void;
+  /** Currently open council (for the "add to project" affordance) */
   className?: string;
   /** Number of LLM providers with errors */
   providerErrorCount?: number;
@@ -52,8 +65,9 @@ const Sidebar: FC<SidebarProps> = ({
   chatsSending = {},
   currentCouncilId,
   onCouncilSelect,
-  onNewCouncil,
   onShowCouncilLibrary,
+  currentProjectId,
+  onSelectProject,
   className,
   providerErrorCount = 0,
   providerExpiredCount = 0,
@@ -79,7 +93,7 @@ const Sidebar: FC<SidebarProps> = ({
 
   // Keep the council list in sync with the store (new/deleted councils).
   useEffect(() => {
-    const load = () => setCouncils(councilStore.getAll().filter((c) => !c.pipelineId));
+    const load = () => setCouncils(councilStore.getAll().filter((c) => !c.pipelineId && (!c.workflowId || (c.workflowOrder ?? 0) === 0)));
     load();
     return councilStore.subscribe(load);
   }, []);
@@ -172,13 +186,21 @@ const Sidebar: FC<SidebarProps> = ({
               {projects.map((proj) => {
                 const open = expandedProjects.has(proj.id);
                 const pchats = proj.chatIds.map((id) => chats.find((c) => c.id === id)).filter(Boolean) as SidebarChat[];
+                const pcouncils = (proj.councilIds || []).map((id) => councils.find((c) => c.id === id)).filter(Boolean) as Council[];
+                const total = (proj.chatIds.length) + (proj.councilIds?.length || 0);
                 return (
                   <div key={proj.id} className="project-group">
                     <div className="project-row">
-                      <button className="project-toggle" onClick={() => toggleProject(proj.id)} title={proj.name}>
+                      <button className="project-chevron" onClick={() => toggleProject(proj.id)} title="Expand">
                         <ChevronRight size={14} className="chevron" style={{ transform: open ? 'rotate(90deg)' : 'none' }} />
+                      </button>
+                      <button
+                        className={`project-toggle ${proj.id === currentProjectId && currentView === 'project' ? 'active' : ''}`}
+                        onClick={() => (onSelectProject ? onSelectProject(proj.id) : toggleProject(proj.id))}
+                        title={proj.name}
+                      >
                         <span className="project-name">{proj.name}</span>
-                        <span className="project-count">{proj.chatIds.length}</span>
+                        <span className="project-count">{total}</span>
                       </button>
                       <button className="project-mini-btn" title="Add the open chat to this project" onClick={() => currentChatId && addChatToProject(proj.id, currentChatId)}>
                         <Plus size={12} />
@@ -189,6 +211,16 @@ const Sidebar: FC<SidebarProps> = ({
                     </div>
                     {open && (
                       <div className="project-chats">
+                        {pcouncils.map((c) => (
+                          <button
+                            key={c.id}
+                            className={`chat-item ${c.id === currentCouncilId && currentView === 'council' ? 'active' : ''}`}
+                            onClick={() => { onCouncilSelect?.(c.id); onViewChange('council'); }}
+                            title={c.workflowName || c.name}
+                          >
+                            <span className="chat-item-title">⚖ {c.workflowName || c.name}</span>
+                          </button>
+                        ))}
                         {pchats.map((c) => (
                           <button
                             key={c.id}
@@ -199,7 +231,7 @@ const Sidebar: FC<SidebarProps> = ({
                             <span className="chat-item-title">{c.title}</span>
                           </button>
                         ))}
-                        {pchats.length === 0 && <div className="chat-item empty">Open a chat and click + to add it</div>}
+                        {pchats.length === 0 && pcouncils.length === 0 && <div className="chat-item empty">Open the project to add councils &amp; chats</div>}
                       </div>
                     )}
                   </div>
@@ -267,23 +299,12 @@ const Sidebar: FC<SidebarProps> = ({
         </div>
       )}
 
-      {/* FlowForge Section */}
+      {/* Divider between conversation tools (Chats/Projects) and build tools (Pipelines/Council) */}
       {!collapsed && (
         <div className="flowforge-section">
-          <div className="section-divider">
-            <span>FlowForge</span>
-          </div>
+          <div className="section-divider section-divider-plain" />
         </div>
       )}
-
-      <button
-        className={`nav-btn ${currentView === 'pipelines' ? 'active' : ''}`}
-        onClick={() => onViewChange('pipelines')}
-        title="Pipelines"
-      >
-        <Workflow size={18} />
-        {!collapsed && <span>Pipelines</span>}
-      </button>
 
       {collapsed ? (
         <button
@@ -315,13 +336,6 @@ const Sidebar: FC<SidebarProps> = ({
             >
               <LayoutGrid size={14} />
             </button>
-            <button
-              className="section-header-action"
-              onClick={() => { onNewCouncil?.(); setCouncilsExpanded(true); }}
-              title="New Council"
-            >
-              <Plus size={14} />
-            </button>
           </div>
 
           {councilsExpanded && (
@@ -333,7 +347,7 @@ const Sidebar: FC<SidebarProps> = ({
                   onClick={() => { onCouncilSelect?.(c.id); onViewChange('council'); }}
                   title={c.name}
                 >
-                  <span className="chat-item-title">{c.name}</span>
+                  <span className="chat-item-title">{c.workflowName || c.name}</span>
                 </button>
               ))}
               {councils.length === 0 && (

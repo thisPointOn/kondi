@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 import { ask } from '@tauri-apps/plugin-dialog';
 import type { Pipeline } from '../../pipeline/types';
 import { pipelineStore } from '../../pipeline/store';
+import { consumePipelineCreate, PIPELINE_CREATE_EVENT } from './pipelineCreateSignal';
 import CliSessionImportModal from './CliSessionImportModal';
 import './PipelineLibrary.css';
 
@@ -30,6 +31,15 @@ export default function PipelineLibrary({
     load();
     const unsubscribe = pipelineStore.subscribe(load);
     return unsubscribe;
+  }, []);
+
+  // The sidebar's Pipelines "+" can request the create/setup dialog. Handle both
+  // a fresh mount (consume the pending flag) and the already-open case (event).
+  useEffect(() => {
+    if (consumePipelineCreate()) setShowCreateModal(true);
+    const open = () => setShowCreateModal(true);
+    window.addEventListener(PIPELINE_CREATE_EVENT, open);
+    return () => window.removeEventListener(PIPELINE_CREATE_EVENT, open);
   }, []);
 
   const filtered = pipelines.filter(

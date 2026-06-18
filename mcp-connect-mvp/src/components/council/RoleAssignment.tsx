@@ -7,6 +7,13 @@ import { useState, useEffect } from 'react';
 import { ask } from '@tauri-apps/plugin-dialog';
 import type { Council, Persona, DeliberationRole, DeliberationRoleAssignment } from '../../council/types';
 import {
+  selectRolePersona,
+  seedRoleEdit,
+  getRoleEdit,
+  useRoleEditVersion,
+} from './roleEditStore';
+import { setActiveSetupSection } from './setupDetailStore';
+import {
   ANTHROPIC_CLI_MODELS,
   ANTHROPIC_API_MODELS,
   OPENAI_CLI_MODELS,
@@ -30,7 +37,8 @@ interface RoleAssignmentProps {
   onSave: (
     assignments: DeliberationRoleAssignment[],
     personaUpdates?: Array<{ id: string; model: string; provider: string }>,
-    saveOptions?: { saveDeliberation: boolean; saveDeliberationMode: 'full' | 'abbreviated' }
+    saveOptions?: { saveDeliberation: boolean; saveDeliberationMode: 'full' | 'abbreviated' },
+    rerun?: boolean
   ) => void;
   /** Configured providers with their status */
   configuredProviders?: {
@@ -55,6 +63,8 @@ interface RoleAssignmentProps {
   onEditPersona?: (persona: Persona) => void;
   /** When true, marks the save button as unsaved due to external changes (e.g. working directory, task) */
   hasExternalChanges?: boolean;
+  /** When true, the council has already produced output — saving will clear it and re-run. */
+  hasRun?: boolean;
 }
 
 interface RoleOption {
@@ -165,6 +175,7 @@ export default function RoleAssignment({
   onRemovePersona,
   onEditPersona,
   hasExternalChanges = false,
+  hasRun = false,
 }: RoleAssignmentProps) {
   const existingAssignments = council.deliberation?.roleAssignments || [];
 
@@ -353,23 +364,15 @@ export default function RoleAssignment({
     setSaved(false);
   };
 
-  const setFocusArea = (personaId: string, focusArea: string) => {
-    setAssignments((prev) =>
-      prev.map((a) =>
-        a.personaId === personaId ? { ...a, focusArea: focusArea || undefined } : a
-      )
-    );
-    setSaved(false);
-  };
-
-  const setStance = (personaId: string, stance: string) => {
-    setAssignments((prev) =>
-      prev.map((a) =>
-        a.personaId === personaId ? { ...a, stance: stance || undefined } : a
-      )
-    );
-    setSaved(false);
-  };
+  // Focus Area / Starting Stance are edited in the workspace panel; the cards
+  // here show them abbreviated. roleEditStore is the single source of truth
+  // during editing, seeded from the saved assignments and merged back on save.
+  useRoleEditVersion();
+  useEffect(() => {
+    for (const a of assignments) {
+      seedRoleEdit(a.personaId, a.focusArea || '', a.stance || '');
+    }
+  }, [assignments]);
 
   const setWritePermissions = (personaId: string, writePermissions: boolean) => {
     setAssignments((prev) =>
@@ -410,8 +413,8 @@ export default function RoleAssignment({
   const managerInfo = getRoleModelInfo('manager');
   const workerInfo = getRoleModelInfo('worker');
 
-  const handleSave = () => {
-    console.log('[RoleAssignment] handleSave called', { canSave, saved, hasManager, hasConsultants, hasWorker, assignmentCount: assignments.length, assignments: assignments.map(a => `${a.personaId.slice(0,8)}:${a.role}`) });
+  const handleSave = async () => {
+    console.log('[RoleAssignment] handleSave called', { canSave, saved, hasRun, hasManager, hasConsultants, hasWorker, assignmentCount: assignments.length, assignments: assignments.map(a => `${a.personaId.slice(0,8)}:${a.role}`) });
     if (!canSave) {
       console.warn('[RoleAssignment] Cannot save — missing roles:', { hasManager, hasConsultants, hasWorker });
       return;
@@ -421,6 +424,19 @@ export default function RoleAssignment({
       return;
     }
 
+    // Editing a council that already ran: saving discards the prior output and
+    // re-runs from scratch. Confirm before destroying existing results.
+    if (hasRun) {
+      const ok = await ask(
+        'Saving these changes will clear all existing council output and run the council again from scratch.',
+        { title: 'Save and rerun council?', kind: 'warning', okLabel: 'Save & Rerun', cancelLabel: 'Cancel' }
+      );
+      if (!ok) {
+        console.log('[RoleAssignment] Save & rerun cancelled by user');
+        return;
+      }
+    }
+
     // Build persona updates from model changes
     const personaUpdates = Object.entries(modelChanges).map(([id, { model, provider }]) => ({
       id,
@@ -428,9 +444,17 @@ export default function RoleAssignment({
       provider,
     }));
 
+    // Merge the focus/stance edits (made in the workspace panel) into the assignments.
+    const mergedAssignments = assignments.map((a) => {
+      const e = getRoleEdit(a.personaId);
+      return { ...a, focusArea: e.focusArea || undefined, stance: e.stance || undefined };
+    });
+
     onSave(
-      assignments,
+      mergedAssignments,
       personaUpdates.length > 0 ? personaUpdates : undefined,
+      undefined,
+      hasRun,
     );
     setSaved(true);
   };
@@ -496,7 +520,10 @@ export default function RoleAssignment({
               key={persona.id}
               className="persona-role-card"
               onClick={(e) => {
-                // Only trigger edit if clicking the card background, not buttons/inputs
+                // Any click on the card selects this persona for the workspace-panel detail.
+                setActiveSetupSection('participants');
+                selectRolePersona({ personaId: persona.id, name: persona.name, role: assignment?.role || '', color: persona.color, avatar: persona.avatar });
+                // Only open the persona editor when clicking the card background, not buttons/inputs.
                 const target = e.target as HTMLElement;
                 if (
                   target.tagName === 'BUTTON' ||
@@ -522,6 +549,9 @@ export default function RoleAssignment({
                 </div>
                 <div className="persona-details">
                   <span className="persona-name">{persona.name}</span>
+                  {assignment?.suppressPersona && (
+                    <span className="suppress-badge inline">Persona Suppressed</span>
+                  )}
                   <div className="persona-model-selector">
                     <button
                       type="button"
@@ -580,6 +610,8 @@ export default function RoleAssignment({
                       e.preventDefault();
                       e.stopPropagation();
                       setRole(persona.id, option.role);
+                      setActiveSetupSection('participants');
+                      selectRolePersona({ personaId: persona.id, name: persona.name, role: option.role, color: persona.color, avatar: persona.avatar });
                     }}
                     title={option.description}
                   >
@@ -589,35 +621,33 @@ export default function RoleAssignment({
                 ))}
               </div>
 
-              {/* Consultant options */}
-              {isConsultant && (
-                <div className="consultant-options">
-                  <div className="option-group">
-                    <label>Focus Area (optional)</label>
-                    <input
-                      type="text"
-                      placeholder="e.g., security, UX, performance"
-                      value={assignment?.focusArea || ''}
-                      onChange={(e) => setFocusArea(persona.id, e.target.value)}
-                    />
+              {/* Consultant options — focus/stance are edited in the workspace
+                  panel; shown here abbreviated. */}
+              {isConsultant && (() => {
+                const fe = getRoleEdit(persona.id);
+                const has = fe.focusArea || fe.stance;
+                return (
+                  <div className="consultant-abbrev">
+                    {has ? (
+                      <>
+                        {fe.focusArea && (
+                          <span className="abbrev-chip"><span className="abbrev-key">Focus</span> {fe.focusArea}</span>
+                        )}
+                        {fe.stance && (
+                          <span className="abbrev-chip"><span className="abbrev-key">Stance</span> {fe.stance}</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="abbrev-empty">Set focus &amp; stance in the workspace panel &rarr;</span>
+                    )}
                   </div>
-                  <div className="option-group">
-                    <label>Starting Stance (optional)</label>
-                    <input
-                      type="text"
-                      placeholder="e.g., favors simplicity"
-                      value={assignment?.stance || ''}
-                      onChange={(e) => setStance(persona.id, e.target.value)}
-                    />
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Worker options */}
               {isWorker && (
                 <div className="worker-options">
                   <div className="suppress-note">
-                    <span className="suppress-badge">Persona Suppressed</span>
                     <p className="suppress-hint">
                       Worker uses a minimal prompt and follows directives precisely without personality influence.
                     </p>
@@ -652,7 +682,6 @@ export default function RoleAssignment({
               {assignment?.role === 'manager' && (
                 <div className="manager-options">
                   <div className="suppress-note">
-                    <span className="suppress-badge">Persona Suppressed</span>
                     <p className="suppress-hint">
                       Manager uses a minimal prompt focused on evaluation and decision-making.
                     </p>
@@ -698,7 +727,7 @@ export default function RoleAssignment({
           }}
           disabled={!canSave || saved}
         >
-          {saved ? 'Saved ✓' : 'Save Setup'}
+          {saved ? 'Saved ✓' : hasRun ? 'Save and Rerun' : 'Save Setup'}
         </button>
       </div>
     </>

@@ -58,7 +58,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  background: #252525;
+  background: #1d1d1d;
   border: 1px solid #333;
   border-radius: 6px;
   padding: 6px 10px;
@@ -90,7 +90,7 @@
 }
 
 .new-chat-cancel-btn:hover {
-  background: #252525;
+  background: #1d1d1d;
   color: #ccc;
 }
 

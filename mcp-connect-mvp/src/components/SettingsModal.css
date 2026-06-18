@@ -176,6 +176,66 @@
   color: #ffffff;
 }
 
+/* ============================================================
+   Unified settings section styling
+   Every tab (General / Appearance / Providers / Routing /
+   Services / MCP) authored its own title + header treatment, so
+   they looked completely different. These scoped rules give them
+   ONE title style, ONE description style, and ONE pane structure.
+   ============================================================ */
+
+/* One title treatment, regardless of h2/h3 or owning component */
+.settings-modal-panel .general-settings-view h3,
+.settings-modal-panel .appearance-pane h2,
+.settings-modal-panel .services-pane h2,
+.settings-modal-panel .provider-settings-header h2,
+.settings-modal-panel .rp-header h2,
+.settings-modal-panel .tools-header h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+/* One description / subtitle treatment */
+.settings-modal-panel .appearance-desc,
+.settings-modal-panel .services-description,
+.settings-modal-panel .rp-subtitle {
+  margin: 4px 0 16px;
+  font-size: 13px;
+  color: var(--text-secondary, #9ca3af);
+  line-height: 1.45;
+  max-width: none;
+}
+
+/* One pane structure: 24px padding, title at top, no double-padded
+   header dividers — so each tab reads title → description → content */
+.settings-modal-panel .appearance-pane { padding: 24px; }
+
+.settings-modal-panel .provider-settings-header {
+  padding: 0;
+  border-bottom: none;
+  margin-bottom: 16px;
+}
+
+.settings-modal-panel .rp-header { margin-bottom: 16px; }
+
+.settings-modal-panel .mcp-servers-modal-panel { padding: 24px; }
+.settings-modal-panel .mcp-servers-modal-panel .tools-header {
+  padding: 0;
+  border-bottom: none;
+  position: static;
+  background: transparent;
+  margin-bottom: 16px;
+}
+.settings-modal-panel .mcp-servers-modal-panel .tools-list,
+.settings-modal-panel .mcp-servers-modal-panel .servers-list {
+  padding-left: 0;
+  padding-right: 0;
+}
+
 /* Alignment fixes for embedded panels */
 .mcp-servers-modal-panel {
   padding: 0;

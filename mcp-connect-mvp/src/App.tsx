@@ -2,6 +2,10 @@ import { useState } from 'react';
 import Sidebar, { type AppView } from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import { PipelineLibrary, PipelineBuilder, PipelineExecutionView } from './components/pipeline';
+import { requestPipelineCreate } from './components/pipeline/pipelineCreateSignal';
+import ErrorBoundary from './components/ErrorBoundary';
+import ProjectView from './components/ProjectView';
+import { useActiveSetupSection } from './components/council/setupDetailStore';
 import { CouncilLibrary, CouncilView } from './components/council';
 import NewChatDialog from './components/NewChatDialog';
 import PermissionDialog from './components/PermissionDialog';
@@ -29,8 +33,11 @@ const APP_VERSION = (pkg?.version as string) || '0.0.0';
 
 function App() {
   const [currentView, setCurrentView] = useState<AppView>('chat');
+  // Non-null while a council's setup/edit form is open — hides the workspace panel.
+  const editingCouncilSetup = useActiveSetupSection();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showRightSidebar, setShowRightSidebar] = useState(true);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
 
   const { theme, setTheme } = useTheme();
   const updates = useAppUpdates(APP_VERSION);
@@ -79,13 +86,30 @@ function App() {
         onCouncilSelect={(id) => { council.setCurrentCouncilId(id); setCurrentView('council'); }}
         onNewCouncil={() => { council.setCurrentCouncilId(null); setCurrentView('council'); }}
         onShowCouncilLibrary={() => { council.setCurrentCouncilId(null); setCurrentView('council'); }}
+        currentProjectId={currentProjectId}
+        onSelectProject={(id) => { setCurrentProjectId(id); setCurrentView('project'); }}
+        currentPipelineId={pipeline.currentPipelineId}
+        onPipelineSelect={(id) => { pipeline.handlePipelineSelect(id); setCurrentView('pipelines'); }}
+        onShowPipelineLibrary={() => { pipeline.handlePipelineBack(); setCurrentView('pipelines'); }}
+        onNewPipeline={() => { pipeline.handlePipelineBack(); requestPipelineCreate(); setCurrentView('pipelines'); }}
         providerErrorCount={providerConfig.validationReport?.llmProviders.filter(r => r.status === 'error').length || 0}
         providerExpiredCount={providerConfig.providersList.filter(p => p.oauthExpired).length}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       <div className="main-column">
-        {currentView === 'pipelines' ? (
+        <ErrorBoundary
+          label="this view"
+          resetKey={`${currentView}:${pipeline.currentPipelineId ?? ''}:${council.currentCouncilId ?? ''}`}
+        >
+        {currentView === 'project' && currentProjectId ? (
+          <ProjectView
+            projectId={currentProjectId}
+            chats={chats.sidebarChats.map((c) => ({ id: c.id, title: c.title }))}
+            onOpenCouncil={(id) => { council.setCurrentCouncilId(id); setCurrentView('council'); }}
+            onOpenChat={(id) => { chats.setCurrentChatId(id); setCurrentView('chat'); }}
+          />
+        ) : currentView === 'pipelines' ? (
           pipeline.pipelineMode === 'execution' && pipeline.currentPipelineId ? (
             <PipelineExecutionView
               pipelineId={pipeline.currentPipelineId}
@@ -125,6 +149,7 @@ function App() {
             <CouncilView
               councilId={council.currentCouncilId}
               onBack={() => council.setCurrentCouncilId(null)}
+              onSelectCouncil={(id) => council.setCurrentCouncilId(id)}
               onGenerateTurn={council.onGenerateTurn}
               onGenerateRound={council.onGenerateRound}
               onGenerateSynthesis={council.onGenerateSynthesis}
@@ -201,12 +226,13 @@ function App() {
             onToggleRightSidebar={() => setShowRightSidebar(!showRightSidebar)}
           />
         )}
+        </ErrorBoundary>
       </div>
 
       {/* The Workspace panel is shared by chat and council. In council view it
-          gains a Setup tab (personas/roles/models) and keeps Files/Artifacts/
-          Tasks/Review/Context. Pipelines use their own full-width view. */}
-      {(currentView === 'chat' || (currentView === 'council' && council.currentCouncilId)) && (
+          keeps Files/Artifacts/Tasks/Review/Context. It's hidden while editing a
+          council's setup (the setup/edit screen is self-contained and full-width). */}
+      {(currentView === 'chat' || (currentView === 'council' && council.currentCouncilId && !editingCouncilSetup)) && (
         <RightSidebar
           workingDirectory={providerConfig.globalWorkingDirectory}
           chatWorkingDir={chats.chatWorkingDirs[chats.currentChatId || ''] || null}

@@ -15,6 +15,8 @@ import './CouncilView.css';
 interface CouncilViewProps {
   councilId: string;
   onBack?: () => void;
+  /** Navigate to another council (workflow step rail). */
+  onSelectCouncil?: (id: string) => void;
   onGenerateTurn?: (council: Council, personaId?: string, instruction?: string) => Promise<void>;
   onGenerateRound?: (council: Council) => Promise<void>;
   onGenerateSynthesis?: (council: Council) => Promise<void>;
@@ -42,6 +44,7 @@ interface CouncilViewProps {
 export default function CouncilView({
   councilId,
   onBack,
+  onSelectCouncil,
   onGenerateTurn,
   onGenerateRound,
   onGenerateSynthesis,
@@ -104,8 +107,10 @@ export default function CouncilView({
   if (council.orchestration.mode === 'deliberation') {
     return (
       <DeliberationView
+        key={councilId}
         councilId={councilId}
         onBack={onBack}
+        onSelectCouncil={onSelectCouncil}
         onFrameProblem={onFrameProblem}
         onPause={onPauseDeliberation}
         onResume={onResumeDeliberation}

@@ -33,7 +33,7 @@
 .create-council-btn {
   padding: 0.3rem 0.7rem;
   font-size: 0.75rem;
-  background: #2a2a2a;
+  background: #1f1f1f;
   color: #fff;
   border: 1px solid var(--border-color, #333);
   border-radius: 6px;
@@ -43,7 +43,7 @@
 }
 
 .create-council-btn:hover {
-  background: #333;
+  background: #2a2a2a;
   border-color: var(--text-secondary, #999);
 }
 
@@ -278,7 +278,7 @@
 .council-action {
   flex: 1;
   padding: 0.2rem 0.35rem;
-  background: #2a2a2a;
+  background: #1f1f1f;
   border: 1px solid var(--border-color, #333);
   border-radius: 5px;
   color: #fff;
@@ -288,7 +288,7 @@
 }
 
 .council-action:hover {
-  background: #333;
+  background: #2a2a2a;
   border-color: var(--text-secondary, #999);
 }
 
@@ -505,3 +505,126 @@
   color: #c4b5fd;
   line-height: 1.4;
 }
+
+/* ===== Council table (expandable rows) ===== */
+.council-table {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Shared column grid for head + row */
+.council-table-head,
+.council-row {
+  display: grid;
+  grid-template-columns: 28px 1fr 90px 120px 64px 110px;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+}
+
+.council-table-head {
+  background: #141414;
+  border-bottom: 1px solid var(--border-color, #333);
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+}
+
+.council-row {
+  cursor: pointer;
+  border-bottom: 1px solid #1a1a1a;
+  transition: background 0.12s;
+}
+.council-row:hover { background: #131313; }
+.council-row.open { background: #131313; }
+.council-row-group:last-child .council-row:not(.open) { border-bottom: none; }
+
+.ct-col {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+.ct-expand { color: #818cf8; font-size: 0.7rem; text-align: center; }
+.ct-name { color: #fff; font-weight: 600; }
+.ct-type { color: #cbd5e1; }
+.ct-agents { color: #9ca3af; }
+.ct-updated { color: #6b7280; font-size: 0.72rem; }
+
+/* Expanded detail */
+.council-row-detail {
+  padding: 0.7rem 0.9rem 0.9rem 2.05rem;
+  background: #0d0d0d;
+  border-bottom: 1px solid #1a1a1a;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.crd-block { display: flex; flex-direction: column; gap: 0.3rem; }
+.crd-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+}
+.crd-task { font-size: 0.78rem; color: #e5e5e5; line-height: 1.45; white-space: pre-wrap; }
+
+.crd-personas { display: flex; flex-direction: column; gap: 0.3rem; }
+.crd-persona { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.crd-persona-avatar {
+  width: 22px; height: 22px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; font-size: 0.78rem;
+}
+.crd-persona-name { font-size: 0.78rem; color: #f1f1f3; font-weight: 500; flex-shrink: 0; }
+.crd-role {
+  font-size: 0.6rem; font-weight: 600; padding: 0.05rem 0.4rem; border-radius: 4px;
+  text-transform: capitalize; flex-shrink: 0;
+  background: rgba(148,163,184,0.15); color: #94a3b8;
+}
+.crd-role.role-manager { background: rgba(99,102,241,0.18); color: #a5b4fc; }
+.crd-role.role-consultant { background: rgba(34,197,94,0.15); color: #4ade80; }
+.crd-role.role-worker { background: rgba(245,158,11,0.15); color: #fbbf24; }
+.crd-persona-model {
+  font-family: ui-monospace, monospace; font-size: 0.68rem; color: #6b7280;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+
+.crd-meta { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; }
+.crd-meta-item { display: flex; flex-direction: column; gap: 0.2rem; }
+.crd-meta-val { font-size: 0.74rem; color: #cbd5e1; }
+
+.crd-actions { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+
+.ct-steps {
+  margin-left: 0.5rem;
+  font-size: 0.62rem;
+  font-weight: 600;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(99,102,241,0.18);
+  color: #a5b4fc;
+  vertical-align: middle;
+}
+
+/* Save-output select inside the expanded table row (was unstyled native control) */
+.crd-meta-item .save-output-select {
+  margin-top: 2px;
+  padding: 0.2rem 0.45rem;
+  background: var(--bg-tertiary, #1d1d1d);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 5px;
+  color: #e5e5e5;
+  font-size: 0.74rem;
+  cursor: pointer;
+  width: auto;
+  max-width: 150px;
+}
+.crd-meta-item .save-output-select:focus { outline: none; border-color: #6366f1; }

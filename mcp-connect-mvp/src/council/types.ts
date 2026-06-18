@@ -186,6 +186,15 @@ export interface Council {
 
   /** Pipeline ID if this council was created by a pipeline step */
   pipelineId?: string;
+
+  /** Workflow sequencing — councils sharing a workflowId form an ordered series
+   *  (the unified "pipeline is a series of councils" model). A council with no
+   *  workflowId is a standalone 1-step workflow. */
+  workflowId?: string;
+  workflowOrder?: number;
+  /** The overall council/workflow name (shared across steps), stored on the
+   *  anchor step. Each step's own `name` is its step name. */
+  workflowName?: string;
 }
 
 // ============================================================================
@@ -737,6 +746,16 @@ export interface DeliberationConfig {
    *  When true, context evolves through the deliberation (v1 → v2 → v3...).
    *  When false (default), context stays at v1 and findings only live in the ledger. */
   evolveContext?: boolean;
+
+  // --- Workflow step contract (how this council connects to the others in its series) ---
+  /** Template that renders the previous step(s)' output as this step's input
+   *  context. Supports {{input}}, {{input[N]}}, and {{input.field}}. */
+  inputTemplate?: string;
+  /** What kind of data this step produces. 'json' enables {{input.field}} access
+   *  downstream. Default 'string'. */
+  outputType?: 'string' | 'file' | 'directory' | 'json';
+  /** Also feed the workflow's initial input to this step, regardless of position. */
+  includePipelineInput?: boolean;
 }
 
 /**

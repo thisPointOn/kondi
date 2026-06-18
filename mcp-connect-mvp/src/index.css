@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* Input / textarea / tile fill grey. Referenced across the app as
+     var(--bg-tertiary, #252525); defining it here darkens them all at once. */
+  --bg-tertiary: #1d1d1d;
+}
+
 html, body, #root {
   height: 100%;
   margin: 0;

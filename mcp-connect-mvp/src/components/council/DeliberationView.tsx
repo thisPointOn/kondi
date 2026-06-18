@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { FolderOpen, ChevronDown } from 'lucide-react';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, ask } from '@tauri-apps/plugin-dialog';
 import type {
   Council,
   Persona,
@@ -29,7 +29,11 @@ import { buildAbbreviatedSummary, saveDeliberationOutput } from '../../services/
 import { estimateCostUsd, formatUsd } from '../../services/cost';
 import { isModelBroken, filterVisibleModels } from '../../services/modelProbe';
 import { getModelsForPersonaSelector } from '../../config/models';
-import { consumeCouncilSetup } from './councilSetupSignal';
+import { consumeCouncilSetup, requestCouncilSetup, EDIT_COUNCIL_SETUP_EVENT } from './councilSetupSignal';
+import { setActiveSetupSection } from './setupDetailStore';
+import WorkflowRail from './WorkflowRail';
+import { mcpClient } from '../../services/mcpClient';
+import { BUILTIN_SERVER_IDS } from '../../utils/filterTools';
 import type { PresetPersona, DeliberationPhase } from '../../council/types';
 import './DeliberationView.css';
 
@@ -43,6 +47,8 @@ const FORCE_DECISION_PHASES: Set<DeliberationPhase> = new Set([
 interface DeliberationViewProps {
   councilId: string;
   onBack?: () => void;
+  /** Navigate to another council (used by the workflow step rail). */
+  onSelectCouncil?: (id: string) => void;
   onFrameProblem?: (council: Council, rawProblem: string) => Promise<void>;
   onPause?: (council: Council) => Promise<void>;
   onResume?: (council: Council) => Promise<void>;
@@ -66,6 +72,7 @@ interface DeliberationViewProps {
 export default function DeliberationView({
   councilId,
   onBack,
+  onSelectCouncil,
   onFrameProblem,
   onPause,
   onResume,
@@ -108,6 +115,21 @@ export default function DeliberationView({
     const phase = c?.deliberationState?.currentPhase || 'created';
     return phase === 'created' ? 'setup' : null;
   });
+  // Drive the workspace panel's setup-details view: default to the first section
+  // while editing, and clear it when the setup panel closes.
+  useEffect(() => {
+    setActiveSetupSection(activePanel === 'setup' ? 'name' : null);
+    return () => setActiveSetupSection(null);
+  }, [activePanel]);
+
+  // The workspace Setup panel's Edit button opens this council's setup in place.
+  useEffect(() => {
+    const onEdit = (e: Event) => {
+      if ((e as CustomEvent).detail === councilId) setActivePanel('setup');
+    };
+    window.addEventListener(EDIT_COUNCIL_SETUP_EVENT, onEdit);
+    return () => window.removeEventListener(EDIT_COUNCIL_SETUP_EVENT, onEdit);
+  }, [councilId]);
   const [pausedUserInput, setPausedUserInput] = useState('');
   const [continueInput, setContinueInput] = useState('');
   const [continueModel, setContinueModel] = useState<{ provider: string; model: string } | null>(null);
@@ -130,6 +152,7 @@ export default function DeliberationView({
     return !!c?.deliberation?.savedProblem;
   });
   const [councilName, setCouncilName] = useState('');
+  const [workflowName, setWorkflowName] = useState(() => councilStore.getWorkflowName(councilId));
   const [saveMode, setSaveMode] = useState<'none' | 'full' | 'abbreviated'>(() => {
     const c = councilStore.get(councilId);
     if (!c?.deliberation?.saveDeliberation) return 'none';
@@ -147,6 +170,14 @@ export default function DeliberationView({
     const c = councilStore.get(councilId);
     return c?.deliberation?.maxWordsPerResponse ?? 0; // 0 = no limit
   });
+  // Workflow step contract (how this council connects to the rest of the series)
+  const [inputTemplate, setInputTemplate] = useState(() => councilStore.get(councilId)?.deliberation?.inputTemplate ?? '{{input}}');
+  const [outputType, setOutputType] = useState<'string' | 'json' | 'file' | 'directory'>(() => councilStore.get(councilId)?.deliberation?.outputType ?? 'string');
+  const [includePipelineInput, setIncludePipelineInput] = useState(() => councilStore.get(councilId)?.deliberation?.includePipelineInput ?? false);
+  const [decisionCriteria, setDecisionCriteria] = useState(() => (councilStore.get(councilId)?.deliberation?.decisionCriteria || []).join('\n'));
+  // MCP tool access: undefined = all external servers; [] = none; [...ids] = specific.
+  const [allowedServerIds, setAllowedServerIds] = useState<string[] | undefined>(() => councilStore.get(councilId)?.deliberation?.allowedServerIds);
+  const [showInputTemplate, setShowInputTemplate] = useState(false);
   const [isAddingPersona, setIsAddingPersona] = useState(false);
   const [editingPersona, setEditingPersona] = useState<Persona | null>(null);
   const [stagedComment, setStagedComment] = useState('');
@@ -351,6 +382,13 @@ export default function DeliberationView({
   const currentRound = council?.deliberationState?.currentRound || 0;
   const isTerminal = ['completed', 'cancelled', 'failed', 'created'].includes(currentPhase);
   const isRunning = !isPaused && !isTerminal;
+  // The council has already produced output if it has ledger entries or has
+  // advanced past the initial 'created'/'problem_framing' state. Editing such a
+  // council means saving will clear that output and re-run (Save & Rerun).
+  const hasRun = entries.length > 0 || !['created', 'problem_framing'].includes(currentPhase);
+  // Multi-step workflow (a "pipeline"): show the step rail as a second header so
+  // you can jump between steps and see each one's output in the main area.
+  const isMultiStep = councilStore.getWorkflow(councilId).length > 1;
 
   // Check if roles are assigned
   const hasManager = council?.deliberation?.roleAssignments?.some((r) => r.role === 'manager');
@@ -502,6 +540,11 @@ export default function DeliberationView({
 
   return (
     <div className="deliberation-view">
+      {/* Workflow step rail — only on the setup/edit screen. The run/view screen
+          stays identical to chat (header + ledger + footer). */}
+      {/* Working-dir + context bars are part of the chat-style run/view screen only.
+          The setup/edit screen is just the form. */}
+      {activePanel !== 'setup' && (<>
       {/* Active directory + context usage at the top — same as the chat view. */}
       <div className="chat-dir-bar">
         <span className="chat-dir-indicator" title={council.deliberation?.workingDirectory || 'No working directory set'}>
@@ -546,15 +589,6 @@ export default function DeliberationView({
               {totalLatency > 0 && <span className="ctx-stat">{(totalLatency / 1000).toFixed(0)}s</span>}
               {round > 0 && <span className="ctx-stat">round {round}</span>}
               <span className="ctx-stat">{modelsUsed.size || council.personas.length} models</span>
-              <span style={{ flex: 1 }} />
-              <button
-                className="ctx-edit-btn"
-                onClick={(e) => { e.stopPropagation(); setActivePanel('setup'); }}
-                title="Edit council setup"
-              >
-                ✎ Edit
-              </button>
-              <span className={`deliberation-status deliberation-status-${st.c}`}>{st.l}</span>
             </div>
             {showAgentBreakdown && (
               <div className="chat-context-detail">
@@ -585,6 +619,21 @@ export default function DeliberationView({
           </>
         );
       })()}
+      </>)}
+      {/* Step rail — second header. Only for multi-step workflows; a single-step
+          council shows no rail at all (in setup or view). Selecting a step swaps
+          the main ledger + the right panel. */}
+      {isMultiStep && (
+        <WorkflowRail
+          councilId={councilId}
+          onSelect={(id) => {
+            // While editing, jumping to another step opens its edit screen too
+            // (not its completed/run view).
+            if (activePanel === 'setup') requestCouncilSetup(id);
+            onSelectCouncil?.(id);
+          }}
+        />
+      )}
       {/* Header */}
       <div className="deliberation-header">
         <div className="deliberation-header-left">
@@ -807,23 +856,64 @@ export default function DeliberationView({
               <button className="mv-dismiss" onClick={() => setModelValidationError(null)}>×</button>
             </div>
           )}
-          {/* Setup Panel - shown in main area */}
+          {/* Setup Panel - shown inline in the main area (like the pipeline builder) */}
           {activePanel === 'setup' ? (
-            <div className="council-setup-overlay" onClick={() => setActivePanel(null)}>
-              <div className="council-setup-dialog" onClick={(e) => e.stopPropagation()}>
-                <div className="council-setup-dialog-head">
-                  <h3>Council Setup</h3>
-                  <button type="button" className="setup-dialog-close" onClick={() => setActivePanel(null)}>×</button>
+            <div className="council-setup-inline">
+                <div className="council-setup-inline-head">
+                  <h3>{(!hasRun && !council.deliberation?.savedProblem) ? 'New Council' : 'Edit Council'}</h3>
+                  <span style={{ flex: 1 }} />
+                  <button
+                    type="button"
+                    className="setup-inline-addstep"
+                    title="Add a step — turn this into a multi-step pipeline"
+                    onClick={() => {
+                      const next = councilStore.appendToWorkflow(councilId);
+                      if (next) onSelectCouncil?.(next.id);
+                    }}
+                  >
+                    + Add step
+                  </button>
+                  <button
+                    type="button"
+                    className="setup-inline-delete"
+                    onClick={async () => {
+                      const name = council.name ? `"${council.name}"` : 'this council';
+                      const ok = await ask(
+                        `Deleting ${name} will permanently remove the council and all of its output. This cannot be undone.`,
+                        { title: 'Delete council?', kind: 'warning', okLabel: 'Delete', cancelLabel: 'Cancel' }
+                      );
+                      if (ok) {
+                        councilStore.delete(councilId);
+                        onBack?.();
+                      }
+                    }}
+                  >
+                    Delete
+                  </button>
+                  <button type="button" className="setup-inline-done" onClick={() => setActivePanel(null)}>Done</button>
                 </div>
                 <div className="main-setup-panel">
 
-              {/* Council Name */}
-              <div className="setup-section">
+              {/* Council Name (the overall workflow) + Step Name (this step) */}
+              <div className="setup-section" onClick={() => setActiveSetupSection('name')} onFocusCapture={() => setActiveSetupSection('name')}>
                 <h4>Council Name</h4>
                 <input
                   type="text"
                   className="council-name-input"
                   placeholder="Enter council name"
+                  value={workflowName}
+                  onChange={(e) => setWorkflowName(e.target.value)}
+                  onBlur={() => {
+                    if (workflowName.trim() && workflowName !== councilStore.getWorkflowName(councilId)) {
+                      councilStore.renameWorkflow(councilId, workflowName.trim());
+                    }
+                  }}
+                />
+                <h4 style={{ marginTop: '0.7rem' }}>Step Name</h4>
+                <input
+                  type="text"
+                  className="council-name-input"
+                  placeholder="Enter step name"
                   value={councilName}
                   onChange={(e) => setCouncilName(e.target.value)}
                   onBlur={() => {
@@ -835,7 +925,7 @@ export default function DeliberationView({
               </div>
 
               {/* Task */}
-              <div className="setup-section">
+              <div className="setup-section" onClick={() => setActiveSetupSection('task')} onFocusCapture={() => setActiveSetupSection('task')}>
                 <h4>Task</h4>
                 <p className="section-hint">What should the council work on? Optionally set a working directory below for additional file context.</p>
                 <textarea
@@ -850,8 +940,89 @@ export default function DeliberationView({
                 />
               </div>
 
+              {/* Input — how this step receives the previous step's output */}
+              {(() => {
+                const wfSteps = councilStore.getWorkflow(councilId);
+                const stepIndex = wfSteps.findIndex((s) => s.id === councilId);
+                const isFirstStep = stepIndex <= 0;
+                return (
+                  <div className="setup-section" onClick={() => setActiveSetupSection('input')} onFocusCapture={() => setActiveSetupSection('input')}>
+                    <h4>Input</h4>
+                    {isFirstStep ? (
+                      <p className="section-hint">This is the first step in the workflow — nothing runs before it. Its input is the <strong>Task</strong> above (plus any working-directory context).</p>
+                    ) : (
+                      <>
+                        <p className="section-hint">This step automatically receives the full output of the previous step as its input. You only need to customize this if you want to combine or pick apart earlier outputs.</p>
+                        <label className="constraint-toggle">
+                          <input
+                            type="checkbox"
+                            checked={includePipelineInput}
+                            onChange={(e) => setIncludePipelineInput(e.target.checked)}
+                          />
+                          <span className="constraint-label">Also include the workflow's original starting input</span>
+                        </label>
+                        <button type="button" className="link-btn" onClick={() => setShowInputTemplate((v) => !v)}>
+                          {showInputTemplate ? 'Hide advanced' : 'Advanced: customize what gets passed in'}
+                        </button>
+                        {showInputTemplate && (
+                          <>
+                            <textarea
+                              className="task-input"
+                              placeholder="{{input}}"
+                              value={inputTemplate}
+                              onChange={(e) => setInputTemplate(e.target.value)}
+                              rows={2}
+                            />
+                            <p className="checkbox-hint">
+                              These placeholders are replaced with real output when the step runs:<br />
+                              <code>{'{{input}}'}</code> — the previous step's entire output<br />
+                              <code>{'{{input[0]}}'}</code> — the output of a specific earlier step (by number)<br />
+                              <code>{'{{input.fieldName}}'}</code> — one field, when that step's Output type is JSON
+                            </p>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Output — what this step produces for the next step */}
+              <div className="setup-section" onClick={() => setActiveSetupSection('output')} onFocusCapture={() => setActiveSetupSection('output')}>
+                <h4>Output</h4>
+                <p className="section-hint">What this step produces. Choose JSON to let later steps read individual fields via {'{{input.field}}'}.</p>
+                <div className="output-type-selector">
+                  {(['string', 'json', 'file', 'directory'] as const).map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      className={`rounds-option ${outputType === t ? 'active' : ''}`}
+                      onClick={() => setOutputType(t)}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <p className="section-hint" style={{ marginTop: '0.6rem' }}>Expected output (optional) — what the worker should deliver.</p>
+                <textarea
+                  className="task-input"
+                  placeholder="e.g., A passing test suite and a short changelog."
+                  value={expectedOutput}
+                  onChange={(e) => setExpectedOutput(e.target.value)}
+                  rows={2}
+                />
+                <p className="section-hint" style={{ marginTop: '0.6rem' }}>Decision criteria (optional, one per line) — what the manager optimizes for.</p>
+                <textarea
+                  className="task-input"
+                  placeholder={'technical feasibility\nsecurity\nsimplicity'}
+                  value={decisionCriteria}
+                  onChange={(e) => setDecisionCriteria(e.target.value)}
+                  rows={2}
+                />
+              </div>
+
               {/* Working Directory */}
-              <div className="setup-section">
+              <div className="setup-section" onClick={() => setActiveSetupSection('directory')} onFocusCapture={() => setActiveSetupSection('directory')}>
                 <h4>Working Directory</h4>
                 <div className="directory-input-row">
                   <input
@@ -918,13 +1089,57 @@ export default function DeliberationView({
                     Evolve context with findings
                   </span>
                 </label>
-                <p className="directory-hint">
-                  As the council deliberates, new facts and decisions are folded back into the shared context document, so later rounds and personas build on what's already been discovered instead of starting fresh.
+                <p className="checkbox-hint">
+                  As the council deliberates, new facts and decisions are folded back into the shared context document — so later rounds and personas build on what's already been discovered instead of starting from the original context each time.
                 </p>
               </div>
 
+              {/* Tools — which external MCP servers this step can use */}
+              {(() => {
+                const externalServers = mcpClient.getAllServers()
+                  .filter((s) => !BUILTIN_SERVER_IDS.includes(s.id) && s.status === 'connected');
+                const restricted = allowedServerIds !== undefined;
+                const selected = new Set(allowedServerIds || []);
+                return (
+                  <div className="setup-section" onClick={() => setActiveSetupSection('tools')} onFocusCapture={() => setActiveSetupSection('tools')}>
+                    <h4>Tools</h4>
+                    <p className="section-hint">Which external MCP servers this step can use. Built-in tools are always available.</p>
+                    <label className="constraint-toggle">
+                      <input
+                        type="checkbox"
+                        checked={restricted}
+                        onChange={(e) => setAllowedServerIds(e.target.checked ? [] : undefined)}
+                      />
+                      <span className="constraint-label">Restrict external MCP tools</span>
+                    </label>
+                    {!restricted ? (
+                      <p className="section-hint" style={{ marginTop: '0.4rem' }}>All connected external servers available.</p>
+                    ) : externalServers.length === 0 ? (
+                      <p className="section-hint" style={{ marginTop: '0.4rem' }}>No external MCP servers connected.</p>
+                    ) : (
+                      <div className="tools-server-list">
+                        {externalServers.map((s) => (
+                          <label key={s.id} className="constraint-toggle tools-server-item">
+                            <input
+                              type="checkbox"
+                              checked={selected.has(s.id)}
+                              onChange={(e) => {
+                                const next = new Set(selected);
+                                if (e.target.checked) next.add(s.id); else next.delete(s.id);
+                                setAllowedServerIds([...next]);
+                              }}
+                            />
+                            <span className="constraint-label">{s.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Council Type */}
-              <div className="setup-section">
+              <div className="setup-section" onClick={() => setActiveSetupSection('type')} onFocusCapture={() => setActiveSetupSection('type')}>
                 <h4>Council Type</h4>
                 <div className="mode-selector">
                   {([
@@ -984,7 +1199,7 @@ export default function DeliberationView({
 
               {/* Consultant Execution Mode - only show in deliberation mode */}
               {council.orchestration.mode === 'deliberation' && (
-                <div className="setup-section">
+                <div className="setup-section" onClick={() => setActiveSetupSection('execution')} onFocusCapture={() => setActiveSetupSection('execution')}>
                   <h4>Consultant Execution</h4>
                   <p className="section-hint">How consultants run during each round</p>
                   <div className="execution-mode-selector">
@@ -1026,7 +1241,7 @@ export default function DeliberationView({
 
               {/* Deliberation Rounds - only show in deliberation mode */}
               {council.orchestration.mode === 'deliberation' && (
-                <div className="setup-section">
+                <div className="setup-section" onClick={() => setActiveSetupSection('rounds')} onFocusCapture={() => setActiveSetupSection('rounds')}>
                   <h4>Deliberation Rounds</h4>
                   <div className="rounds-row">
                     <div className="rounds-field">
@@ -1088,7 +1303,7 @@ export default function DeliberationView({
 
               {/* Max Words Per Response */}
               {council.orchestration.mode === 'deliberation' && (
-                <div className="setup-section">
+                <div className="setup-section" onClick={() => setActiveSetupSection('max-words')} onFocusCapture={() => setActiveSetupSection('max-words')}>
                   <h4>Max Words Per Response</h4>
                   <p className="section-hint">Soft limit — guides agents to keep responses concise (0 = no limit)</p>
                   <div className="max-rounds-selector">
@@ -1115,7 +1330,7 @@ export default function DeliberationView({
               )}
 
               {/* Save Output */}
-              <div className="setup-section">
+              <div className="setup-section" onClick={() => setActiveSetupSection('save-output')} onFocusCapture={() => setActiveSetupSection('save-output')}>
                 <h4>Save Output</h4>
                 <p className="section-hint">Save deliberation results to the working directory on completion</p>
                 <div className="save-output-selector">
@@ -1174,13 +1389,13 @@ export default function DeliberationView({
               </div>
 
               {/* Participants (consolidated with Role Assignment) */}
-              <div className="setup-section">
+              <div className="setup-section" onClick={() => setActiveSetupSection('participants')} onFocusCapture={() => setActiveSetupSection('participants')}>
                 <RoleAssignment
                   council={council}
                   configuredProviders={configuredProviders}
                   hasExternalChanges={hasExternalChanges}
                   onClose={() => setActivePanel(null)}
-                  onSave={(assignments, personaUpdates, _saveOptions) => {
+                  onSave={(assignments, personaUpdates, _saveOptions, rerun) => {
                     // Step 1: Save role assignments
                     councilStore.setRoleAssignments(councilId, assignments);
                     // Step 2: Save persona model changes
@@ -1213,6 +1428,12 @@ export default function DeliberationView({
                           maxRounds: maxRounds,
                           saveDeliberation: saveMode !== 'none',
                           saveDeliberationMode: saveMode === 'none' ? 'full' : saveMode,
+                          // Workflow step contract
+                          inputTemplate: inputTemplate.trim() || undefined,
+                          outputType,
+                          includePipelineInput,
+                          decisionCriteria: decisionCriteria.split('\n').map((s) => s.trim()).filter(Boolean),
+                          allowedServerIds,
                         },
                       });
                     }
@@ -1223,8 +1444,16 @@ export default function DeliberationView({
                       && savedAssignments.some((r: { role: string }) => r.role === 'manager')
                       && savedAssignments.some((r: { role: string }) => r.role === 'consultant')
                       && savedAssignments.some((r: { role: string }) => r.role === 'worker');
+                    // Editing a council that already ran: clear prior output and re-run now
+                    // (the user confirmed this in the Save & Rerun dialog).
+                    if (rerun && ready) {
+                      setActivePanel('deliberation');
+                      void handleRestartDeliberation();
+                      return;
+                    }
                     setActivePanel(ready ? 'deliberation' : null);
                   }}
+                  hasRun={hasRun}
                   inline
                   onAddPersona={() => setIsAddingPersona(true)}
                   onRemovePersona={(personaId) => councilStore.removePersona(councilId, personaId)}
@@ -1232,7 +1461,6 @@ export default function DeliberationView({
                 />
               </div>
                 </div>
-              </div>
             </div>
           ) : activePanel === 'output' ? (
             <div className="main-output-panel">
@@ -1464,7 +1692,7 @@ export default function DeliberationView({
 
       {/* Continue the conversation after the council is done — chat-style input
           with the model combo beneath it. */}
-      {isTerminal && onUserMessage && (() => {
+      {isTerminal && activePanel !== 'setup' && onUserMessage && (() => {
         const managerPersona =
           council.personas.find(p => council.deliberation?.roleAssignments?.some(r => r.personaId === p.id && r.role === 'manager'))
           || council.personas[0];

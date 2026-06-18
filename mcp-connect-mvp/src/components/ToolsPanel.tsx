@@ -1373,14 +1373,14 @@ const ServerCard: FC<{
           )}
         </div>
         <button
-          className={`server-action-btn ${showDetails ? 'active' : ''}`}
+          className={`server-icon-btn ${showDetails ? 'active' : ''}`}
           onClick={(e) => { e.stopPropagation(); setShowDetails((p) => !p); if (!showDetails) setExpanded(false); }}
           title="Settings & status"
         >
           <Settings2 size={15} />
         </button>
         <button
-          className={`server-action-btn ${expanded ? 'active' : ''}`}
+          className={`server-icon-btn ${expanded ? 'active' : ''}`}
           onClick={(e) => { e.stopPropagation(); setExpanded((p) => !p); if (!expanded) setShowDetails(false); }}
           title="Available tools"
         >

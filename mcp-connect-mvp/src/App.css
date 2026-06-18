@@ -134,7 +134,7 @@
 }
 
 .pill-btn:hover {
-  background: #252525;
+  background: #1d1d1d;
   border-color: #3a3a3a;
 }
 
@@ -472,7 +472,7 @@ select:focus {
 }
 
 .provider-btn:hover {
-  background: #252525;
+  background: #1d1d1d;
   border-color: #3a3a3a;
   color: #ccc;
 }
@@ -546,7 +546,7 @@ select:focus {
 }
 
 .current-plan-badge.free {
-  background: #2a2a2a;
+  background: #1f1f1f;
   color: #999;
 }
 
@@ -723,7 +723,7 @@ select:focus {
 }
 
 .global-directory-setting .directory-browse-btn:hover {
-  background: #252525;
+  background: #1d1d1d;
   border-color: #3a3a3a;
 }
 
@@ -826,3 +826,63 @@ select:focus {
   background: rgba(0, 0, 0, 0.05);
 }
 
+
+/* Error boundary fallback (replaces the old black-screen-on-crash) */
+.error-boundary-panel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 32px;
+  box-sizing: border-box;
+  background: #0a0a0a;
+}
+.error-boundary-card {
+  max-width: 760px;
+  width: 100%;
+  background: #141414;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  padding: 20px 22px;
+}
+.error-boundary-card h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #f1f1f3;
+}
+.error-boundary-message {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #f87171;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.error-boundary-retry {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.78rem;
+  background: #1f1f1f;
+  color: #fff;
+  border: 1px solid #333;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.error-boundary-retry:hover { background: #2a2a2a; border-color: #999; }
+.error-boundary-stack {
+  margin: 14px 0 0;
+  padding: 12px;
+  background: #0a0a0a;
+  border: 1px solid #222;
+  border-radius: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #9ca3af;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

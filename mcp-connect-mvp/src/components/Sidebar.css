@@ -57,7 +57,6 @@
 }
 
 .council-section {
-  padding: 0 8px;
   margin-top: 4px;
 }
 .council-section .section-header-toggle { gap: 6px; }
@@ -154,7 +153,7 @@
 }
 
 .chat-item.active {
-  background: #2a2a2a;
+  background: #1f1f1f;
 }
 
 .chat-context-menu {
@@ -180,7 +179,7 @@
 }
 
 .chat-menu-item:hover {
-  background: #252525;
+  background: #1d1d1d;
 }
 
 .chat-menu-item.danger {
@@ -324,7 +323,7 @@
 }
 
 .chats-icon-btn:hover {
-  background: #252525;
+  background: #1d1d1d;
   color: white;
   border-color: #4a4a4a;
 }
@@ -385,11 +384,11 @@
 }
 
 .popover-item:hover {
-  background: #252525;
+  background: #1d1d1d;
 }
 
 .popover-item.active {
-  background: #2a2a2a;
+  background: #1f1f1f;
 }
 
 .popover-item.empty {
@@ -428,11 +427,16 @@
   color: #666;
 }
 
+/* Plain divider: just a horizontal line, no label. */
+.section-divider-plain {
+  padding: 4px 8px;
+}
+
 .section-divider::after {
   content: '';
   flex: 1;
   height: 1px;
-  background: #2a2a2a;
+  background: #1f1f1f;
 }
 
 .nav-btn {
@@ -657,3 +661,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Project row: chevron toggles inline list, name opens the project view */
+.project-chevron {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: #888;
+  cursor: pointer;
+}
+.project-chevron:hover { color: #ccc; }
+.project-toggle.active { background: #1f1f1f; }
