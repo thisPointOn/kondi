@@ -18,6 +18,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { Message, MCPTool } from '../types/mcp';
 import type { ChatResult } from './llm-router';
+import { buildWorkdirGuardSettings } from './cli-workdir-guard';
 import { parseStreamJsonOutput } from '../pipeline/output-parsers';
 import { captureGeneratedFiles } from './artifactManifest';
 
@@ -105,9 +106,13 @@ export async function claudeCliChat(
     '--permission-mode', 'bypassPermissions',
   ];
 
-  // Grant tool access to the working directory so the CLI can write files
+  // Grant tool access to the working directory so the CLI can write files,
+  // and install the PreToolUse guard that DENIES any write outside it. The
+  // system-prompt warning below is advisory; this hook is the hard enforcement
+  // (Claude Code's own permission rules do not confine writes headlessly).
   if (workingDirectory) {
     args.push('--add-dir', workingDirectory);
+    args.push('--settings', JSON.stringify(buildWorkdirGuardSettings()));
   }
 
   if (resume && existingSessionId) {

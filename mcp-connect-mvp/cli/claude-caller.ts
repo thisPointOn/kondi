@@ -5,56 +5,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { parseStreamJsonOutput } from '../src/pipeline/output-parsers';
-
-/**
- * Deterministic directory-containment guard, installed as a Claude Code
- * PreToolUse hook. Claude Code's own permission rules (`--allowedTools
- * "Write(...)"`, `--permission-mode`) do NOT reliably confine writes in
- * headless `--print` mode — absolute-path rules silently fail to match and
- * `bypassPermissions` disables confinement entirely (verified empirically:
- * workers escaped to the parent git repo's docs/). A PreToolUse hook fires
- * under every permission mode and can resolve the real target path, so it is
- * the only reliable enforcement point. Root = the hook payload's `cwd` (which
- * the CLI/webview set to the council working directory), falling back to
- * KONDI_WORKDIR. Any Write/Edit/MultiEdit outside root is denied; Bash that
- * redirects or mutates an absolute path outside root is denied (reads allowed).
- */
-const WORKDIR_GUARD_SCRIPT = String.raw`
-const fs=require('fs'),path=require('path');
-let raw='';try{raw=fs.readFileSync(0,'utf8')}catch(e){}
-let d={};try{d=JSON.parse(raw)}catch(e){}
-const root=path.resolve(d.cwd||process.env.KONDI_WORKDIR||process.cwd());
-const ti=d.tool_input||{};const name=d.tool_name||'';
-function out(decision,reason){process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:decision,permissionDecisionReason:reason||''}}));process.exit(0);}
-function within(p){const a=path.resolve(root,p);return a===root||a.startsWith(root.endsWith('/')?root:root+'/');}
-if(name==='Write'||name==='Edit'||name==='MultiEdit'||name==='NotebookEdit'){
-  const fp=ti.file_path||ti.path||ti.notebook_path||'';
-  if(fp&&!within(fp))return out('deny','Blocked: '+fp+' is outside the council working directory ('+root+'). Write only inside it, e.g. .kondi/workspace/.');
-  return out('allow');
-}
-if(name==='Bash'){
-  const cmd=String(ti.command||'');
-  const redir=cmd.match(/>>?\s*("[^"]+"|'[^']+'|\S+)/g)||[];
-  for(let m of redir){let p=m.replace(/^>>?\s*/,'').replace(/^["']|["']$/g,'');if(/^\/(tmp|dev|proc|var\/folders)\b/.test(p))continue;if(p.startsWith('/')&&!within(p))return out('deny','Blocked Bash redirect to '+p+' outside working dir '+root);}
-  const mut=cmd.match(/\b(rm|mv|cp|tee|dd|touch|mkdir|rmdir|truncate|ln|sed\s+-i\S*|install|chmod|chown)\b[^\n|]*?(\/[^\s'"|;&]+)/g)||[];
-  for(let m of mut){const pm=m.match(/(\/[^\s'"|;&]+)\s*$/);if(pm){const p=pm[1];if(/^\/(tmp|dev|proc|var\/folders)\b/.test(p))continue;if(!within(p))return out('deny','Blocked Bash mutation of '+p+' outside working dir '+root);}}
-  return out('allow');
-}
-return out('allow');
-`;
-
-/** Write the guard once to a stable path and return it. */
-function ensureWorkdirGuard(): string {
-  const dir = path.join(os.homedir(), '.local/share/kondi/cli-state');
-  fs.mkdirSync(dir, { recursive: true });
-  const p = path.join(dir, 'workdir-guard.cjs');
-  try { fs.writeFileSync(p, WORKDIR_GUARD_SCRIPT); } catch { /* reuse existing */ }
-  return p;
-}
+import { buildWorkdirGuardSettings } from '../src/services/cli-workdir-guard';
 
 export interface CallerResult {
   content: string;
@@ -124,16 +76,7 @@ export async function callClaude(opts: {
     // rules do not reliably confine in headless mode). Fires even under
     // bypassPermissions, so workers keep full tool power but cannot escape.
     if (opts.confineToDir !== false) {
-      const guard = ensureWorkdirGuard();
-      const settings = JSON.stringify({
-        hooks: {
-          PreToolUse: [{
-            matcher: 'Write|Edit|MultiEdit|NotebookEdit|Bash',
-            hooks: [{ type: 'command', command: `node ${guard}` }],
-          }],
-        },
-      });
-      args.push('--settings', settings);
+      args.push('--settings', JSON.stringify(buildWorkdirGuardSettings()));
     }
   }
 
