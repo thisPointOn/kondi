@@ -185,7 +185,11 @@ export function sanitizeDeliverable(raw: string): string {
   const extractors: RegExp[] = [
     // XML-ish: <write_file>…<content>X</content>…</write_file>
     /<write_file>[\s\S]*?<content>\s*([\s\S]*?)\s*<\/content>[\s\S]*?<\/write_file>/i,
-    // Python/JS call: write_file("path", """X""")  or  write_file('path', '''X''')
+    // Named-arg call: write_file(path=…, content="""X""")  (any arg order)
+    /\bcontent\s*=\s*(?:"""|''')([\s\S]*?)(?:"""|''')/i,
+    /\bcontent\s*=\s*"((?:[^"\\]|\\.)*)"/i,
+    /\bcontent\s*=\s*'((?:[^'\\]|\\.)*)'/i,
+    // Positional call: write_file("path", """X""")  or  write_file('path', '''X''')
     /\bwrite_file\s*\([^,]*,\s*(?:"""|''')([\s\S]*?)(?:"""|''')\s*\)/i,
     // write_file("path", "X")  /  write_file('path', 'X')
     /\bwrite_file\s*\([^,]*,\s*"((?:[^"\\]|\\.)*)"\s*\)/i,
