@@ -324,6 +324,20 @@ async function main() {
     log(C.dim, 'Setup', `Created working directory: ${workingDir}`);
   }
 
+  // Durability + containment: make the working dir its OWN git repo so the
+  // Claude CLI's "nearest git repo" discovery stops HERE instead of walking up
+  // to a parent project (e.g. the kondi repo). Without this, workers explore the
+  // parent repo (slow — minutes of Bash recon → timeouts) and resolve paths like
+  // "docs/" against the parent root, escaping the working dir. Verified: with a
+  // workdir .git, `git rev-parse --show-toplevel` returns the workdir.
+  if (workingDir && !fs.existsSync(path.join(workingDir, '.git'))) {
+    try {
+      const { execSync } = await import('node:child_process');
+      execSync('git init -q', { cwd: workingDir, stdio: 'ignore' });
+      log(C.dim, 'Setup', `Isolated working directory as its own git repo`);
+    } catch { /* git unavailable — guard hook still contains writes */ }
+  }
+
   // ── Dry run ──
   if (args.dryRun) {
     printCouncilStructure(council, councilType, rawProblem, workingDir);

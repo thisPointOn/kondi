@@ -11,13 +11,23 @@ import * as path from 'node:path';
 import { parseStreamJsonOutput } from '../src/pipeline/output-parsers';
 import { WORKDIR_GUARD_SRC, WORKDIR_GUARD_REL, workdirGuardSettings } from '../src/services/cli-workdir-guard';
 
-/** Write the guard script to disk (once) and return `<absolute-node> <file>`. */
+/** Write the guard script to disk (once per process) and return `<absolute-node> <file>`. */
+let _guardWritten = false;
 function workdirGuardCommand(): string {
   const file = path.join(os.homedir(), WORKDIR_GUARD_REL);
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, WORKDIR_GUARD_SRC);
-  } catch { /* reuse existing copy if write fails */ }
+  if (!_guardWritten) {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      // Atomic write (temp + rename) so a concurrent council call can never read
+      // a half-written/truncated guard — a truncated file is a node syntax error,
+      // the hook fails, and claude falls OPEN (the write escapes). rename(2) is
+      // atomic on POSIX, so readers always see a complete file.
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, WORKDIR_GUARD_SRC);
+      fs.renameSync(tmp, file);
+      _guardWritten = true;
+    } catch { /* reuse existing copy if write fails */ }
+  }
   // Two unquoted tokens: claude splits the hook command on whitespace with no
   // shell, and uses a sanitized PATH — so quotes break it and bare `node` is
   // not found. process.execPath is the absolute node binary; paths have no spaces.
