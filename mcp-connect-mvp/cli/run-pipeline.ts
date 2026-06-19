@@ -24,6 +24,7 @@ import type { PlatformAdapter } from '../src/pipeline/executor';
 import type { Pipeline, CouncilStepConfig, LlmStepConfig, ScriptStepConfig, ConditionStepConfig } from '../src/pipeline/types';
 import { migrateLlmConfig } from '../src/pipeline/types';
 import { callLLM } from './llm-caller';
+import { ensureWorkdirGitInit } from './workdir-isolate';
 import { roleToPhase } from '../src/router/profile-options';
 import { createNodePlatform } from './node-platform';
 import { exportSession } from './session-export';
@@ -496,6 +497,14 @@ async function main() {
     process.exit(1);
   }
   console.log(`${C.dim}Working directory: ${effectiveWorkingDir}${C.reset}`);
+
+  // Durability + containment (parity with run-council): isolate the working dir
+  // as its own git repo so multi-step council workers don't adopt a parent repo
+  // (the kondi repo) as their project — which causes minutes of parent-tree
+  // exploration (timeouts) and writes escaping the working dir.
+  if (ensureWorkdirGitInit(effectiveWorkingDir)) {
+    console.log(`${C.dim}Isolated working directory as its own git repo${C.reset}`);
+  }
 
   // Create platform adapter
   const platform: PlatformAdapter = createNodePlatform(effectiveWorkingDir);
