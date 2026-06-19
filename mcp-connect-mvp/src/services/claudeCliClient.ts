@@ -18,7 +18,38 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { Message, MCPTool } from '../types/mcp';
 import type { ChatResult } from './llm-router';
-import { buildWorkdirGuardSettings } from './cli-workdir-guard';
+import { WORKDIR_GUARD_SRC, workdirGuardSettings } from './cli-workdir-guard';
+
+/**
+ * Webview can't write files or read process.execPath. Use the Tauri `run_command`
+ * backend to install the guard script and resolve the absolute node binary, then
+ * build the `<node> <file>` hook command (same mechanism the CLI runner uses).
+ * Cached after first success. Returns '' if the backend call fails (guard skipped
+ * rather than blocking the worker).
+ */
+let _webviewGuardCmd: string | null = null;
+async function ensureWebviewGuardCommand(workingDir: string): Promise<string> {
+  if (_webviewGuardCmd !== null) return _webviewGuardCmd;
+  try {
+    // base64 the script so it survives the shell round-trip unescaped
+    const b64 = btoa(unescape(encodeURIComponent(WORKDIR_GUARD_SRC)));
+    const guardFile = '$HOME/.local/share/kondi/cli-state/workdir-guard.cjs';
+    const cmd =
+      `mkdir -p "$HOME/.local/share/kondi/cli-state" && ` +
+      `printf '%s' '${b64}' | base64 -d > "${guardFile}" && ` +
+      `printf '%s\\n%s' "$(command -v node || echo node)" "$HOME/.local/share/kondi/cli-state/workdir-guard.cjs"`;
+    const out = await invoke<{ stdout: string }>('run_command', { command: cmd, workingDir });
+    const [nodeBin, file] = (out.stdout || '').trim().split('\n');
+    if (nodeBin && file) {
+      _webviewGuardCmd = `${nodeBin.trim()} ${file.trim()}`;
+      return _webviewGuardCmd;
+    }
+  } catch (e) {
+    console.warn('[ClaudeCliClient] workdir guard install failed, writes not contained:', e);
+  }
+  _webviewGuardCmd = '';
+  return '';
+}
 import { parseStreamJsonOutput } from '../pipeline/output-parsers';
 import { captureGeneratedFiles } from './artifactManifest';
 
@@ -112,7 +143,8 @@ export async function claudeCliChat(
   // (Claude Code's own permission rules do not confine writes headlessly).
   if (workingDirectory) {
     args.push('--add-dir', workingDirectory);
-    args.push('--settings', JSON.stringify(buildWorkdirGuardSettings()));
+    const guardCmd = await ensureWebviewGuardCommand(workingDirectory);
+    if (guardCmd) args.push('--settings', JSON.stringify(workdirGuardSettings(guardCmd)));
   }
 
   if (resume && existingSessionId) {

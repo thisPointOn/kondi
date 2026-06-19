@@ -5,8 +5,24 @@
  */
 
 import { spawn } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { parseStreamJsonOutput } from '../src/pipeline/output-parsers';
-import { buildWorkdirGuardSettings } from '../src/services/cli-workdir-guard';
+import { WORKDIR_GUARD_SRC, WORKDIR_GUARD_REL, workdirGuardSettings } from '../src/services/cli-workdir-guard';
+
+/** Write the guard script to disk (once) and return `<absolute-node> <file>`. */
+function workdirGuardCommand(): string {
+  const file = path.join(os.homedir(), WORKDIR_GUARD_REL);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, WORKDIR_GUARD_SRC);
+  } catch { /* reuse existing copy if write fails */ }
+  // Two unquoted tokens: claude splits the hook command on whitespace with no
+  // shell, and uses a sanitized PATH — so quotes break it and bare `node` is
+  // not found. process.execPath is the absolute node binary; paths have no spaces.
+  return `${process.execPath} ${file}`;
+}
 
 export interface CallerResult {
   content: string;
@@ -76,7 +92,7 @@ export async function callClaude(opts: {
     // rules do not reliably confine in headless mode). Fires even under
     // bypassPermissions, so workers keep full tool power but cannot escape.
     if (opts.confineToDir !== false) {
-      args.push('--settings', JSON.stringify(buildWorkdirGuardSettings()));
+      args.push('--settings', JSON.stringify(workdirGuardSettings(workdirGuardCommand())));
     }
   }
 
