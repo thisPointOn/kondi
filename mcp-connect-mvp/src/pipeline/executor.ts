@@ -124,6 +124,34 @@ function formatArtifactForInput(artifact: StepArtifact): string {
 }
 
 /**
+ * Extract a clean JSON value from a worker response for `outputType: 'json'`
+ * steps. Weaker council workers (e.g. deepseek) wrap JSON in prose, ```json
+ * fences, or hallucinated tool-call narration; if the stored artifact isn't
+ * parseable, every downstream `{{input.field}}` access silently resolves to ''
+ * and breaks the pipeline. Returns the pretty-printed JSON if a valid object/
+ * array can be recovered, else the original content unchanged (best effort).
+ */
+export function extractJsonBlock(raw: string): string {
+  if (!raw) return raw;
+  const tryParse = (s: string): string | null => {
+    try { return JSON.stringify(JSON.parse(s.trim()), null, 2); } catch { return null; }
+  };
+  // 0. Already valid JSON.
+  const whole = tryParse(raw);
+  if (whole) return whole;
+  // 1. A ```json … ``` (or bare ```) fenced block.
+  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) { const p = tryParse(fence[1]); if (p) return p; }
+  // 2. The largest balanced {...} or [...] span in the text.
+  for (const [open, close] of [['{', '}'], ['[', ']']] as const) {
+    const start = raw.indexOf(open);
+    const end = raw.lastIndexOf(close);
+    if (start !== -1 && end > start) { const p = tryParse(raw.slice(start, end + 1)); if (p) return p; }
+  }
+  return raw;
+}
+
+/**
  * Parse artifact content as JSON and walk a dot-separated path.
  * Returns the stringified value at the path, or '' if parsing fails or path not found.
  */
@@ -788,6 +816,12 @@ export class PipelineExecutor {
       content = output?.content || 'No output was produced.';
       artifactType = 'output';
       metadata.outputId = output?.id;
+    }
+
+    // For json-output steps, recover clean JSON from any prose/fence/tool-call
+    // wrapping so downstream `{{input.field}}` access stays reliable.
+    if (metadata.outputType === 'json') {
+      content = extractJsonBlock(content);
     }
 
     // Strip the localStorage copy of this council's metadata to keep
