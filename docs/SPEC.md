@@ -222,7 +222,7 @@ The rendered input is exported as `$KONDI_INPUT` (shell-escaped) before the comm
 
 ```typescript
 type ConditionMode = 'contains' | 'regex' | 'equals';
-type ConditionAction = 'continue' | 'skip_next_stage' | 'stop';
+type ConditionAction = 'continue' | 'skip_next_stage' | 'stop' | 'loop_to_stage';
 
 interface ConditionStepConfig {
   type: 'condition';
@@ -231,10 +231,12 @@ interface ConditionStepConfig {
   inputTemplate: string;    // What to match against
   trueAction: ConditionAction;
   falseAction: ConditionAction;
+  loopTargetStageId?: string; // for 'loop_to_stage': earlier stage to re-run from
+  maxLoops?: number;          // loop budget (default 3)
 }
 ```
 
-When a condition step triggers `skip_next_stage`, the executor skips the immediately following stage (marks all its steps as 'skipped') and continues with the stage after that. When it triggers `stop`, the pipeline completes gracefully — remaining stages are marked as 'skipped' and the pipeline status is 'completed'.
+When a condition step triggers `skip_next_stage`, the executor skips the immediately following stage (marks all its steps as 'skipped') and continues with the stage after that. When it triggers `stop`, the pipeline completes gracefully — remaining stages are marked as 'skipped' and the pipeline status is 'completed'. When it triggers **`loop_to_stage`**, the executor rewinds to `loopTargetStageId`, resets the intervening stages (target…current) to 'pending', and re-runs from there — enabling iterative refine→review→refine loops. **Bounded by `maxLoops` (default 3) per condition step** via an in-run counter; once the budget is exhausted the action falls through to `continue`, so it can never loop forever. The target must be an earlier (or the same) stage; a forward/missing target falls through.
 
 ### 5a. CouncilSetup Defaults (from `factory.ts`)
 

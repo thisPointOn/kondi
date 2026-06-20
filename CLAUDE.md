@@ -34,7 +34,7 @@ Tauri desktop app (Rust + React/TypeScript) that orchestrates multi-model "counc
 
 6. **All stores route through `CouncilDataStore` (in-memory primary, localStorage cache).** `storage-cleanup.ts` exports `councilDataStore` — an in-memory `Map<string,string>` with no size limit. `localStorage` is a best-effort mirror; quota errors are silently ignored. This prevents the browser's 5MB localStorage cap from crashing pipelines. Files using it: `context-store.ts`, `ledger-store.ts`, `council/store.ts`, `pipeline/store.ts`, `session-import.ts`. No council data is ever destroyed — `stripCompletedCouncil` only trims the localStorage copy after artifact extraction; in-memory data remains accessible.
 
-7. **`isCouncilType()` excludes gate, script, and condition.** These three step types are not council-based. Script runs a shell command (requires `platform.runCommand`). Condition evaluates an expression and can `skip_next_stage` or `stop`. Both use `inputTemplate` for input but have no council/personas.
+7. **`isCouncilType()` excludes gate, script, and condition.** These three step types are not council-based. Script runs a shell command (requires `platform.runCommand`). Condition evaluates an expression and can `skip_next_stage`, `stop`, or `loop_to_stage` (rewind to an earlier stage `loopTargetStageId` and re-run — bounded by `maxLoops`, default 3, per condition step so it can't loop forever). Both use `inputTemplate` for input but have no council/personas.
 
 8. **JSON output type enables `{{input.fieldName}}` templates.** When a step's `outputType` is `'json'`, downstream steps can access individual fields via `{{input.fieldName}}` or `{{input[N].fieldName}}` (dot-path walk). The content must be valid JSON.
 
