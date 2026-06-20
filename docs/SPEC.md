@@ -162,6 +162,10 @@ Additional entry types: `decomposition`, `module_directive`, `module_output`, `c
 
 **UI parity requirement:** All `Record<Phase, ...>` and `Record<EntryType, ...>` maps in UI components MUST include entries for BOTH orchestrators. Missing entries crash the React tree (no error boundary). Affected files: `PhaseIndicator.tsx`, `LedgerEntryCard.tsx`, `LedgerTimeline.tsx`, `DeliberationView.tsx`.
 
+### 4c. Generate-a-council from chat
+
+Asking chat to "create/spin up/generate a council to …" builds and **auto-runs** one. `council/chat-council-gen.ts`: `isCouncilCreationRequest()` gates on intent (a verb + "council" regex, calibrated to ignore "what is a council"/"city council"); `generateCouncilSetup()` asks a fast model for the council SHAPE only (name, `stepType`, task, persona roles/traits) as strict JSON, then assigns concrete provider/models per role from the user's configured providers (tool-capable CLI worker for coding/enrich/review) — the LLM never picks model ids. `ChatArea` creates the council (`createCouncilFromSetup`, persisted), posts a confirmation, and fires `requestCouncilRun(id, task)` (`councilCreateSignal.ts`). `App` listens for `COUNCIL_RUN_EVENT` → navigates to the council view; `DeliberationView` calls `consumeCouncilRun()` on mount and auto-invokes `onFrameProblem` (no manual Start).
+
 ---
 
 ## 5. Pipeline Steps
