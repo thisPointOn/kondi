@@ -8,6 +8,9 @@ import type { ChatModelPin } from '../hooks/useChats';
 import { open as tauriOpen, ask } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, Message, ToolCall } from '../types/mcp';
 import { chatCompletion, simpleCompletion } from '../services/llm-router';
+import { isCouncilCreationRequest, generateCouncilSetup } from '../council/chat-council-gen';
+import { createCouncilFromSetup } from '../council/factory';
+import { requestCouncilRun } from './council/councilCreateSignal';
 import { LOCAL_TOOLS, LOCAL_SERVER_ID, localToolsService } from '../services/localTools';
 import {
   ANTHROPIC_CLI_MODELS,
@@ -1202,6 +1205,36 @@ const ChatArea: FC<ChatAreaProps> = ({
     setShowToolAutocomplete(false);
     setSendingTarget(true);
     stopRef.current = false;
+
+    // ── Chat → generate-and-run a council ──
+    if (isCouncilCreationRequest(trimmed)) {
+      try {
+        const setup = await generateCouncilSetup(trimmed, {
+          avail: configuredProviders as unknown as Record<string, boolean>,
+          workingDirectory: chatWorkingDir || globalWorkingDirectory || undefined,
+        });
+        const council = createCouncilFromSetup(setup);
+        updateTarget([...currentMessages, {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: `🗳️ Created council **${council.name}** (${setup.stepType}) with ${setup.personas.length} personas. Opening and running it now…\n\n**Task:** ${setup.task}`,
+          provider: effectiveProviderId,
+          timestamp: new Date(),
+        } as Message]);
+        requestCouncilRun(council.id, setup.task || trimmed);
+      } catch (e) {
+        updateTarget([...currentMessages, {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: `⚠️ Couldn't generate a council: ${(e as Error).message}`,
+          provider: effectiveProviderId,
+          timestamp: new Date(),
+        } as Message]);
+      } finally {
+        setSendingTarget(false);
+      }
+      return;
+    }
 
     try {
       const streamId = crypto.randomUUID();

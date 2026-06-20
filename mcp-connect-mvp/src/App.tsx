@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Sidebar, { type AppView } from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import { PipelineLibrary, PipelineBuilder, PipelineExecutionView } from './components/pipeline';
 import { requestPipelineCreate } from './components/pipeline/pipelineCreateSignal';
+import { COUNCIL_RUN_EVENT } from './components/council/councilCreateSignal';
 import ErrorBoundary from './components/ErrorBoundary';
 import ProjectView from './components/ProjectView';
 import { useActiveSetupSection } from './components/council/setupDetailStore';
@@ -65,6 +66,17 @@ function App() {
   });
 
   const activeApiKey = providerConfig.provider === 'chatgpt' ? providerConfig.openaiKey : providerConfig.anthropicKey;
+
+  // Chat → council: when ChatArea generates a council it dispatches this event;
+  // navigate to the council view (which auto-runs the pending deliberation).
+  useEffect(() => {
+    const onRun = (e: Event) => {
+      const id = (e as CustomEvent).detail?.councilId;
+      if (id) { council.setCurrentCouncilId(id); setCurrentView('council'); }
+    };
+    window.addEventListener(COUNCIL_RUN_EVENT, onRun);
+    return () => window.removeEventListener(COUNCIL_RUN_EVENT, onRun);
+  }, [council]);
 
   return (
     <div className="app-container">

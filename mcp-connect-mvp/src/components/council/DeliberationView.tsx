@@ -30,6 +30,7 @@ import { estimateCostUsd, formatUsd } from '../../services/cost';
 import { isModelBroken, filterVisibleModels } from '../../services/modelProbe';
 import { getModelsForPersonaSelector } from '../../config/models';
 import { consumeCouncilSetup, requestCouncilSetup, EDIT_COUNCIL_SETUP_EVENT } from './councilSetupSignal';
+import { consumeCouncilRun } from './councilCreateSignal';
 import { setActiveSetupSection } from './setupDetailStore';
 import WorkflowRail from './WorkflowRail';
 import { mcpClient } from '../../services/mcpClient';
@@ -152,6 +153,20 @@ export default function DeliberationView({
     return !!c?.deliberation?.savedProblem;
   });
   const [councilName, setCouncilName] = useState('');
+
+  // Chat → council auto-run: if this council was opened via the chat "generate a
+  // council" flow, start its deliberation immediately (no manual Start click).
+  const autoRanRef = useRef(false);
+  useEffect(() => {
+    if (autoRanRef.current) return;
+    const c = council || councilStore.get(councilId);
+    if (!c || !onFrameProblem) return;
+    const pending = consumeCouncilRun(councilId);
+    if (!pending) return;
+    autoRanRef.current = true;
+    setProblemInput(pending.task);
+    void onFrameProblem(c, pending.task);
+  }, [council, councilId, onFrameProblem]);
   const [workflowName, setWorkflowName] = useState(() => councilStore.getWorkflowName(councilId));
   const [saveMode, setSaveMode] = useState<'none' | 'full' | 'abbreviated'>(() => {
     const c = councilStore.get(councilId);
