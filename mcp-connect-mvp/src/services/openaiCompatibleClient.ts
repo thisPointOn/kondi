@@ -405,7 +405,7 @@ export const deepseekClient = new OpenAICompatibleClient({
   baseURL: 'https://api.deepseek.com',
   providerName: 'DeepSeek',
   authProvider: 'deepseek',
-  defaultModel: 'deepseek-chat',
+  defaultModel: 'deepseek-v4-flash',
 });
 
 export const xaiClient = new OpenAICompatibleClient({

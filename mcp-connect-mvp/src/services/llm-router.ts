@@ -98,7 +98,7 @@ export const DEFAULT_MODELS: Record<string, string> = {
   'openai-api': 'gpt-4o',
   'openai-cli': 'gpt-5.5',
   'google': 'models/gemini-2.5-flash',
-  'deepseek': 'deepseek-chat',
+  'deepseek': 'deepseek-v4-pro',
   'xai': 'grok-3',
   'zai': 'glm-4.6',
   'nvidia-router': 'nvidia/llama-3.3-nemotron-super-49b',

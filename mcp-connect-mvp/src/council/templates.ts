@@ -129,7 +129,7 @@ Assume adversaries are smart and motivated. Ask: "How could this be exploited?"`
   {
     name: 'Performance Nerd',
     defaultProvider: 'deepseek',
-    defaultModel: 'deepseek-reasoner',
+    defaultModel: 'deepseek-v4-pro',
     color: '#EA580C',
     avatar: '⚡',
     predisposition: {
@@ -290,7 +290,7 @@ legally? Are we protected?"`,
   {
     name: 'Data Scientist',
     defaultProvider: 'deepseek',
-    defaultModel: 'deepseek-reasoner',
+    defaultModel: 'deepseek-v4-pro',
     color: '#7C2D12',
     avatar: '📊',
     predisposition: {

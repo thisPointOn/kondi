@@ -401,28 +401,29 @@ export const OPENAI_CLI_MODELS: ModelDefinition[] = [
 // ============================================================================
 export const DEEPSEEK_MODELS: ModelDefinition[] = [
   {
-    id: 'deepseek-reasoner',
-    name: 'DeepSeek R1',
+    id: 'deepseek-v4-pro',
+    name: 'DeepSeek V4 Pro',
     provider: 'deepseek',
-    contextWindow: 64000,
+    contextWindow: 128000,
     capabilities: ['text', 'code', 'reasoning'],
     inputCostPer1K: 0.00055,
     outputCostPer1K: 0.00219,
     costDisplay: '~$0.002/msg',
     featured: true,
     tier: 1,
+    routingCapabilities: ['planning', 'coding', 'code-review', 'reasoning'],
   },
   {
-    id: 'deepseek-chat',
-    name: 'DeepSeek Chat',
+    id: 'deepseek-v4-flash',
+    name: 'DeepSeek V4 Flash',
     provider: 'deepseek',
-    contextWindow: 64000,
+    contextWindow: 128000,
     capabilities: ['text', 'code'],
     inputCostPer1K: 0.00014,
     outputCostPer1K: 0.00028,
     costDisplay: '~$0.0003/msg',
     tier: 2,
-    routingCapabilities: ['coding', 'fast-coding', 'refactoring'],
+    routingCapabilities: ['coding', 'fast-coding', 'refactoring', 'summarization'],
   },
 ];
 

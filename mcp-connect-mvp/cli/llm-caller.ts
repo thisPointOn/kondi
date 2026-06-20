@@ -49,7 +49,7 @@ const DEFAULT_MODELS: Record<string, string> = {
   'anthropic-api': 'claude-sonnet-4-5-20250929',
   'openai-cli': '',  // empty = let codex use its default model for the account tier
   'openai-api': 'gpt-4o',
-  'deepseek': 'deepseek-chat',
+  'deepseek': 'deepseek-v4-pro',
   'google': 'models/gemini-2.5-flash',
   'xai': 'grok-3',
   'zai': 'glm-4.6',
