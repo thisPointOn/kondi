@@ -321,6 +321,9 @@ export default function PipelineBuilder({
           pipelineSettings={pipeline.settings}
           isFirstStage={selectedStep.stageIndex === 0}
           availableInputSteps={availableInputSteps}
+          loopTargets={pipeline.stages
+            .slice(0, selectedStep.stageIndex + 1)
+            .map((s) => ({ id: s.id, name: s.name }))}
           connectedServers={connectedServers}
           configuredProviders={configuredProviders}
           onUpdate={(updates) =>

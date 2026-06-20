@@ -348,6 +348,8 @@ interface StepConfigPanelProps {
   isFirstStage?: boolean;
   /** All steps whose output is available as input to this step */
   availableInputSteps?: AvailableInputStep[];
+  /** Stages this step may loop back to (this stage and earlier) — for condition loop_to_stage */
+  loopTargets?: { id: string; name: string }[];
   /** Connected MCP servers available for tool filtering */
   connectedServers?: ConnectedServerInfo[];
   /** Which providers are currently configured/available */
@@ -594,6 +596,7 @@ export default function StepConfigPanel({
   pipelineSettings,
   isFirstStage,
   availableInputSteps,
+  loopTargets,
   connectedServers,
   configuredProviders,
   onUpdate,
@@ -706,6 +709,7 @@ export default function StepConfigPanel({
         <ConditionConfig
           config={step.config as ConditionStepConfig}
           availableInputSteps={availableInputSteps}
+          loopTargets={loopTargets}
           onChange={onConfigUpdate}
         />
       )}
@@ -1305,13 +1309,16 @@ function ScriptConfig({
 function ConditionConfig({
   config,
   availableInputSteps,
+  loopTargets,
   onChange,
 }: {
   config: ConditionStepConfig;
   availableInputSteps?: AvailableInputStep[];
+  loopTargets?: { id: string; name: string }[];
   onChange: (c: StepConfig) => void;
 }) {
   const update = (partial: Partial<ConditionStepConfig>) => onChange({ ...config, ...partial });
+  const usesLoop = config.trueAction === 'loop_to_stage' || config.falseAction === 'loop_to_stage';
 
   return (
     <>
@@ -1355,6 +1362,7 @@ function ConditionConfig({
             <option value="continue">Continue (proceed normally)</option>
             <option value="skip_next_stage">Skip Next Stage</option>
             <option value="stop">Stop Pipeline</option>
+            <option value="loop_to_stage">Loop back to an earlier stage</option>
           </select>
         </div>
         <div className="config-field">
@@ -1366,8 +1374,40 @@ function ConditionConfig({
             <option value="continue">Continue (proceed normally)</option>
             <option value="skip_next_stage">Skip Next Stage</option>
             <option value="stop">Stop Pipeline</option>
+            <option value="loop_to_stage">Loop back to an earlier stage</option>
           </select>
         </div>
+        {usesLoop && (
+          <>
+            <div className="config-field">
+              <label>Loop back to stage</label>
+              <select
+                value={config.loopTargetStageId || ''}
+                onChange={(e) => update({ loopTargetStageId: e.target.value })}
+              >
+                <option value="">Select a stage…</option>
+                {(loopTargets || []).map((s, idx) => (
+                  <option key={s.id} value={s.id}>{idx + 1}. {s.name}</option>
+                ))}
+              </select>
+              {!config.loopTargetStageId && (
+                <span className="hint" style={{ color: '#f59e0b' }}>Pick the (earlier) stage to re-run from.</span>
+              )}
+              <span className="hint">Re-runs this stage and the target onward. Use a condition that eventually passes, or rely on the loop budget.</span>
+            </div>
+            <div className="config-field">
+              <label>Max loops (budget)</label>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={config.maxLoops ?? 3}
+                onChange={(e) => update({ maxLoops: Math.max(1, parseInt(e.target.value, 10) || 3) })}
+              />
+              <span className="hint">After this many loop-backs the condition gives up and continues — prevents infinite loops.</span>
+            </div>
+          </>
+        )}
       </div>
       <div className="config-section">
         <div className="config-section-title">Input</div>
