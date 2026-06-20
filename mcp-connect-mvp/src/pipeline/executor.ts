@@ -265,6 +265,10 @@ export class PipelineExecutor {
   private skipNextStage = false;
   /** Set by condition steps to stop the pipeline (completes, not fails) */
   private stopPipeline = false;
+  /** Set by a condition step to loop back to an earlier stage (iterative refine). */
+  private loopRequest: { targetStageId: string; fromStepId: string } | null = null;
+  /** Per-condition-step loop counter — bounds loop_to_stage so it can't run forever. */
+  private loopCounts = new Map<string, number>();
   /** Memory context loaded at pipeline start (if maintainMemory is enabled) */
   private memoryCtx: MemoryContext | undefined = undefined;
   /** Current run directory for output isolation */
@@ -294,6 +298,8 @@ export class PipelineExecutor {
     this.aborted = false;
     this.skipNextStage = false;
     this.stopPipeline = false;
+    this.loopRequest = null;
+    this.loopCounts.clear();
     this.runningPipelineId = pipelineId;
     this.memoryCtx = undefined;
     this.currentRunDir = null;
@@ -371,6 +377,30 @@ export class PipelineExecutor {
         }
 
         this.callbacks.onStageComplete?.(i);
+
+        // Loop-back: a condition step in this stage asked to re-run from an
+        // earlier stage (iterative refine→review). Reset the intervening stages
+        // to pending and rewind the loop. Bounded by maxLoops in the condition.
+        if (this.loopRequest) {
+          const lr = this.loopRequest;
+          this.loopRequest = null;
+          const live = pipelineStore.get(pipelineId);
+          const targetIdx = live ? live.stages.findIndex((s) => s.id === lr.targetStageId) : -1;
+          if (live && targetIdx >= 0 && targetIdx <= i) {
+            for (let j = targetIdx; j <= i; j++) {
+              for (const st of live.stages[j].steps) {
+                pipelineStore.setStepStatus(pipelineId, st.id, 'pending');
+              }
+            }
+            pipelineStore.update(pipelineId, { currentStageIndex: targetIdx });
+            this.callbacks.onLog?.(
+              `↻ Looping back to stage "${live.stages[targetIdx].name}" (iteration via ${lr.fromStepId})`
+            );
+            i = targetIdx - 1; // for-loop i++ → targetIdx
+            continue;
+          }
+          // invalid target (not found, or forward) — fall through and proceed
+        }
 
         // Advance stage index
         pipelineStore.advanceStage(pipelineId);
@@ -936,15 +966,29 @@ export class PipelineExecutor {
     const resultLabel = matches ? 'TRUE' : 'FALSE';
 
     // Apply the action
+    let actionNote = action as string;
     if (action === 'skip_next_stage') {
       this.skipNextStage = true;
     } else if (action === 'stop') {
       this.stopPipeline = true;
+    } else if (action === 'loop_to_stage') {
+      const max = config.maxLoops ?? 3;
+      const count = this.loopCounts.get(step.id) ?? 0;
+      if (config.loopTargetStageId && count < max) {
+        this.loopCounts.set(step.id, count + 1);
+        this.loopRequest = { targetStageId: config.loopTargetStageId, fromStepId: step.id };
+        actionNote = `loop_to_stage → ${config.loopTargetStageId} (iteration ${count + 1}/${max})`;
+      } else {
+        // Budget exhausted (or no target) — fall through to continue, never loop forever.
+        actionNote = config.loopTargetStageId
+          ? `loop_to_stage budget reached (${max}) — continuing`
+          : 'loop_to_stage has no loopTargetStageId — continuing';
+      }
     }
 
     return {
       stepId: step.id,
-      content: `Condition evaluated: ${resultLabel} (mode: ${config.mode}, expression: "${config.expression}"). Action: ${action}.`,
+      content: `Condition evaluated: ${resultLabel} (mode: ${config.mode}, expression: "${config.expression}"). Action: ${actionNote}.`,
       artifactType: 'output',
       metadata: { stepName: step.name, stepType: 'condition' },
       createdAt: new Date().toISOString(),

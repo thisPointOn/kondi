@@ -222,7 +222,13 @@ export interface ScriptStepConfig {
 }
 
 export type ConditionMode = 'contains' | 'regex' | 'equals';
-export type ConditionAction = 'continue' | 'skip_next_stage' | 'stop';
+/**
+ * 'loop_to_stage' redirects flow back to an earlier stage (`loopTargetStageId`)
+ * and re-runs from there — enabling iterative refine→review→refine loops. It is
+ * bounded by `maxLoops` (default 3) per condition step so it can never loop
+ * forever; once the budget is exhausted it falls through to 'continue'.
+ */
+export type ConditionAction = 'continue' | 'skip_next_stage' | 'stop' | 'loop_to_stage';
 
 export interface ConditionStepConfig {
   type: 'condition';
@@ -238,6 +244,10 @@ export interface ConditionStepConfig {
   falseAction: ConditionAction;
   /** Include pipeline's initial input as additional context, regardless of stage */
   includePipelineInput?: boolean;
+  /** For action 'loop_to_stage': id of the (earlier) stage to loop back to. */
+  loopTargetStageId?: string;
+  /** Max times this condition may loop back before giving up (default 3). */
+  maxLoops?: number;
 }
 
 export type StepConfig = CouncilStepConfig | LlmStepConfig | GateStepConfig | ScriptStepConfig | ConditionStepConfig;
