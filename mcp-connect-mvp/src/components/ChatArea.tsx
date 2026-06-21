@@ -1217,7 +1217,7 @@ const ChatArea: FC<ChatAreaProps> = ({
         updateTarget([...currentMessages, {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: `🗳️ Created council **${council.name}** (${setup.stepType}) with ${setup.personas.length} personas. Opening and running it now…\n\n**Task:** ${setup.task}`,
+          content: `🗳️ Created council **${council.name}** (${setup.stepType}) with ${setup.personas.length} personas. Opening it now — review the setup and click **Start** when ready.\n\n**Task:** ${setup.task}`,
           provider: effectiveProviderId,
           timestamp: new Date(),
         } as Message]);

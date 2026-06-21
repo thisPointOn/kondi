@@ -154,20 +154,17 @@ export default function DeliberationView({
   });
   const [councilName, setCouncilName] = useState('');
 
-  // Chat → council auto-run: if this council was opened via the chat "generate a
-  // council" flow, start its deliberation immediately (no manual Start click).
-  const autoRanRef = useRef(false);
+  // Chat → council: if this council was opened via the chat "generate a council"
+  // flow, pre-fill its task so it's ready to start — but do NOT auto-run; the
+  // user reviews the setup and clicks Start themselves.
+  const autoFilledRef = useRef(false);
   useEffect(() => {
-    if (autoRanRef.current) return;
-    const c = council || councilStore.get(councilId);
-    if (!c || !onFrameProblem) return;
+    if (autoFilledRef.current) return;
     const pending = consumeCouncilRun(councilId);
     if (!pending) return;
-    autoRanRef.current = true;
+    autoFilledRef.current = true;
     setProblemInput(pending.task);
-    setActivePanel(null); // show the live deliberation, NOT the setup form
-    void onFrameProblem(c, pending.task);
-  }, [council, councilId, onFrameProblem]);
+  }, [councilId]);
   const [workflowName, setWorkflowName] = useState(() => councilStore.getWorkflowName(councilId));
   const [saveMode, setSaveMode] = useState<'none' | 'full' | 'abbreviated'>(() => {
     const c = councilStore.get(councilId);
@@ -1665,10 +1662,10 @@ export default function DeliberationView({
         )}
       </div>
 
-      {/* User Input During Pause */}
-      {isPaused && lastResponder && (
-        <div className="paused-user-input">
-          <div className="paused-input-header">
+      {/* User Input During Pause — chat-style footer */}
+      {activePanel !== 'setup' && isPaused && lastResponder && (
+        <div className="input-area">
+          <div className="council-footer-label">
             <span className="paused-label">Deliberation Paused</span>
             <span className="paused-responder">
               <span
@@ -1680,11 +1677,11 @@ export default function DeliberationView({
               {lastResponder.name} will respond
             </span>
           </div>
-          <div className="paused-input-row">
-            <input
-              type="text"
-              className="paused-input-field"
-              placeholder="Ask a question or add a comment..."
+          <div className="input-container">
+            <textarea
+              className="chat-input"
+              rows={1}
+              placeholder="Ask a question or add a comment…"
               value={pausedUserInput}
               onChange={(e) => setPausedUserInput(e.target.value)}
               onKeyDown={(e) => {
@@ -1696,11 +1693,11 @@ export default function DeliberationView({
               disabled={isGenerating}
             />
             <button
-              className="paused-send-btn"
+              className="send-btn"
               onClick={handlePausedUserMessage}
               disabled={!pausedUserInput.trim() || isGenerating}
             >
-              {isGenerating ? 'Sending...' : 'Send'}
+              ↑
             </button>
           </div>
         </div>
@@ -1790,20 +1787,18 @@ export default function DeliberationView({
 
       {/* Staged Comment Input — visible while agents are generating (never on setup) */}
       {activePanel !== 'setup' && !isPaused && thinkingPersonas.length > 0 && (
-        <div className="staged-comment-input">
-          <div className="staged-input-header">
+        <div className="input-area">
+          <div className="council-footer-label">
             <span className="staged-label">Agents responding</span>
             {stagedComment && (
-              <span className="staged-badge">
-                Comment staged — will be sent when agents finish
-              </span>
+              <span className="staged-badge">Comment staged — will be sent when agents finish</span>
             )}
           </div>
-          <div className="staged-input-row">
-            <input
-              type="text"
-              className="staged-input-field"
-              placeholder={stagedComment ? 'Replace staged comment...' : 'Type a comment to send after agents respond...'}
+          <div className="input-container">
+            <textarea
+              className="chat-input"
+              rows={1}
+              placeholder={stagedComment ? 'Replace staged comment…' : 'Type a comment to send after agents respond…'}
               value={stagedCommentInput}
               onChange={(e) => setStagedCommentInput(e.target.value)}
               onKeyDown={(e) => {
@@ -1814,18 +1809,6 @@ export default function DeliberationView({
                 }
               }}
             />
-            <button
-              className="staged-send-btn"
-              onClick={() => {
-                if (stagedCommentInput.trim()) {
-                  setStagedComment(stagedCommentInput.trim());
-                  setStagedCommentInput('');
-                }
-              }}
-              disabled={!stagedCommentInput.trim()}
-            >
-              Stage
-            </button>
             {stagedComment && (
               <button
                 className="staged-cancel-btn"
@@ -1835,6 +1818,18 @@ export default function DeliberationView({
                 ✕
               </button>
             )}
+            <button
+              className="send-btn"
+              onClick={() => {
+                if (stagedCommentInput.trim()) {
+                  setStagedComment(stagedCommentInput.trim());
+                  setStagedCommentInput('');
+                }
+              }}
+              disabled={!stagedCommentInput.trim()}
+            >
+              ↑
+            </button>
           </div>
           {stagedComment && (
             <div className="staged-preview">
