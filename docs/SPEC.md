@@ -179,11 +179,13 @@ Asking chat to "create/spin up/generate a council to …" builds and **auto-runs
 | `coding` | Coding | Manager + Worker + Reviewer | Code files | Worker saves `_code.md`, has testCommand, maxDebugCycles |
 | `review` | Deliberation | Manager + Consultant(s) + Worker | Review document | Worker saves `_review.md` |
 | `enrich` | Deliberation | Manager + Consultant(s) + Worker | Enriched content | Worker saves `_enrichment.md` |
-| `analysis` | Deliberation (lightweight) | Manager + Worker personas | Decision or output artifact | 0 rounds, 0 revisions, suppressPersona=true |
-| `agent` | Deliberation (lightweight) | Single Worker persona | Output artifact | 0 rounds, 0 revisions, suppressPersona=true |
+| `analysis` | Lightweight only if NO consultants | Manager + Worker (+ Consultants) | Decision or output artifact | direct worker pass when no consultants; full deliberation if consultants assigned |
+| `agent` | Lightweight only if NO consultants | Worker (+ Consultants) | Output artifact | direct worker pass when no consultants; full deliberation if consultants assigned |
 | `gate` | None | None | Approval | Pauses for user confirmation |
 | `script` | None | None | stdout | Runs a shell command, captures stdout as artifact |
-| `condition` | None | None | Evaluation result | Evaluates expression against input; actions: continue, skip_next_stage, stop |
+| `condition` | None | None | Evaluation result | Evaluates expression against input; actions: continue, skip_next_stage, stop, loop_to_stage |
+
+**Lightweight path is opt-out via consultants.** `agent`/`analysis` skip full deliberation and run a single worker pass ONLY when no consultants are configured ("if one pass does the job, recognize it"). If the user assigns consultants, the orchestrator runs the FULL deliberation (frame → rounds → decide → execute → review) so configured personas are never silently ignored.
 
 `PipelineStepType = 'council' | 'code_planning' | 'analysis' | 'agent' | 'coding' | 'review' | 'enrich' | 'gate' | 'script' | 'condition'`
 

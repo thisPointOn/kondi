@@ -314,12 +314,13 @@ export class DeliberationOrchestrator {
       return;
     }
 
-    // Lightweight council types (agent/analysis): skip full deliberation,
-    // go straight to worker execution. The manager's system prompt is folded into
-    // the worker's context so its guidance isn't lost.
+    // Lightweight council types (agent/analysis): a single worker pass is enough
+    // ONLY when no consultants are configured ("if one pass does the job, recognize
+    // it"). If the user assigned consultants, honor them with full deliberation —
+    // never silently ignore configured personas.
     const stepType = council.deliberation?.stepType;
-    if (stepType === 'agent' || stepType === 'analysis') {
-      console.log(`[Orchestrator] Lightweight step type '${stepType}' — running direct execution path`);
+    if ((stepType === 'agent' || stepType === 'analysis') && consultantAssignments.length === 0) {
+      console.log(`[Orchestrator] Lightweight step type '${stepType}' (no consultants) — running direct execution path`);
       await this.runDirectExecution(council, rawProblem);
       return;
     }
