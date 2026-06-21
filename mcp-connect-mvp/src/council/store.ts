@@ -940,8 +940,14 @@ export function getPersonaByRole(
     (r) => r.role === role
   );
 
+  // Dedupe by personaId: a persona must appear at most once per role even if it
+  // somehow has duplicate role assignments — otherwise it deliberates/reviews
+  // twice and the ledger shows the "same response" two times.
+  const seen = new Set<string>();
   return roleAssignments
-    .map((r) => council.personas.find((p) => p.id === r.personaId))
+    .map((r) => r.personaId)
+    .filter((id) => (seen.has(id) ? false : (seen.add(id), true)))
+    .map((id) => council.personas.find((p) => p.id === id))
     .filter((p): p is Persona => p !== undefined);
 }
 
