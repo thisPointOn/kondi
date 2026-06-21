@@ -80,7 +80,7 @@ docs/
 | `anthropic-cli` | Subscription | Claude Code | claude-opus-4-6, claude-sonnet-4-5-20250929, claude-opus-4-5-20251101 |
 | `openai-api` | API key | — | gpt-4o, gpt-4o-mini, o1-preview |
 | `openai-cli` | Subscription | Codex | gpt-5.5 (default), gpt-5.5-pro, gpt-5.4, gpt-5.4-mini, gpt-5.4-nano, gpt-5.x-codex |
-| `deepseek` | API key | — | deepseek-reasoner, deepseek-chat |
+| `deepseek` | API key | — | deepseek-v4-pro (default), deepseek-v4-flash |
 | `google` | API key | — | gemini-2.5-pro, gemini-2.5-flash |
 | `xai` | API key | — | grok-3, grok-3-mini |
 | `zai` | API key | — | glm-5.1, glm-4.6, glm-4.5-flash (Z.AI Coding Plan, OpenAI-compatible) |
