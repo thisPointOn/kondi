@@ -635,6 +635,16 @@ A pipeline consists of **stages**, and each stage contains **steps**. Stages run
 
 > Every council type runs the **same** deliberation workflow. "Lightweight" types (analysis/agent) are just smaller councils — they don't skip phases. Add or remove consultants to control depth.
 
+#### Choosing a council size (all run the same workflow)
+
+| Composition | When it's useful |
+|-------------|------------------|
+| **Manager + 2+ consultants + worker** (full deliberation) | The default and the sweet spot for anything that benefits from scrutiny — design, code review, security/quality analysis, contested decisions, content you'll ship. Consultants surface disagreements and edge cases before the worker commits. Use this whenever correctness matters more than speed. |
+| **Manager + worker, no consultants** | A directed single perspective with oversight: the manager still frames the problem, decides, and reviews, but there's no multi-angle debate. Good for well-scoped tasks with a clear right answer (a focused refactor, a routine summary, a structured extraction) where you want the manager's framing/review discipline but don't need diverse opinions. Cheaper/faster than a full council. |
+| **Worker only, no manager** | A single fast pass — no framing, no review. Good for quick, low-stakes generation (a one-off blurb, a quick list, a draft) where deliberation is overkill and you just want one capable model's answer. This is the only truly "light" mode; choose it deliberately. |
+
+For file/code-writing tasks, give the worker a **tool-capable provider** (`anthropic-cli`/`openai-cli`) and `writePermissions` — an API-only worker (deepseek/gemini) is automatically treated as a text agent (it returns the content inline rather than writing files).
+
 ### Building a Pipeline
 
 1. Navigate to **Pipelines** in the sidebar.
