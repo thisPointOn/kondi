@@ -165,6 +165,7 @@ export default function DeliberationView({
     if (!pending) return;
     autoRanRef.current = true;
     setProblemInput(pending.task);
+    setActivePanel(null); // show the live deliberation, NOT the setup form
     void onFrameProblem(c, pending.task);
   }, [council, councilId, onFrameProblem]);
   const [workflowName, setWorkflowName] = useState(() => councilStore.getWorkflowName(councilId));
@@ -672,8 +673,8 @@ export default function DeliberationView({
           </div>
         </div>
         <div className="deliberation-header-right">
-          {/* Deliberation controls — inline in header */}
-          {isRunning && (
+          {/* Deliberation controls — inline in header. Never on the setup screen. */}
+          {activePanel !== 'setup' && isRunning && (
             <>
               {FORCE_DECISION_PHASES.has(currentPhase) && (
                 <button
@@ -704,7 +705,7 @@ export default function DeliberationView({
               </button>
             </>
           )}
-          {isPaused && (
+          {activePanel !== 'setup' && isPaused && (
             <>
               <button
                 className="header-control-btn resume-btn"
@@ -1787,8 +1788,8 @@ export default function DeliberationView({
         );
       })()}
 
-      {/* Staged Comment Input — visible while agents are generating */}
-      {!isPaused && thinkingPersonas.length > 0 && (
+      {/* Staged Comment Input — visible while agents are generating (never on setup) */}
+      {activePanel !== 'setup' && !isPaused && thinkingPersonas.length > 0 && (
         <div className="staged-comment-input">
           <div className="staged-input-header">
             <span className="staged-label">Agents responding</span>
