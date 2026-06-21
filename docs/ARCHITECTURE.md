@@ -434,11 +434,11 @@ PipelineExecutor.run(pipeline):
         'coding':        create council, run coding orchestrator
         'review':        create council, run deliberation orchestrator
         'enrich':        create council, run deliberation orchestrator
-        'analysis':      create council, run deliberation orchestrator (lightweight)
-        'agent':         create council, run deliberation orchestrator (lightweight)
+        'analysis':      create council, run deliberation orchestrator (same workflow, typically a smaller council)
+        'agent':         create council, run deliberation orchestrator (same workflow, typically a smaller council)
         'gate':          pause, wait for human approval
         'script':        run shell command, capture stdout
-        'condition':     evaluate expression, skip/stop/continue
+        'condition':     evaluate expression -> continue / skip_next_stage / stop / loop_to_stage (bounded)
 
       store artifact with provenance
       render input template for downstream steps

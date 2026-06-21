@@ -34,7 +34,7 @@ Most AI tools give you a single model behind a chat box. Kondi gives you a **boa
 | [Chat](#chat) | Multi-chat with file attachments, tool calling, per-chat working directories |
 | [MCP Server Integration](#mcp-server-integration) | Connect any MCP server — remote, local, or from the built-in library |
 | [Built-in Platform Servers](#built-in-platform-servers) | 9 servers with 120+ tools for social media, Git, and more |
-| [Council System](#council-system) | 7 council modes with 15 persona templates |
+| [Council System](#council-system) | Council modes (council, code_planning, coding, review, enrich, analysis, agent) with persona templates; generate a council from chat |
 | [Structured Deliberation](#structured-deliberation) | Deterministic state machine with context versioning and audit trail |
 | [Coding Orchestrator](#coding-orchestrator) | Spec decomposition, parallel implementation, code review, test, debug loop |
 | [Pipelines](#pipelines) | Multi-stage workflows chaining councils, coding, LLM calls, and human gates |
@@ -208,13 +208,13 @@ Chain councils, coding steps, LLM calls, and human checkpoints into automated wo
 ```
 
 **Step types:**
-- **planning** — Full deliberation council
-- **coding** — Coding orchestrator
-- **decisioning** — Single-model reasoning
-- **execution** — Single-model action/writing
-- **gate** — Pause for human approval
+- **council / code_planning / coding / review / enrich** — full deliberation (or coding) councils
+- **analysis / agent** — the same deliberation workflow as a smaller council (no skipped phases)
+- **script** — run a shell command, capture stdout
+- **condition** — evaluate an expression and `continue` / `skip_next_stage` / `stop` / **`loop_to_stage`** (rewind to an earlier stage and re-run, bounded by a max-loops budget — for iterative refine→review loops)
+- **gate** — pause for human approval
 
-Stages run sequentially; steps within a stage run in parallel. Artifacts flow between steps via template variables (`{{input}}`, `{{input[0]}}`). Each artifact includes provenance headers so downstream steps know where context came from.
+Stages run sequentially; steps within a stage run in parallel. Artifacts flow between steps via template variables (`{{input}}`, `{{input.field}}`, `{{input[N]}}`, `{{file}}`). Each artifact includes provenance headers so downstream steps know where context came from. Output types: `string`, `json` (field-addressable downstream), `file`, `directory`.
 
 **Pipeline builder**: Visual stage/step layout, drag-to-reorder, per-step persona/model/tool/directory configuration, output type annotations (string, file, directory).
 
@@ -244,7 +244,7 @@ Always available without any MCP server:
 | `list_directory` | List files and folders with metadata |
 | `run_command` | Execute a shell command in the working directory |
 
-All operations scoped to a configurable working directory. Enable **Directory Constrained** mode to prevent agents from accessing files outside the specified path.
+All operations scoped to a configurable working directory. Enable **Directory Constrained** mode to confine agent **writes** to that directory (reads are still allowed for context). Containment is hard-enforced, not advisory: the working dir is `git init`-isolated so the Claude CLI can't adopt a parent repo as its project, and a `PreToolUse` hook denies any write resolving outside the dir (the Codex CLI uses its native `workspace-write` sandbox). Agents can read the codebase for grounding but cannot escape the working directory.
 
 ## Search Service
 

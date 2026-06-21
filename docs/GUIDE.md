@@ -625,13 +625,15 @@ A pipeline consists of **stages**, and each stage contains **steps**. Stages run
 | **council** | Open deliberation council — full tools, general output |
 | **code_planning** | Planning council — PLAN_TOOLS only, produces plan documents |
 | **coding** | Coding orchestrator — implement, review, test, debug |
-| **analysis** | Lightweight analysis — manager + worker, 0 rounds |
-| **agent** | Lightweight agent — single worker execution |
+| **analysis** | Structured analysis (JSON) — same deliberation workflow, typically a smaller council |
+| **agent** | Concise single answer — same deliberation workflow, typically a smaller council |
 | **review** | Review & documentation — code review + doc generation |
 | **enrich** | Enrichment — research, brainstorm, prioritize features |
 | **script** | Runs a shell command, captures stdout as artifact |
-| **condition** | Evaluates expression against input — can skip stages or stop |
+| **condition** | Evaluates expression against input — continue, skip a stage, stop, or **loop back to an earlier stage** (bounded by max loops) |
 | **gate** | Pauses for human approval before continuing |
+
+> Every council type runs the **same** deliberation workflow. "Lightweight" types (analysis/agent) are just smaller councils — they don't skip phases. Add or remove consultants to control depth.
 
 ### Building a Pipeline
 
@@ -640,10 +642,9 @@ A pipeline consists of **stages**, and each stage contains **steps**. Stages run
 3. The pipeline builder opens with a visual editor.
 4. **Add stages** — sequential phases of the workflow.
 5. **Add steps** within each stage:
-   - For council steps (council, code_planning, coding, review, enrich): configure personas, models, rounds, decision criteria
-   - For lightweight steps (analysis, agent): choose a model and write a system prompt
+   - For council steps (council, code_planning, coding, review, enrich, analysis, agent): configure personas, models, rounds, decision criteria (analysis/agent are typically smaller councils)
    - For script steps: write a shell command
-   - For condition steps: set an expression, mode, and actions
+   - For condition steps: set an expression, mode, and actions (continue / skip next stage / stop / loop back to a stage)
    - For gates: write an approval prompt
 6. **Configure input templates** — how each step receives context from previous steps.
 7. **Set output types** — string, file, directory, or json.
