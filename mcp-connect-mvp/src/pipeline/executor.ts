@@ -63,6 +63,8 @@ export interface PipelineExecutorCallbacks {
   onStepComplete?: (stepId: string, artifact: StepArtifact) => void;
   onStepError?: (stepId: string, error: string) => void;
   onGateWaiting?: (stepId: string, prompt: string) => Promise<boolean>;
+  /** Narration line (e.g. loop-back notices). */
+  onLog?: (message: string) => void;
   onCouncilCreated?: (stepId: string, councilId: string) => void;
   onAgentThinkingStart?: (persona: Persona, startedAt: number, prompt?: string) => void;
   onAgentThinkingEnd?: (persona: Persona) => void;
@@ -381,8 +383,8 @@ export class PipelineExecutor {
         // Loop-back: a condition step in this stage asked to re-run from an
         // earlier stage (iterative refine→review). Reset the intervening stages
         // to pending and rewind the loop. Bounded by maxLoops in the condition.
-        if (this.loopRequest) {
-          const lr = this.loopRequest;
+        const lr: { targetStageId: string; fromStepId: string } | null = this.loopRequest;
+        if (lr) {
           this.loopRequest = null;
           const live = pipelineStore.get(pipelineId);
           const targetIdx = live ? live.stages.findIndex((s) => s.id === lr.targetStageId) : -1;

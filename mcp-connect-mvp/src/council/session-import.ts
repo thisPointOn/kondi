@@ -9,6 +9,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { councilDataStore } from './storage-cleanup';
 import { councilStore } from './store';
+import { kondiPath } from '../services/kondiPaths';
 
 interface FileInfo { name: string; path: string; is_dir: boolean; size: number; modified: string | null }
 
@@ -41,12 +42,9 @@ export interface CliCouncilSummary {
   alreadyImported: boolean;
 }
 
-const SESSIONS_REL_PATH = '.local/share/kondi/sessions';
-
 export async function discoverCliCouncilSessions(): Promise<CliCouncilSummary[]> {
   try {
-    const home = await invoke<string>('get_home_directory');
-    const dir = `${home}/${SESSIONS_REL_PATH}`;
+    const dir = await kondiPath('sessions');
     let files: FileInfo[];
     try {
       files = await invoke<FileInfo[]>('list_directory', { path: dir });

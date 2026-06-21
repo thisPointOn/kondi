@@ -7,6 +7,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { MCPClient } from './mcpClient';
+import { kondiPathSync } from './kondiPaths';
 import type { MCPServer } from '../types/mcp';
 
 // Constants
@@ -338,7 +339,7 @@ function getSearchServerPath(): string {
   if (import.meta.env.DEV) {
     return `${__PROJECT_ROOT__}/kondi-search-mcp`;
   }
-  return '~/.local/share/kondi/mcp-servers/kondi-search-mcp';
+  return kondiPathSync('mcp-servers', 'kondi-search-mcp');
 }
 
 /**

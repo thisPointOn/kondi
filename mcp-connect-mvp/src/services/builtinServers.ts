@@ -8,6 +8,7 @@
 
 import type { MCPServer } from '../types/mcp';
 import type { MCPClient } from './mcpClient';
+import { kondiPathSync } from './kondiPaths';
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -17,7 +18,7 @@ function basePath(pkg: string): string {
   if (import.meta.env.DEV) {
     return `${__PROJECT_ROOT__}/${pkg}`;
   }
-  return `~/.local/share/kondi/mcp-servers/${pkg}`;
+  return kondiPathSync('mcp-servers', pkg);
 }
 
 // ── server definitions ─────────────────────────────────────────────────────

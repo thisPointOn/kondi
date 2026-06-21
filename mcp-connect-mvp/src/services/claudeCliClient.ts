@@ -19,6 +19,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Message, MCPTool } from '../types/mcp';
 import type { ChatResult } from './llm-router';
 import { WORKDIR_GUARD_SRC, workdirGuardSettings } from './cli-workdir-guard';
+import { kondiPath } from './kondiPaths';
 
 /**
  * Webview can't write files or read process.execPath. Use the Tauri `run_command`
@@ -33,11 +34,15 @@ async function ensureWebviewGuardCommand(workingDir: string): Promise<string> {
   try {
     // base64 the script so it survives the shell round-trip unescaped
     const b64 = btoa(unescape(encodeURIComponent(WORKDIR_GUARD_SRC)));
-    const guardFile = '$HOME/.local/share/kondi/cli-state/workdir-guard.cjs';
+    // Cross-platform data dir (Linux ~/.local/share, macOS ~/Library/Application
+    // Support, Windows %APPDATA%). NOTE: the install shell below is still
+    // POSIX-only (mkdir -p / base64 -d) — Windows guard install is a follow-up.
+    const stateDir = await kondiPath('cli-state');
+    const guardFile = `${stateDir}/workdir-guard.cjs`;
     const cmd =
-      `mkdir -p "$HOME/.local/share/kondi/cli-state" && ` +
+      `mkdir -p "${stateDir}" && ` +
       `printf '%s' '${b64}' | base64 -d > "${guardFile}" && ` +
-      `printf '%s\\n%s' "$(command -v node || echo node)" "$HOME/.local/share/kondi/cli-state/workdir-guard.cjs"`;
+      `printf '%s\\n%s' "$(command -v node || echo node)" "${guardFile}"`;
     const out = await invoke<{ stdout: string }>('run_command', { command: cmd, workingDir });
     const [nodeBin, file] = (out.stdout || '').trim().split('\n');
     if (nodeBin && file) {

@@ -9,12 +9,23 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseStreamJsonOutput } from '../src/pipeline/output-parsers';
-import { WORKDIR_GUARD_SRC, WORKDIR_GUARD_REL, workdirGuardSettings } from '../src/services/cli-workdir-guard';
+import { WORKDIR_GUARD_SRC, workdirGuardSettings } from '../src/services/cli-workdir-guard';
+
+/** Cross-platform Kondi data dir for the Node CLI (mirrors Rust dirs::data_dir + the webview's get_kondi_data_dir). */
+function nodeKondiDataDir(): string {
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'kondi');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'kondi');
+  }
+  return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), 'kondi');
+}
 
 /** Write the guard script to disk (once per process) and return `<absolute-node> <file>`. */
 let _guardWritten = false;
 function workdirGuardCommand(): string {
-  const file = path.join(os.homedir(), WORKDIR_GUARD_REL);
+  const file = path.join(nodeKondiDataDir(), 'cli-state', 'workdir-guard.cjs');
   if (!_guardWritten) {
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });

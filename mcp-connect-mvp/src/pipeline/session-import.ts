@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { KondiSession, Pipeline } from './types';
 import { pipelineStore } from './store';
 import { councilDataStore } from '../council/storage-cleanup';
+import { kondiPath } from '../services/kondiPaths';
 
 interface FileInfo {
   name: string;
@@ -32,16 +33,13 @@ export interface CliSessionSummary {
   alreadyImported: boolean;
 }
 
-const SESSIONS_REL_PATH = '.local/share/kondi/sessions';
-
 /**
  * Discover CLI session files available for import.
  * Uses Tauri commands to read the filesystem.
  */
 export async function discoverCliSessions(): Promise<CliSessionSummary[]> {
   try {
-    const home = await invoke<string>('get_home_directory');
-    const sessionsDir = `${home}/${SESSIONS_REL_PATH}`;
+    const sessionsDir = await kondiPath('sessions');
 
     let files: FileInfo[];
     try {

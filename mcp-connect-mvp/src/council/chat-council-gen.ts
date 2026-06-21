@@ -9,7 +9,7 @@
  */
 import { simpleCompletion } from '../services/llm-router';
 import type { CouncilSetup } from './factory';
-import type { PipelinePersona } from './types';
+import type { PipelinePersona } from '../pipeline/types';
 
 export type CouncilStepKind =
   | 'council' | 'coding' | 'analysis' | 'review' | 'agent' | 'enrich' | 'code_planning';

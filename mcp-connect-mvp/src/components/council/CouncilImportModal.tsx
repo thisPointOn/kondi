@@ -44,7 +44,7 @@ const CouncilImportModal: FC<{ onClose: () => void; onImported: (councilId: stri
           <h2>Import CLI councils</h2>
           <button className="setup-dialog-close" onClick={onClose}>×</button>
         </div>
-        <p className="ci-sub">Councils run with <code>npm run council</code> export to ~/.local/share/kondi/sessions/. Import one to view its deliberation and results here.</p>
+        <p className="ci-sub">Councils run with <code>npm run council</code> export a session to Kondi's data directory. Import one to view its deliberation and results here.</p>
         {error && <div className="ci-error">{error}</div>}
         {loading ? (
           <div className="ci-empty">Scanning for sessions…</div>

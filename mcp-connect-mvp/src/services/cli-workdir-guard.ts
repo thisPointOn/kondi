@@ -51,9 +51,6 @@ if(name==='Bash'){
 process.exit(0);
 `;
 
-/** Stable on-disk location for the guard script (under the kondi data dir). */
-export const WORKDIR_GUARD_REL = '.local/share/kondi/cli-state/workdir-guard.cjs';
-
 /**
  * Build the `--settings` object given the already-resolved hook command
  * (`<absolute-node> <guard-file>` — two unquoted tokens; see file header).
