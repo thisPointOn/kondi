@@ -236,6 +236,7 @@ function App() {
             onChatActiveProviderChange={chats.setChatActiveProviderFor}
             showRightSidebar={showRightSidebar}
             onToggleRightSidebar={() => setShowRightSidebar(!showRightSidebar)}
+            onOpenSettings={() => setIsSettingsOpen(true)}
           />
         )}
         </ErrorBoundary>

@@ -8,6 +8,7 @@ import type { ChatModelPin } from '../hooks/useChats';
 import { open as tauriOpen, ask } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, Message, ToolCall } from '../types/mcp';
 import { chatCompletion, simpleCompletion } from '../services/llm-router';
+import FirstRunSetup from './FirstRunSetup';
 import { isCouncilCreationRequest, generateCouncilSetup } from '../council/chat-council-gen';
 import { createCouncilFromSetup } from '../council/factory';
 import { requestCouncilRun } from './council/councilCreateSignal';
@@ -549,6 +550,8 @@ interface ChatAreaProps {
   };
   /** Currently selected provider ID (e.g., 'anthropic-cli', 'openai-api') */
   selectedProviderId?: string;
+  /** Open the Settings dialog (used by first-run setup + the no-credentials nudge). */
+  onOpenSettings?: () => void;
   /** Called when user switches provider/model from the chat header */
   onProviderModelChange?: (providerId: string, modelId: string) => void;
   /** Lifted sending state — persists across view changes */
@@ -605,6 +608,7 @@ const ChatArea: FC<ChatAreaProps> = ({
     ollama: false,
   },
   selectedProviderId = 'anthropic-cli',
+  onOpenSettings,
   onProviderModelChange,
   globalWorkingDirectory,
   chatWorkingDir,
@@ -1137,8 +1141,17 @@ const ChatArea: FC<ChatAreaProps> = ({
     if (!inputValue.trim() || sending || !chatId) return;
 
     if (!apiKey) {
+      // Friendly, non-blocking nudge instead of a dead-end alert: post guidance
+      // into the chat and open the provider setup so the user can act in one click.
       const providerName = PROVIDER_META.find(p => p.id === selectedProviderId)?.shortLabel || selectedProviderId;
-      alert(`Please configure credentials for ${providerName} in LLM Providers settings.`);
+      const anyReady = Object.values(configuredProviders).some(Boolean);
+      const msg = anyReady
+        ? `⚠️ **${providerName}** isn't set up. Pick a provider you've configured from the model menu below, or add a key for ${providerName} in Settings.`
+        : `👋 To start chatting, add an AI provider — the quickest is pasting a **Gemini** or **DeepSeek** API key (nothing to install). Opening provider setup for you…`;
+      onMessagesChange([...messages, {
+        id: crypto.randomUUID(), role: 'assistant', content: msg, timestamp: new Date(),
+      } as Message]);
+      onOpenSettings?.();
       return;
     }
 
@@ -1543,7 +1556,12 @@ const ChatArea: FC<ChatAreaProps> = ({
           </div>
         )}
 
-        {messages.length === 0 && (
+        {messages.length === 0 && !Object.values(configuredProviders).some(Boolean) ? (
+          <FirstRunSetup
+            configuredProviders={configuredProviders as unknown as Record<string, boolean>}
+            onOpenSettings={() => onOpenSettings?.()}
+          />
+        ) : messages.length === 0 && (
           <div className="empty-chat">
             <div className="empty-icon">&#128075;</div>
             <div>Start a conversation with your MCP-enabled assistant</div>
