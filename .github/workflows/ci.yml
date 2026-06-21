@@ -1,0 +1,54 @@
+name: CI
+
+# Fast checks on every push / PR: the type gate (tsc --noEmit), the production
+# transpile (vite build), and that the kondi-guard sidecar compiles.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install JS dependencies
+        working-directory: mcp-connect-mvp
+        run: npm install
+
+      - name: Type check (project gate)
+        working-directory: mcp-connect-mvp
+        run: npx tsc --noEmit
+
+      - name: Production transpile
+        working-directory: mcp-connect-mvp
+        run: npx vite build
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: mcp-connect-mvp/src-tauri -> target
+
+      - name: Guard sidecar compiles + passes containment smoke test
+        working-directory: mcp-connect-mvp/src-tauri
+        shell: bash
+        run: |
+          cargo build --bin kondi-guard
+          G=target/debug/kondi-guard
+          SB=/tmp/sb
+          # escape must be denied (non-empty output), in-sandbox allowed (silent)
+          DENY=$(echo "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/etc/passwd\"},\"cwd\":\"$SB\"}" | KONDI_WORKDIR="$SB" "$G")
+          ALLOW=$(echo "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$SB/ok.md\"},\"cwd\":\"$SB\"}" | KONDI_WORKDIR="$SB" "$G")
+          test -n "$DENY" || { echo "guard FAILED to deny an escape"; exit 1; }
+          test -z "$ALLOW" || { echo "guard wrongly blocked an in-sandbox write"; exit 1; }
+          echo "guard containment smoke test OK"
