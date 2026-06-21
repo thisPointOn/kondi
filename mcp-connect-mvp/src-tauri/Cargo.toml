@@ -7,6 +7,14 @@ license = "AGPL-3.0-only"
 repository = ""
 edition = "2021"
 rust-version = "1.77.2"
+# Two binaries (kondi app + kondi-guard sidecar) — disambiguate `cargo run`/dev.
+default-run = "kondi"
+
+# The guard sidecar: a tiny self-contained PreToolUse containment binary (no deps
+# beyond serde_json). Built via build-guard.sh and bundled as a Tauri externalBin.
+[[bin]]
+name = "kondi-guard"
+path = "src/bin/kondi-guard.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
