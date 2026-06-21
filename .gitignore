@@ -26,3 +26,6 @@ mcp-connect-mvp/integrations/.generated-posts/
 
 # Test scaffolding (labeled TEST, local only)
 TEST-runs/
+
+# Tauri sidecar build artifacts (built per-platform by src-tauri/build-guard.sh)
+mcp-connect-mvp/src-tauri/binaries/

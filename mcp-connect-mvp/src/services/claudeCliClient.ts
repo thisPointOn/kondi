@@ -31,6 +31,16 @@ import { kondiPath } from './kondiPaths';
 let _webviewGuardCmd: string | null = null;
 async function ensureWebviewGuardCommand(workingDir: string): Promise<string> {
   if (_webviewGuardCmd !== null) return _webviewGuardCmd;
+  // Preferred: the bundled `kondi-guard` binary (zero external deps — no node,
+  // no shell install, cross-platform). The hook command is just its path.
+  try {
+    const guardBin = await invoke<string>('get_guard_binary_path');
+    if (guardBin) {
+      _webviewGuardCmd = guardBin.includes(' ') ? `"${guardBin}"` : guardBin;
+      return _webviewGuardCmd;
+    }
+  } catch { /* not bundled (e.g. older build) — fall back to the node guard */ }
+  // Fallback: install + run the Node guard script (POSIX-only install).
   try {
     // base64 the script so it survives the shell round-trip unescaped
     const b64 = btoa(unescape(encodeURIComponent(WORKDIR_GUARD_SRC)));

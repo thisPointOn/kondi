@@ -5072,6 +5072,24 @@ pub fn get_kondi_data_dir() -> Result<String, String> {
         .ok_or_else(|| "Could not determine data directory".to_string())
 }
 
+/// Absolute path to the bundled `kondi-guard` write-containment binary.
+/// It sits next to the main executable in BOTH dev (target/debug/kondi-guard)
+/// and a packaged build (Tauri externalBin places the sidecar alongside the app
+/// binary), so the same lookup works everywhere. Returns the path, or an error
+/// if it isn't present (the webview then falls back to the Node guard).
+#[tauri::command]
+pub fn get_guard_binary_path() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe.parent().ok_or("no parent dir for current exe")?;
+    let name = if cfg!(windows) { "kondi-guard.exe" } else { "kondi-guard" };
+    let p = dir.join(name);
+    if p.exists() {
+        Ok(p.to_string_lossy().to_string())
+    } else {
+        Err(format!("guard binary not found at {}", p.display()))
+    }
+}
+
 /// Ensure SearXNG Docker files exist in Kondi data directory
 #[tauri::command]
 pub async fn ensure_searxng_files() -> Result<String, String> {

@@ -103,6 +103,7 @@ pub fn run() {
             commands::docker_compose_down,
             commands::check_searxng_health,
             commands::get_kondi_data_dir,
+            commands::get_guard_binary_path,
             commands::ensure_searxng_files,
         ])
         .setup(|app| {
