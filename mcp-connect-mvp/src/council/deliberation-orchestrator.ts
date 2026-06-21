@@ -1345,7 +1345,7 @@ export class DeliberationOrchestrator {
     // Check if the worker has write permissions (informs the directive to emphasize implementation)
     const worker = this.getWorker(council);
     const workerAssignment = getRoleAssignment(council, worker.id);
-    const hasWritePermissions = !!(workerAssignment?.writePermissions);
+    const hasWritePermissions = this.effectiveWrite(worker, workerAssignment);
     const stepType = council.deliberation?.stepType;
 
     // Build prompts per Section 9.6
@@ -1408,9 +1408,11 @@ export class DeliberationOrchestrator {
     const assignment = getRoleAssignment(council, worker.id);
     const suppressPersona = assignment?.suppressPersona !== false; // Default true for worker
 
-    // Build worker permissions from role assignment + deliberation config
+    // Build worker permissions from role assignment + deliberation config.
+    // writePermissions is gated by ACTUAL tool capability so a non-tool worker
+    // is driven as a text agent (not told to write files it can't write).
     const workerPermissions: WorkerPermissions = {
-      writePermissions: assignment?.writePermissions,
+      writePermissions: this.effectiveWrite(worker, assignment),
       workingDirectory: council.deliberation?.workingDirectory,
       directoryConstrained: council.deliberation?.directoryConstrained,
     };
@@ -1547,7 +1549,7 @@ export class DeliberationOrchestrator {
     // Check if worker had write permissions (affects review criteria)
     const worker = this.getWorker(council);
     const workerAssignment = getRoleAssignment(council, worker.id);
-    const hasWritePermissions = !!(workerAssignment?.writePermissions);
+    const hasWritePermissions = this.effectiveWrite(worker, workerAssignment);
     const stepType = council.deliberation?.stepType;
 
     // Build prompts per Section 9.8
@@ -1681,7 +1683,7 @@ export class DeliberationOrchestrator {
 
     // Build worker permissions from role assignment + deliberation config
     const workerPermissions: WorkerPermissions = {
-      writePermissions: assignment?.writePermissions,
+      writePermissions: this.effectiveWrite(worker, assignment),
       workingDirectory: council.deliberation?.workingDirectory,
       directoryConstrained: council.deliberation?.directoryConstrained,
     };
@@ -1791,7 +1793,7 @@ export class DeliberationOrchestrator {
 
     // Build worker permissions
     const workerPermissions: WorkerPermissions = {
-      writePermissions: assignment?.writePermissions,
+      writePermissions: this.effectiveWrite(worker, assignment),
       workingDirectory: council.deliberation?.workingDirectory,
       directoryConstrained: council.deliberation?.directoryConstrained,
     };
@@ -2261,6 +2263,19 @@ export class DeliberationOrchestrator {
       throw new Error('No worker assigned to council');
     }
     return workers[0];
+  }
+
+  /**
+   * Effective write capability = writePermissions intent AND the worker can
+   * ACTUALLY execute tools at runtime. A worker on a non-tool provider (e.g. a
+   * deepseek/API worker) with writePermissions=true cannot write files — telling
+   * it to "write files" makes it hallucinate file-creation narration instead of
+   * producing the deliverable. When false, the worker is driven as a text agent
+   * and its output is sanitized.
+   */
+  private effectiveWrite(worker: Persona, assignment?: { writePermissions?: boolean }): boolean {
+    if (!assignment?.writePermissions) return false;
+    return this.config.canUseTools ? this.config.canUseTools(worker) : true;
   }
 
   private getPersonaDisplayName(council: Council, personaId: string): string {
