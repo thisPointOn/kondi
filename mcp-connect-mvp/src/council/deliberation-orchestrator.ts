@@ -314,16 +314,14 @@ export class DeliberationOrchestrator {
       return;
     }
 
-    // Lightweight council types (agent/analysis): a single worker pass is enough
-    // ONLY when no consultants are configured ("if one pass does the job, recognize
-    // it"). If the user assigned consultants, honor them with full deliberation —
-    // never silently ignore configured personas.
-    const stepType = council.deliberation?.stepType;
-    if ((stepType === 'agent' || stepType === 'analysis') && consultantAssignments.length === 0) {
-      console.log(`[Orchestrator] Lightweight step type '${stepType}' (no consultants) — running direct execution path`);
-      await this.runDirectExecution(council, rawProblem);
-      return;
-    }
+    // NOTE: there is intentionally NO workflow-skipping "lightweight" path here.
+    // Every council type (including agent/analysis) runs the SAME deliberation
+    // workflow — a "lightweight" council is just a SMALLER council (e.g. 2
+    // consultants), not one that skips phases. The deliberation naturally stays
+    // cheap when there's little to deliberate: with 0 consultants it skips the
+    // discussion rounds and goes straight to deciding (see frameProblem), and
+    // round/revision counts already cap the depth. (The only direct-execution
+    // path remaining is the structural manager-less case handled above.)
 
     // Phase 1: Frame the problem
     const t0 = Date.now();

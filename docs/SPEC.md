@@ -179,13 +179,13 @@ Asking chat to "create/spin up/generate a council to …" builds and **auto-runs
 | `coding` | Coding | Manager + Worker + Reviewer | Code files | Worker saves `_code.md`, has testCommand, maxDebugCycles |
 | `review` | Deliberation | Manager + Consultant(s) + Worker | Review document | Worker saves `_review.md` |
 | `enrich` | Deliberation | Manager + Consultant(s) + Worker | Enriched content | Worker saves `_enrichment.md` |
-| `analysis` | Lightweight only if NO consultants | Manager + Worker (+ Consultants) | Decision or output artifact | direct worker pass when no consultants; full deliberation if consultants assigned |
-| `agent` | Lightweight only if NO consultants | Worker (+ Consultants) | Output artifact | direct worker pass when no consultants; full deliberation if consultants assigned |
+| `analysis` | Deliberation (same workflow) | Manager + Consultant(s) + Worker | Decision or output artifact | typically a smaller council; JSON output |
+| `agent` | Deliberation (same workflow) | Manager + Consultant(s) + Worker | Output artifact | typically a smaller council; concise output |
 | `gate` | None | None | Approval | Pauses for user confirmation |
 | `script` | None | None | stdout | Runs a shell command, captures stdout as artifact |
 | `condition` | None | None | Evaluation result | Evaluates expression against input; actions: continue, skip_next_stage, stop, loop_to_stage |
 
-**Lightweight path is opt-out via consultants.** `agent`/`analysis` skip full deliberation and run a single worker pass ONLY when no consultants are configured ("if one pass does the job, recognize it"). If the user assigns consultants, the orchestrator runs the FULL deliberation (frame → rounds → decide → execute → review) so configured personas are never silently ignored.
+**No workflow-skipping "lightweight" path.** Every council type — including `agent`/`analysis` — runs the SAME deliberation workflow (frame → rounds → decide → execute → review). A "lightweight" council is just a SMALLER council (e.g. 2 consultants), never one that skips phases. The workflow stays cheap on its own when there's little to deliberate: with 0 consultants it skips the discussion rounds and goes straight to deciding, and round/revision counts cap the depth. The only direct-execution path is the structural manager-less case (a council with no manager can't orchestrate).
 
 `PipelineStepType = 'council' | 'code_planning' | 'analysis' | 'agent' | 'coding' | 'review' | 'enrich' | 'gate' | 'script' | 'condition'`
 
