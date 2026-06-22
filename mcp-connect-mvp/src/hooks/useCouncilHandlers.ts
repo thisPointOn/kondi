@@ -49,6 +49,13 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
           console.log('[Council] invokeAgent completed', { personaName: persona.name, tokensUsed: result.tokensUsed });
           return { ...result, sessionId: result.sessionId };
         },
+        // A worker can actually WRITE FILES only on a provider whose runtime
+        // executes tools (the CLI binaries). API workers (gemini/deepseek/etc.)
+        // can't — so they're driven as text agents that emit the full deliverable
+        // instead of being told to "use tools" (which makes them narrate fake
+        // file writes — the "string not code" failure). See effectiveWrite().
+        canUseTools: (persona: Persona) =>
+          persona.provider === 'anthropic-cli' || persona.provider === 'openai-cli',
         ...(opts?.includePhaseChange ? {
           onPhaseChange: (from: string, to: string) => console.log(`[Deliberation] Phase: ${from} → ${to}`),
         } : {}),
