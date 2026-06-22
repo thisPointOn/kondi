@@ -180,13 +180,22 @@ export class CodingOrchestrator {
         });
       }
 
+      // Phase 1.5: Consultant advisory — honour consultant role assignments even
+      // in the coding flow. Assigned consultants review the decomposed plan and
+      // advise; their guidance is recorded in the ledger and folded into the
+      // implementation spec. No consultants → no-op.
+      const guidance = await this.consultOnPlan(council, enrichedSpec);
+      const implSpec = guidance
+        ? `${spec}\n\n---\nCONSULTANT GUIDANCE (consider during implementation):\n${guidance}`
+        : spec;
+
       // Phase 2+3: Implement → Review loop
       let reviewCycleCount = 0;
       while (true) {
         council = councilStore.get(council.id)!;
 
         this.transitionPhase(council.id, 'implementing');
-        await this.implementModules(council, spec, reviewCycleCount > 0);
+        await this.implementModules(council, implSpec, reviewCycleCount > 0);
         council = councilStore.get(council.id)!;
 
         // Check if reviewer exists
@@ -396,6 +405,49 @@ export class CodingOrchestrator {
 
     console.log(`[CodingOrchestrator] Decomposed into ${decomposition.modules.length} module(s):`,
       decomposition.modules.map(m => m.name));
+  }
+
+  /**
+   * Consultant advisory pass — runs BEFORE implementation so a coding council
+   * still honours its consultant role assignments (the worker isn't the only
+   * non-manager voice). Each assigned consultant reviews the decomposed plan from
+   * their perspective and returns concise guidance; their input is recorded in
+   * the ledger (as a consultant 'analysis' entry under the decomposing phase) and
+   * folded into the implementation spec. No-op when there are no consultants.
+   */
+  private async consultOnPlan(council: Council, spec: string): Promise<string> {
+    const consultants = getPersonaByRole(council, 'consultant');
+    if (consultants.length === 0) return '';
+    console.log(`[CodingOrchestrator] Consultant advisory: ${consultants.length} consultant(s)`);
+
+    const decomposition = councilStore.get(council.id)?.deliberationState?.moduleDecomposition;
+    const planSummary = decomposition?.modules?.length
+      ? `\n\nPLANNED MODULES:\n${decomposition.modules.map(m => `- ${m.name}: ${m.directive || ''}`).join('\n')}`
+      : '';
+
+    const advices: string[] = [];
+    for (const consultant of consultants) {
+      const systemPrompt = consultant.predisposition?.systemPrompt || consultant.systemPrompt || '';
+      const userMessage =
+        `An implementation is about to begin. From your perspective, give concise, actionable guidance ` +
+        `(risks, better approaches, edge cases, things to verify). Do NOT write code or call tools — advise only.\n\n` +
+        `TASK:\n${spec}${planSummary}`;
+      try {
+        const response = await this.invokeAgentSafe(
+          { personaId: consultant.id, systemPrompt, userMessage },
+          consultant,
+          'consultation'
+        );
+        this.createEntry(
+          council.id, 'consultant', consultant.id, 'analysis', 'decomposing',
+          response.content, response.tokensUsed, response.latencyMs
+        );
+        if (response.content?.trim()) advices.push(`### ${consultant.name}\n${response.content.trim()}`);
+      } catch (err) {
+        console.warn(`[CodingOrchestrator] Consultant ${consultant.name} advisory failed:`, (err as Error).message);
+      }
+    }
+    return advices.join('\n\n');
   }
 
   // ==========================================================================
