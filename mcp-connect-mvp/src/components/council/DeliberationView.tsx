@@ -81,10 +81,10 @@ export default function DeliberationView({
   onAbort,
   onUserMessage,
   configuredProviders = {
-    'anthropic-cli': true,
-    'anthropic-api': true,
-    'openai-cli': true,
-    'openai-api': true,
+    'anthropic-cli': false,
+    'anthropic-api': false,
+    'openai-cli': false,
+    'openai-api': false,
     deepseek: true
   },
   thinkingPersonas: rawThinkingPersonas = [],

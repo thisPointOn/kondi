@@ -64,8 +64,10 @@ export default function CouncilLibrary({
     // council just gets a placeholder name here.
     const name = (rawName ?? 'New Council').trim() || 'New Council';
 
-    // Resolve models based on available providers (CLI preferred, API fallback)
-    const avail = configuredProviders || { 'anthropic-cli': true, 'anthropic-api': false, 'openai-cli': true, 'openai-api': false, deepseek: false };
+    // Resolve models from REAL availability. Never assume the Claude/Codex CLIs
+    // are installed (unlikely on a fresh machine) — fall back to whatever the
+    // user actually configured.
+    const avail = configuredProviders || { 'anthropic-cli': false, 'anthropic-api': false, 'openai-cli': false, 'openai-api': false, deepseek: false };
     const managerModel = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
     const workerModel = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
 

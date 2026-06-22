@@ -360,8 +360,10 @@ interface StepConfigPanelProps {
   onClose: () => void;
 }
 
-/** Default provider availability when no configuredProviders is passed */
-const DEFAULT_AVAIL: Record<string, boolean> = { 'anthropic-cli': true, 'anthropic-api': false, 'openai-cli': true, 'openai-api': false, deepseek: false };
+/** Default provider availability when no configuredProviders is passed.
+ *  The Claude/Codex CLIs are NEVER assumed present (unlikely on a fresh machine);
+ *  real availability is passed in from useProviderConfig and drives the picks. */
+const DEFAULT_AVAIL: Record<string, boolean> = { 'anthropic-cli': false, 'anthropic-api': false, 'openai-cli': false, 'openai-api': false, deepseek: false };
 
 function defaultCouncilConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);

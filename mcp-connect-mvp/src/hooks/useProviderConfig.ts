@@ -40,8 +40,12 @@ export function useProviderConfig() {
     return (saved === 'chatgpt' ? 'chatgpt' : 'claude') as 'claude' | 'chatgpt';
   });
   const [selectedProviderId, setSelectedProviderId] = useState<string>(() => {
+    // Only honor a saved choice. Do NOT assume the Claude CLI is installed (it's
+    // unlikely on a fresh machine) — when nothing is saved we leave this as a
+    // neutral API placeholder and a useEffect below switches it to whatever
+    // provider the user actually has credentials for once keys load.
     const saved = localStorage.getItem('kondi-provider-id');
-    return saved || 'anthropic-cli';
+    return saved || 'anthropic-api';
   });
   const [openaiKey, setOpenaiKey] = useState('');
   const [anthropicKey, setAnthropicKey] = useState('');
@@ -261,6 +265,24 @@ export function useProviderConfig() {
       localStorage.removeItem('kondi-global-working-directory');
     }
   }, [globalWorkingDirectory]);
+
+  // Smart default provider: once credentials load, if the user hasn't made an
+  // explicit choice and the current provider has no credentials, switch to one
+  // that does — API providers FIRST, CLI providers last (the Claude/Codex CLIs
+  // are unlikely on a fresh machine and must never be assumed).
+  useEffect(() => {
+    if (!hasLoadedKeys) return;
+    if (localStorage.getItem('kondi-provider-id')) return; // explicit user choice — respect it
+    const avail: Array<[string, boolean]> = [
+      ['google', googleHasOAuth], ['deepseek', !!deepseekKey], ['anthropic-api', !!anthropicKey],
+      ['openai-api', !!openaiKey], ['xai', !!xaiKey], ['zai', !!zaiKey], ['nvidia-router', !!nvidiaKey],
+      ['anthropic-cli', anthropicHasOAuth], ['openai-cli', openaiHasOAuth],
+    ];
+    const currentOk = avail.find(([id]) => id === selectedProviderId)?.[1];
+    if (currentOk) return;
+    const firstConfigured = avail.find(([, ok]) => ok)?.[0];
+    if (firstConfigured) setSelectedProviderId(firstConfigured);
+  }, [hasLoadedKeys, googleHasOAuth, deepseekKey, anthropicKey, openaiKey, xaiKey, zaiKey, nvidiaKey, anthropicHasOAuth, openaiHasOAuth]);
 
   // Sync API keys to auth profile store when they change
   useEffect(() => {
