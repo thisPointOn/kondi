@@ -125,12 +125,22 @@ const SettingsModal: FC<SettingsModalProps> = ({
   const [storeDirOverride, setStoreDirOverride] = useState('');
   const [storeDirDefault, setStoreDirDefault] = useState('');
   const [storeDirActive, setStoreDirActive] = useState('');
+  // Codex no-sandbox opt-in (for hosts that can't run Codex's sandbox).
+  const [codexNoSandbox, setCodexNoSandbox] = useState(false);
   useEffect(() => {
     if (!isOpen) return;
     setStoreDirOverride(councilDataStore.getDiskDirOverride());
     setStoreDirActive(councilDataStore.getDiskDir() || '');
     void councilDataStore.getDefaultDiskDir().then(setStoreDirDefault);
+    try { setCodexNoSandbox(localStorage.getItem('kondi-codex-no-sandbox') === 'true'); } catch { /* ignore */ }
   }, [isOpen]);
+  const toggleCodexNoSandbox = (on: boolean) => {
+    setCodexNoSandbox(on);
+    try {
+      if (on) localStorage.setItem('kondi-codex-no-sandbox', 'true');
+      else localStorage.removeItem('kondi-codex-no-sandbox');
+    } catch { /* ignore */ }
+  };
   const applyStoreDir = async (dir: string) => {
     try {
       const resolved = await councilDataStore.setDiskDir(dir || null);
@@ -326,6 +336,29 @@ const SettingsModal: FC<SettingsModalProps> = ({
                       {!storeDirOverride && ' (default)'}
                       {'  '}— changing this copies existing deliberations to the new location.
                     </p>
+                  </div>
+                </CollapsibleSection>
+
+                <CollapsibleSection title="CLI Workers" defaultOpen>
+                  <div className="global-directory-setting">
+                    <label className="constraint-toggle" style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+                      <input
+                        type="checkbox"
+                        checked={codexNoSandbox}
+                        onChange={(e) => toggleCodexNoSandbox(e.target.checked)}
+                        style={{ marginTop: '0.2rem' }}
+                      />
+                      <span className="constraint-label">
+                        Run Codex (OpenAI CLI) without its OS sandbox
+                        <p className="settings-hint" style={{ marginTop: '0.25rem' }}>
+                          Enable only if Codex workers fail to start with a sandbox/<code>bwrap</code> error
+                          (common when the host kernel restricts unprivileged user namespaces). Codex then runs
+                          with <code>--dangerously-bypass-approvals-and-sandbox</code> — containment relies only
+                          on Kondi git-scoping the working directory, which is <strong>less strict</strong>.
+                          Leave off unless you need it. (Claude Code is unaffected — it uses a different guard.)
+                        </p>
+                      </span>
+                    </label>
                   </div>
                 </CollapsibleSection>
 

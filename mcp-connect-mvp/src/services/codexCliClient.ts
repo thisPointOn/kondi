@@ -69,13 +69,26 @@ export async function codexCliChat(
 
   let args: string[];
 
+  // Sandbox selection. Default: Codex's own `workspace-write` sandbox. On hosts
+  // that restrict unprivileged user namespaces (recent Ubuntu/AppArmor), that
+  // sandbox can't initialize (bwrap loopback failure) and Codex can't run at all.
+  // The opt-in setting below swaps it for `--dangerously-bypass-approvals-and-
+  // sandbox` so Codex runs WITHOUT its OS sandbox — containment then relies only
+  // on Kondi git-scoping the working dir (less strict; user-acknowledged).
+  const noSandbox = (() => {
+    try { return localStorage.getItem('kondi-codex-no-sandbox') === 'true'; } catch { return false; }
+  })();
+  const sandboxArgs = noSandbox
+    ? ['--dangerously-bypass-approvals-and-sandbox']
+    : ['--sandbox', 'workspace-write'];
+
   if (resume) {
     // Resume existing session
     args = [
       'exec', 'resume',
       '--json',
       '--skip-git-repo-check',
-      '--sandbox', 'workspace-write',
+      ...sandboxArgs,
       '--model', model,
       '--last',
     ];
@@ -85,7 +98,7 @@ export async function codexCliChat(
       'exec',
       '--json',
       '--skip-git-repo-check',
-      '--sandbox', 'workspace-write',
+      ...sandboxArgs,
       '--model', model,
     ];
   }

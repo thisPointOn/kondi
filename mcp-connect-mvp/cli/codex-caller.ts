@@ -43,6 +43,12 @@ export async function callCodex(opts: {
 
     if (opts.skipTools) {
       args.push('--sandbox', 'read-only');
+    } else if (process.env.KONDI_CODEX_NO_SANDBOX === 'true') {
+      // Opt-in: hosts that can't run Codex's sandbox (restricted user namespaces
+      // → bwrap loopback failure). Runs WITHOUT the OS sandbox; containment then
+      // relies only on Kondi git-scoping the working dir. Mirrors the webview
+      // setting `kondi-codex-no-sandbox`.
+      args.push('--dangerously-bypass-approvals-and-sandbox');
     } else {
       // --full-auto implies --sandbox workspace-write and -a on-request
       args.push('--full-auto');
