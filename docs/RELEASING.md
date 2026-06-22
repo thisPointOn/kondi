@@ -53,6 +53,11 @@ changes needed.
    - `APPLE_PASSWORD` = the app-specific password from step 5
    - `APPLE_TEAM_ID` = your Team ID from step 1
 
+7. **Uncomment** the signing `env:` block in `.github/workflows/release.yml`
+   (it ships commented out — a defined-but-empty `APPLE_CERTIFICATE` makes Tauri's
+   bundler try to import an empty cert and fail the whole macOS build, so those
+   vars must only be set once you actually have the secrets).
+
 That's it — the next tagged build is signed **and notarized** automatically.
 
 ### Windows — step by step (needs a code-signing cert)
