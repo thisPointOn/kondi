@@ -28,6 +28,11 @@ jobs:
             args: ''
 
     runs-on: ${{ matrix.platform }}
+    # Intel macOS (macos-13) runs on scarce free runners that routinely queue for
+    # hours and may never get scheduled. Make ONLY that leg non-blocking so a
+    # stuck/cancelled Intel build never fails the release — it still attaches its
+    # x64 .dmg if a runner frees up, but the 3 modern platforms decide success.
+    continue-on-error: ${{ matrix.platform == 'macos-13' }}
     steps:
       - uses: actions/checkout@v4
 
