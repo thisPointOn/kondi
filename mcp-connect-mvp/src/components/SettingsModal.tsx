@@ -6,6 +6,7 @@ import { useAppearance, setAppearance, resetAppearance, APPEARANCE_DEFAULTS } fr
 import SearchServicePanel from './SearchServicePanel';
 import ToolsPanel from './ToolsPanel';
 import { CollapsibleSection } from './CollapsibleSection';
+import { councilDataStore } from '../council/storage-cleanup';
 import { open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import { mcpClient } from '../services/mcpClient';
 import type { MCPServer } from '../types/mcp';
@@ -118,6 +119,27 @@ const SettingsModal: FC<SettingsModalProps> = ({
   const [activeTab, setActiveTab] = useState<TabId>('general');
   const appearance = useAppearance();
   const modalRef = useRef<HTMLDivElement>(null);
+
+  // Council deliberation store location (durable on-disk mirror — separate from
+  // the per-council "save to working directory" export).
+  const [storeDirOverride, setStoreDirOverride] = useState('');
+  const [storeDirDefault, setStoreDirDefault] = useState('');
+  const [storeDirActive, setStoreDirActive] = useState('');
+  useEffect(() => {
+    if (!isOpen) return;
+    setStoreDirOverride(councilDataStore.getDiskDirOverride());
+    setStoreDirActive(councilDataStore.getDiskDir() || '');
+    void councilDataStore.getDefaultDiskDir().then(setStoreDirDefault);
+  }, [isOpen]);
+  const applyStoreDir = async (dir: string) => {
+    try {
+      const resolved = await councilDataStore.setDiskDir(dir || null);
+      setStoreDirActive(resolved);
+      setStoreDirOverride(councilDataStore.getDiskDirOverride());
+    } catch (err) {
+      console.error('[Settings] Failed to change council store dir:', err);
+    }
+  };
 
   useEffect(() => {
     // Handle Escape key to close
@@ -243,6 +265,67 @@ const SettingsModal: FC<SettingsModalProps> = ({
                         Browse...
                       </button>
                     </div>
+                  </div>
+                </CollapsibleSection>
+
+                <CollapsibleSection title="Council Deliberation Store" defaultOpen>
+                  <div className="global-directory-setting">
+                    <p className="settings-hint">
+                      Where council deliberations are saved on disk so they reload with full
+                      output when you reopen Kondi. This is separate from a council&rsquo;s
+                      &ldquo;save to working directory&rdquo; export. Leave blank for the default.
+                    </p>
+                    <div className="directory-input-row">
+                      <input
+                        type="text"
+                        className="directory-input"
+                        placeholder={storeDirDefault || 'Default location'}
+                        value={storeDirOverride}
+                        onChange={(e) => setStoreDirOverride(e.target.value)}
+                        onBlur={() => {
+                          if (storeDirOverride !== councilDataStore.getDiskDirOverride()) {
+                            void applyStoreDir(storeDirOverride);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="directory-browse-btn"
+                        onClick={async () => {
+                          try {
+                            const selected = await tauriOpen({
+                              directory: true,
+                              multiple: false,
+                              title: 'Select Council Deliberation Store Directory',
+                              defaultPath: storeDirActive || storeDirDefault || undefined,
+                            });
+                            if (selected && typeof selected === 'string') {
+                              setStoreDirOverride(selected);
+                              await applyStoreDir(selected);
+                            }
+                          } catch (err) {
+                            console.error('[Settings] Error selecting store directory:', err);
+                          }
+                        }}
+                      >
+                        Browse...
+                      </button>
+                      {storeDirOverride && (
+                        <button
+                          type="button"
+                          className="directory-browse-btn"
+                          onClick={() => { setStoreDirOverride(''); void applyStoreDir(''); }}
+                          title="Revert to the default location"
+                        >
+                          Use default
+                        </button>
+                      )}
+                    </div>
+                    <p className="settings-hint" style={{ marginTop: '0.4rem', opacity: 0.75 }}>
+                      Active: <code>{storeDirActive || storeDirDefault || '…'}</code>
+                      {!storeDirOverride && ' (default)'}
+                      {'  '}— changing this copies existing deliberations to the new location.
+                    </p>
                   </div>
                 </CollapsibleSection>
 

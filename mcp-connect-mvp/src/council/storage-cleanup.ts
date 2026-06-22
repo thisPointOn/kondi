@@ -38,6 +38,10 @@ function isCouncilDataKey(key: string): boolean {
   return DISK_KEY_PREFIXES.some((p) => key.startsWith(p));
 }
 
+/** localStorage key holding a user-chosen override for the on-disk council store
+ *  directory. Empty/absent = use the OS-convention default (<dataDir>/council-store). */
+const STORE_DIR_OVERRIDE_KEY = 'kondi-council-store-dir';
+
 class CouncilDataStore {
   private cache = new Map<string, string>();
 
@@ -108,9 +112,48 @@ class CouncilDataStore {
    * council data to disk. Call once at startup (awaited) BEFORE the UI reads
    * council data. Falls back to localStorage-only if Tauri/disk is unavailable.
    */
+  /** The default (OS-convention) store dir: <dataDir>/council-store. */
+  async getDefaultDiskDir(): Promise<string> {
+    return kondiPath('council-store');
+  }
+  /** The currently active store dir (override or default), or null pre-hydrate. */
+  getDiskDir(): string | null {
+    return this.diskDir;
+  }
+  /** The user's override (absolute path), or '' when using the default. */
+  getDiskDirOverride(): string {
+    try { return localStorage.getItem(STORE_DIR_OVERRIDE_KEY) || ''; } catch { return ''; }
+  }
+
+  /**
+   * Change where council data is stored on disk. Passing '' / null reverts to the
+   * default. Persists the choice, then MIGRATES the current in-memory council data
+   * into the new directory (the cache holds everything loaded this session), so
+   * existing deliberations move with the setting. Old-location files are left in
+   * place (a harmless backup). Returns the resolved directory.
+   */
+  async setDiskDir(dir: string | null): Promise<string> {
+    const target = (dir && dir.trim()) ? dir.trim() : await this.getDefaultDiskDir();
+    try {
+      if (dir && dir.trim()) localStorage.setItem(STORE_DIR_OVERRIDE_KEY, target);
+      else localStorage.removeItem(STORE_DIR_OVERRIDE_KEY);
+    } catch { /* ignore */ }
+    if (target === this.diskDir) return target;
+    this.diskDir = target;
+    this.diskReady = true;
+    // Migrate everything currently in memory into the new directory.
+    for (const [k, v] of this.cache) {
+      if (isCouncilDataKey(k)) this.scheduleDiskWrite(k, v);
+    }
+    await this.flushDisk();
+    console.log('[CouncilDataStore] store dir changed to', target);
+    return target;
+  }
+
   async hydrateFromDisk(): Promise<void> {
     try {
-      this.diskDir = await kondiPath('council-store');
+      const override = this.getDiskDirOverride();
+      this.diskDir = override || await kondiPath('council-store');
       let files: Array<{ name: string }> = [];
       try { files = await invoke('list_directory', { path: this.diskDir }); } catch { files = []; }
       const onDisk = new Set<string>();
