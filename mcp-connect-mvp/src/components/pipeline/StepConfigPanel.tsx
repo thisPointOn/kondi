@@ -367,7 +367,7 @@ const DEFAULT_AVAIL: Record<string, boolean> = { 'anthropic-cli': false, 'anthro
 
 function defaultCouncilConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const consultant = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
+  const consultant = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
   const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'council',
@@ -388,7 +388,7 @@ function defaultCouncilConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): C
 
 function defaultCodePlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const consultant = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
+  const consultant = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
   const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'code_planning',
@@ -484,8 +484,8 @@ After executing, report: what you did, what succeeded, what failed, and any rema
 function defaultCodingConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   const dev1 = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const dev2 = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
-  const reviewer = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
+  const dev2 = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
+  const reviewer = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
   return {
     type: 'coding',
     councilSetup: {
@@ -509,7 +509,7 @@ function defaultCodingConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): Co
 
 function defaultReviewConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const consultant = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
+  const consultant = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
   const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'review',
@@ -531,7 +531,7 @@ function defaultReviewConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): Co
 
 function defaultEnrichConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const consultant = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
+  const consultant = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
   const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'enrich',

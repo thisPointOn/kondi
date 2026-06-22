@@ -361,39 +361,6 @@ export const OPENAI_CLI_MODELS: ModelDefinition[] = [
     tier: 2,
     routingCapabilities: ['coding', 'code-review'],
   },
-  {
-    id: 'gpt-5.1-codex-max',
-    name: 'GPT-5.1 Codex Max',
-    provider: 'openai-cli',
-    contextWindow: 192000,
-    capabilities: ['text', 'code', 'reasoning'],
-    inputCostPer1K: 0.008,
-    outputCostPer1K: 0.024,
-    costDisplay: 'Subscription',
-    tier: 2,
-  },
-  {
-    id: 'gpt-5.1-codex-mini',
-    name: 'GPT-5.1 Codex Mini',
-    provider: 'openai-cli',
-    contextWindow: 192000,
-    capabilities: ['text', 'code'],
-    inputCostPer1K: 0.002,
-    outputCostPer1K: 0.006,
-    costDisplay: 'Subscription',
-    tier: 3,
-  },
-  {
-    id: 'gpt-5.1',
-    name: 'GPT-5.1',
-    provider: 'openai-cli',
-    contextWindow: 256000,
-    capabilities: ['text', 'vision', 'code', 'reasoning'],
-    inputCostPer1K: 0.01,
-    outputCostPer1K: 0.03,
-    costDisplay: 'Subscription',
-    tier: 2,
-  },
 ];
 
 // ============================================================================
@@ -780,8 +747,6 @@ const OPENAI_CLI_TO_API_MODEL: Record<string, string> = {
   'gpt-5.4-nano': 'gpt-5.4-nano',
   'gpt-5.3-codex': 'gpt-5.4',
   'gpt-5.2-codex': 'gpt-4o',
-  'gpt-5.1-codex-max': 'gpt-4o',
-  'gpt-5.1-codex-mini': 'gpt-4o-mini',
 };
 
 /**
@@ -823,7 +788,7 @@ export function resolveDefaultModel(
   // If neither CLI nor API is available for that vendor, try the other vendor
   if (provider.startsWith('anthropic') && (available['openai-cli'] || available['openai-api'])) {
     const oProvider = available['openai-cli'] ? 'openai-cli' : 'openai-api';
-    const oModel = oProvider === 'openai-cli' ? 'gpt-5.1-codex-mini' : 'gpt-4o';
+    const oModel = oProvider === 'openai-cli' ? 'gpt-5.5' : 'gpt-4o';
     return { model: oModel, provider: oProvider };
   }
   if (provider.startsWith('openai') && (available['anthropic-cli'] || available['anthropic-api'])) {

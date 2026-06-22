@@ -176,6 +176,9 @@
 /* Model Selector Dropdown */
 .persona-model-selector {
   position: relative;
+  /* Beat the role buttons below (.role-selector has z-index: 1), otherwise the
+     open dropdown is painted *under* the role buttons and they overlap it. */
+  z-index: 10;
 }
 
 .model-dropdown-trigger {

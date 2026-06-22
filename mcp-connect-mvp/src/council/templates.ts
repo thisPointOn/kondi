@@ -31,7 +31,7 @@ questions. Point out what others are missing. Be direct but not dismissive.`,
   {
     name: 'Optimist',
     defaultProvider: 'openai-cli',
-    defaultModel: 'gpt-5.1-codex-max',
+    defaultModel: 'gpt-5.5',
     color: '#16A34A',
     avatar: '🌟',
     predisposition: {
@@ -49,7 +49,7 @@ make it happen. Inspire confidence and momentum.`,
   {
     name: 'Pragmatist',
     defaultProvider: 'openai-cli',
-    defaultModel: 'gpt-5.1-codex-max',
+    defaultModel: 'gpt-5.5',
     color: '#CA8A04',
     avatar: '⚖️',
     predisposition: {
@@ -110,7 +110,7 @@ export const technicalTemplates: PresetPersona[] = [
   {
     name: 'Security Hawk',
     defaultProvider: 'openai-cli',
-    defaultModel: 'gpt-5.1-codex-max',
+    defaultModel: 'gpt-5.5',
 
     color: '#B91C1C',
     avatar: '🦅',
@@ -191,7 +191,7 @@ export const creativeTemplates: PresetPersona[] = [
   {
     name: 'Wild Card',
     defaultProvider: 'openai-cli',
-    defaultModel: 'gpt-5.1-codex-max',
+    defaultModel: 'gpt-5.5',
     color: '#EC4899',
     avatar: '🃏',
     temperature: 0.9,
@@ -227,7 +227,7 @@ and strengthen. You identify redundancy, vagueness, and weakness. You ask:
   {
     name: 'Audience Advocate',
     defaultProvider: 'openai-cli',
-    defaultModel: 'gpt-5.1-codex-max',
+    defaultModel: 'gpt-5.5',
     color: '#8B5CF6',
     avatar: '👁️',
     predisposition: {
@@ -251,7 +251,7 @@ export const domainTemplates: PresetPersona[] = [
   {
     name: 'Finance Mind',
     defaultProvider: 'openai-cli',
-    defaultModel: 'gpt-5.1-codex-max',
+    defaultModel: 'gpt-5.5',
 
     color: '#14532D',
     avatar: '💰',

@@ -1,6 +1,8 @@
 import { useCallback, useState } from 'react';
 import { createOrchestrator, DeliberationOrchestrator } from '../council';
 import { CodingOrchestrator } from '../council/coding-orchestrator';
+import { updateCouncil } from '../council/store';
+import { validateCouncilModels } from '../council/model-validation';
 import { ledgerStore } from '../council/ledger-store';
 import { callLLM } from '../pipeline/gui-caller';
 import { roleToPhase } from '../router/profile-options';
@@ -169,6 +171,18 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
       ...council.personas.map(p => p.predisposition?.systemPrompt || ''),
     ].join('\n');
     verifyRequiredTools(availableTools, promptText, council.name);
+
+    // Pre-flight: validate every persona's model against the live catalog +
+    // probe status. Swaps stale/rejected models (e.g. a Codex SKU the account
+    // no longer accepts) for a working one so the council runs instead of
+    // crashing mid-deliberation. Throws only if nothing is configured at all.
+    const subs = validateCouncilModels(council);
+    if (subs.length) {
+      // Persist the swaps so the setup panel reflects the working models the
+      // user will actually run with (and so the next launch is already clean).
+      updateCouncil(council.id, { personas: council.personas });
+      console.warn('[useCouncilHandlers] Substituted unavailable models:', subs);
+    }
 
     try {
       if (stepType === 'coding') {

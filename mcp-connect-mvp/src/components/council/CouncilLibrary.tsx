@@ -69,7 +69,7 @@ export default function CouncilLibrary({
     // user actually configured.
     const avail = configuredProviders || { 'anthropic-cli': false, 'anthropic-api': false, 'openai-cli': false, 'openai-api': false, deepseek: false };
     const managerModel = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-    const workerModel = resolveDefaultModel('gpt-5.1-codex-max', 'openai-cli', avail);
+    const workerModel = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
 
     // Get optimist template for consultant
     const optimistTemplate = getTemplateByName('Optimist');
