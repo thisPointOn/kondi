@@ -59,6 +59,7 @@ function App() {
   });
   const council = useCouncilHandlers({
     availableTools: serverHook.availableTools,
+    configuredProviders: providerConfig.configuredProviders,
   });
   const pipeline = usePipeline({
     availableTools: serverHook.availableTools,

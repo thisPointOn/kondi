@@ -27,37 +27,53 @@ export interface ModelSubstitution {
   provider: string;
 }
 
-/** Cheap-first fallback order when a persona's own provider has no working model. */
-const FALLBACK_PROVIDERS = ['google', 'deepseek', 'anthropic-api', 'openai-api', 'xai', 'zai'];
+/** Cheap-first fallback order when a persona's own provider can't be used. */
+const FALLBACK_PROVIDERS = ['google', 'deepseek', 'anthropic-api', 'openai-api', 'xai', 'zai', 'anthropic-cli', 'openai-cli'];
 
-function pickWorking(provider: string): { provider: string; model: string } | null {
-  const same = ALL_MODELS.filter((m) => m.provider === provider && !isModelBroken(m.id));
-  if (same.length) return { provider, model: (same.find((m) => m.featured) || same[0]).id };
-  for (const prov of FALLBACK_PROVIDERS) {
+/** A configured-providers map (id → enabled). When absent, treat all as usable. */
+type Configured = Record<string, boolean> | undefined;
+
+function usable(provider: string, configured: Configured): boolean {
+  // No map → can't tell, don't block on configuration (catalog/probe still apply).
+  return configured ? !!configured[provider] : true;
+}
+
+function pickWorking(provider: string, configured: Configured): { provider: string; model: string } | null {
+  const ok = (prov: string) =>
+    usable(prov, configured) && ALL_MODELS.some((m) => m.provider === prov && !isModelBroken(m.id));
+  const first = (prov: string) => {
     const cand = ALL_MODELS.filter((m) => m.provider === prov && !isModelBroken(m.id));
-    if (cand.length) return { provider: prov, model: (cand.find((m) => m.featured) || cand[0]).id };
+    return cand.find((m) => m.featured) || cand[0];
+  };
+  // Prefer the persona's own provider when it's configured + has a working model.
+  if (ok(provider)) return { provider, model: first(provider).id };
+  for (const prov of FALLBACK_PROVIDERS) {
+    if (ok(prov)) return { provider: prov, model: first(prov).id };
   }
   return null;
 }
 
 /**
  * Validate + repair a council's persona models in place. Returns the list of
- * substitutions made (empty = everything was already available). Throws only if
- * a persona's model is unavailable AND no working model is configured at all.
+ * substitutions made (empty = everything was already available). A model is
+ * swapped when it is unknown (catalog-removed), proven-broken (probe), OR its
+ * provider isn't configured — so a council can't launch into a provider the user
+ * hasn't set up (e.g. a template persona hardcoded to `openai-api` on a machine
+ * with only Gemini). Throws only if NO working, configured model exists at all.
  */
-export function validateCouncilModels(council: Council): ModelSubstitution[] {
+export function validateCouncilModels(council: Council, configured?: Configured): ModelSubstitution[] {
   const subs: ModelSubstitution[] = [];
   for (const p of council.personas) {
     // Routed pseudo-models resolve to a concrete model at dispatch time.
     if (!p.model || p.provider === 'router' || p.model.startsWith('route:')) continue;
 
     const known = ALL_MODELS.some((m) => m.id === p.model);
-    if (known && !isModelBroken(p.model)) continue;
+    if (known && !isModelBroken(p.model) && usable(p.provider, configured)) continue;
 
-    const repl = pickWorking(p.provider);
+    const repl = pickWorking(p.provider, configured);
     if (!repl) {
       throw new Error(
-        `"${p.name}" uses model "${p.model}", which is unavailable, and no working model is configured. ` +
+        `"${p.name}" uses model "${p.model}" (${p.provider}), which isn't available, and no configured provider has a working model. ` +
           `Open Settings → Providers and add an API key (Gemini or DeepSeek are the easiest), then try again.`
       );
     }

@@ -13,9 +13,11 @@ import type { MCPTool } from '../types/mcp';
 
 interface UseCouncilHandlersParams {
   availableTools: Map<string, { serverId: string; tools: MCPTool[] }>;
+  /** Which providers are configured/usable — drives launch-time model validation. */
+  configuredProviders?: Record<string, boolean>;
 }
 
-export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams) {
+export function useCouncilHandlers({ availableTools, configuredProviders }: UseCouncilHandlersParams) {
   const [currentCouncilId, setCurrentCouncilId] = useState<string | null>(null);
   const [thinkingPersonas, setThinkingPersonas] = useState<Persona[]>([]);
 
@@ -176,7 +178,7 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
     // probe status. Swaps stale/rejected models (e.g. a Codex SKU the account
     // no longer accepts) for a working one so the council runs instead of
     // crashing mid-deliberation. Throws only if nothing is configured at all.
-    const subs = validateCouncilModels(council);
+    const subs = validateCouncilModels(council, configuredProviders);
     if (subs.length) {
       // Persist the swaps so the setup panel reflects the working models the
       // user will actually run with (and so the next launch is already clean).
@@ -204,7 +206,7 @@ export function useCouncilHandlers({ availableTools }: UseCouncilHandlersParams)
     } finally {
       setThinkingPersonas([]);
     }
-  }, [makeDeliberator, makeCodingOrchestrator, availableTools]);
+  }, [makeDeliberator, makeCodingOrchestrator, availableTools, configuredProviders]);
 
   const onPauseDeliberation = useCallback(async (council: Council) => {
     const deliberator = makeDeliberator({ includeThinking: false });

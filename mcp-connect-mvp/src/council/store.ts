@@ -81,10 +81,34 @@ function migrateCouncils(councils: Council[], fromVersion: number): Council[] {
   return migrated;
 }
 
+/**
+ * A localStorage-sized copy of the council list: every council's DEFINITION
+ * (id, name, personas, config, topic) but with the heavy live data stripped
+ * (messages, deliberationState, big sharedContext payloads). The full objects
+ * stay in the in-memory store; this is only the restart-survival fallback used
+ * when the full blob exceeds the localStorage quota. Mirrors stripCompletedCouncil.
+ */
+function slimStorageData(data: StorageData): string {
+  const slim: StorageData = {
+    ...data,
+    councils: data.councils.map((c) => ({
+      ...c,
+      messages: [],
+      deliberationState: undefined,
+      sharedContext: c.sharedContext
+        ? { ...c.sharedContext, data: undefined, documents: [] }
+        : c.sharedContext,
+    })),
+  };
+  return JSON.stringify(slim);
+}
+
 function saveToStorage(data: StorageData): void {
   data.lastUpdated = new Date().toISOString();
   const json = JSON.stringify(data);
-  councilDataStore.setItem(STORAGE_KEY, json);
+  // Durable: full blob to localStorage when it fits, else a slimmed copy so the
+  // councils themselves still survive a restart (the full data stays in memory).
+  councilDataStore.setItemDurable(STORAGE_KEY, json, () => slimStorageData(data));
   console.log('[CouncilStore] Saved', data.councils.length, 'councils');
 }
 

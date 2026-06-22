@@ -55,6 +55,29 @@ class CouncilDataStore {
     }
   }
 
+  /**
+   * Durable save with a smaller fallback. In-memory always holds the full value.
+   * localStorage gets the full value when it fits; if that throws (quota), it
+   * gets the `slim()` value instead. This is what keeps DEFINITIONS (councils,
+   * pipelines) surviving an app restart even when their live data (ledger,
+   * messages, deliberation state) has pushed the blob past the ~5MB cap — without
+   * it, a quota error silently drops the whole write and the data vanishes on
+   * reopen. `slim()` is only computed when the full write fails.
+   */
+  setItemDurable(key: string, value: string, slim: () => string): void {
+    this.cache.set(key, value);
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      try {
+        localStorage.setItem(key, slim());
+      } catch {
+        // Even the slim copy won't fit — in-memory remains authoritative for
+        // this session; nothing more we can do without disk persistence.
+      }
+    }
+  }
+
   removeItem(key: string): void {
     this.cache.delete(key);
     try { localStorage.removeItem(key); } catch { /* ignore */ }
