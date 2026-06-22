@@ -1765,6 +1765,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kondi-guard"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "kuchikiki"
 version = "0.8.8-speedreader"
 source = "registry+https://github.com/rust-lang/crates.io-index"

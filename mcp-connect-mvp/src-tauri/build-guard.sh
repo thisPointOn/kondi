@@ -5,7 +5,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 TRIPLE="${1:-$(rustc -vV | sed -n 's/host: //p')}"
-cargo build --release --bin kondi-guard
+# -p kondi-guard: the standalone crate (serde_json only, no tauri-build/GTK).
+cargo build --release -p kondi-guard
 mkdir -p binaries
 EXT=""; case "$TRIPLE" in *windows*) EXT=".exe";; esac
 cp "target/release/kondi-guard${EXT}" "binaries/kondi-guard-${TRIPLE}${EXT}"

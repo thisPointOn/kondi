@@ -2,6 +2,10 @@
 //! binary (no Node dependency). Bundled as a Tauri sidecar so the write-
 //! containment guard works on any machine with zero external runtime deps.
 //!
+//! This lives in its OWN crate (not a [[bin]] of the Tauri app) so it builds in
+//! seconds with only serde_json and NO tauri-build / GTK / externalBin
+//! validation — building it must not depend on the very sidecar it produces.
+//!
 //! Reads the PreToolUse hook payload (JSON) on stdin and either stays silent
 //! (allow) or prints a deny decision. Root = KONDI_WORKDIR env, falling back to
 //! the payload's `cwd`. Denies any Write/Edit/MultiEdit/NotebookEdit whose
@@ -17,7 +21,9 @@ fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for comp in p.components() {
         match comp {
-            Component::ParentDir => { out.pop(); }
+            Component::ParentDir => {
+                out.pop();
+            }
             Component::CurDir => {}
             other => out.push(other.as_os_str()),
         }

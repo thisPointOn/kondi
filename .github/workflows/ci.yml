@@ -39,16 +39,11 @@ jobs:
         with:
           workspaces: mcp-connect-mvp/src-tauri -> target
 
-      - name: Install Linux deps (the guard bin lives in the Tauri crate, which pulls GTK)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev libgtk-3-dev libayatana-appindicator3-dev
-
       - name: Guard sidecar compiles + passes containment smoke test
         working-directory: mcp-connect-mvp/src-tauri
         shell: bash
         run: |
-          cargo build --bin kondi-guard
+          cargo build -p kondi-guard
           G=target/debug/kondi-guard
           SB=/tmp/sb
           # escape must be denied (non-empty output), in-sandbox allowed (silent)
