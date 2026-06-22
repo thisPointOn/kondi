@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Kondi PreToolUse write-containment sidecar (no Tauri/GTK deps)"
 edition = "2021"
 rust-version = "1.77.2"
+license = "MIT"
 
 # Deliberately minimal: serde_json + std only. Keeping this OUT of the Tauri app
 # crate means building the guard does NOT run tauri-build (which validates the

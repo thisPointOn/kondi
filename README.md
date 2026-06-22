@@ -428,4 +428,9 @@ kondi/
 
 ## License
 
-AGPL-3.0-only. See [LICENSE](LICENSE).
+Split-licensed by component:
+
+- **Backend** (Rust/Tauri, `mcp-connect-mvp/src-tauri/`) — **MIT** ([LICENSE](mcp-connect-mvp/src-tauri/LICENSE))
+- **Frontend** and everything else — **AGPL-3.0-only** ([LICENSE](LICENSE))
+
+See [LICENSING.md](LICENSING.md) for details.
