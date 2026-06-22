@@ -3,12 +3,30 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { initKondiPaths } from './services/kondiPaths'
+import { councilDataStore } from './council/storage-cleanup'
 
-// Resolve the cross-platform data dir before render so sync path accessors work.
-void initKondiPaths().catch((e) => console.warn('[kondiPaths] init failed:', e));
+const root = createRoot(document.getElementById('root')!);
+const render = () =>
+  root.render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+// Resolve the data dir, then load the durable disk mirror of council data BEFORE
+// first render so councils + their full output are present on reopen (not just
+// whatever survived localStorage's quota). Render regardless if this fails —
+// the store falls back to localStorage-only.
+void (async () => {
+  try {
+    await initKondiPaths();
+    await councilDataStore.hydrateFromDisk();
+  } catch (e) {
+    console.warn('[startup] data init failed; continuing with localStorage:', e);
+  } finally {
+    render();
+  }
+})();
+
+// Flush any queued disk writes when the window is closing so the last edits land.
+window.addEventListener('beforeunload', () => { void councilDataStore.flushDisk(); });

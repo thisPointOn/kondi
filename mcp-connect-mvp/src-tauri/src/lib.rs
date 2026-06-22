@@ -28,6 +28,7 @@ pub fn run() {
             // Local file system tools
             commands::read_local_file,
             commands::write_local_file,
+            commands::delete_local_file,
             commands::list_directory,
             commands::get_home_directory,
             commands::is_path_in_scope,

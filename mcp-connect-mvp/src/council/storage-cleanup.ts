@@ -17,12 +17,132 @@
  * long-term preservation.
  */
 
+import { invoke } from '@tauri-apps/api/core';
+import { kondiPath } from '../services/kondiPaths';
+
 // ============================================================================
 // In-Memory Data Store (primary authority for council artifact data)
 // ============================================================================
 
+/** Council/pipeline key prefixes. EVERYTHING written through this store is
+ *  council data (per CLAUDE.md rule #6), so live writes always go to disk. This
+ *  allowlist is used ONLY to filter the one-time localStorage→disk migration,
+ *  so unrelated localStorage keys (theme, provider keys, router profiles) aren't
+ *  copied. Covers the council list, ledger, context, decision/plan/directive/
+ *  outputs, and pipelines. */
+const DISK_KEY_PREFIXES = [
+  'mcp-councils', 'ledger-', 'context', 'decision-', 'plan-', 'directive-',
+  'outputs-', 'mcp-pipelines', 'pipeline', 'council', 'session',
+];
+function isCouncilDataKey(key: string): boolean {
+  return DISK_KEY_PREFIXES.some((p) => key.startsWith(p));
+}
+
 class CouncilDataStore {
   private cache = new Map<string, string>();
+
+  // ---- Disk mirror (Tauri) — the durable backstop for localStorage ----------
+  // localStorage is a ~5MB best-effort cache; disk has no quota. On a restart
+  // the in-memory Map is empty, so without a durable store the full council
+  // output (ledger chunks, deliberation state) is gone if it didn't fit in
+  // localStorage. The disk mirror holds the FULL value for every council key.
+  private diskDir: string | null = null;
+  private diskReady = false;
+  private pendingWrites = new Map<string, string>();
+  private pendingDeletes = new Set<string>();
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private sep(): string {
+    return (this.diskDir || '/').includes('\\') ? '\\' : '/';
+  }
+  /** hex-encode the key → a safe, unique, decodable filename. */
+  private fileFor(key: string): string {
+    let hex = '';
+    for (let i = 0; i < key.length; i++) hex += key.charCodeAt(i).toString(16).padStart(2, '0');
+    return `${this.diskDir}${this.sep()}${hex}.kv`;
+  }
+  private keyFromFile(name: string): string | null {
+    const m = /^([0-9a-fA-F]+)\.kv$/.exec(name);
+    if (!m) return null;
+    const hex = m[1];
+    let s = '';
+    for (let i = 0; i < hex.length; i += 2) s += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
+    return s;
+  }
+
+  private armFlush(): void {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => { void this.flushDisk(); }, 250);
+  }
+  private scheduleDiskWrite(key: string, value: string): void {
+    // No prefix gate: every key written through this store IS council data.
+    if (!this.diskReady) return;
+    this.pendingDeletes.delete(key);
+    this.pendingWrites.set(key, value); // last value wins within the debounce window
+    this.armFlush();
+  }
+  private scheduleDiskDelete(key: string): void {
+    if (!this.diskReady) return;
+    this.pendingWrites.delete(key);
+    this.pendingDeletes.add(key);
+    this.armFlush();
+  }
+  /** Flush queued disk writes/deletes. Public so callers can force durability
+   *  (e.g. before the app closes or a deliberation completes). */
+  async flushDisk(): Promise<void> {
+    this.flushTimer = null;
+    if (!this.diskReady) return;
+    const writes = [...this.pendingWrites]; this.pendingWrites.clear();
+    const deletes = [...this.pendingDeletes]; this.pendingDeletes.clear();
+    for (const [k, v] of writes) {
+      try { await invoke('write_local_file', { path: this.fileFor(k), content: v }); }
+      catch { /* localStorage copy still holds it; retry on next save */ }
+    }
+    for (const k of deletes) {
+      try { await invoke('delete_local_file', { path: this.fileFor(k) }); } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * Load the disk mirror into memory and migrate any pre-existing localStorage
+   * council data to disk. Call once at startup (awaited) BEFORE the UI reads
+   * council data. Falls back to localStorage-only if Tauri/disk is unavailable.
+   */
+  async hydrateFromDisk(): Promise<void> {
+    try {
+      this.diskDir = await kondiPath('council-store');
+      let files: Array<{ name: string }> = [];
+      try { files = await invoke('list_directory', { path: this.diskDir }); } catch { files = []; }
+      const onDisk = new Set<string>();
+      for (const f of files) {
+        const key = this.keyFromFile(f.name);
+        if (!key) continue;
+        try {
+          const val = await invoke<string>('read_local_file', { path: `${this.diskDir}${this.sep()}${f.name}` });
+          if (typeof val === 'string') { this.cache.set(key, val); onDisk.add(key); }
+        } catch { /* skip unreadable file */ }
+      }
+      this.diskReady = true;
+      // Migrate localStorage-only council data to disk (e.g. first launch of a
+      // disk-capable build) so nothing that lives only in localStorage today is
+      // lost the next time the quota bites. Keys already on disk are skipped.
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (!k || !isCouncilDataKey(k) || onDisk.has(k)) continue;
+          const v = localStorage.getItem(k);
+          if (v === null) continue;
+          if (!this.cache.has(k)) this.cache.set(k, v);
+          this.scheduleDiskWrite(k, this.cache.get(k)!);
+        }
+      } catch { /* ignore */ }
+      await this.flushDisk();
+      console.log('[CouncilDataStore] disk mirror ready at', this.diskDir);
+    } catch (e) {
+      this.diskReady = false;
+      console.warn('[CouncilDataStore] disk hydrate failed; localStorage-only:', e);
+    }
+  }
 
   getItem(key: string): string | null {
     // Primary: in-memory cache
@@ -53,6 +173,9 @@ class CouncilDataStore {
       // Silently ignore — data is authoritative in the Map.
       // This is the normal path once localStorage fills up.
     }
+
+    // Durable: full value to disk (no quota), survives restart.
+    this.scheduleDiskWrite(key, value);
   }
 
   /**
@@ -72,15 +195,17 @@ class CouncilDataStore {
       try {
         localStorage.setItem(key, slim());
       } catch {
-        // Even the slim copy won't fit — in-memory remains authoritative for
-        // this session; nothing more we can do without disk persistence.
+        // Even the slim copy won't fit — disk (below) is the durable backstop.
       }
     }
+    // Disk gets the FULL value regardless of localStorage quota.
+    this.scheduleDiskWrite(key, value);
   }
 
   removeItem(key: string): void {
     this.cache.delete(key);
     try { localStorage.removeItem(key); } catch { /* ignore */ }
+    this.scheduleDiskDelete(key);
   }
 
   /**

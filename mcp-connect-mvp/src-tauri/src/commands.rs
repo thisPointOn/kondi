@@ -1505,6 +1505,18 @@ pub async fn write_local_file(path: String, content: String) -> Result<(), Strin
     fs::write(file_path, content).map_err(|e| format!("Failed to write file: {}", e))
 }
 
+/// Delete a single file. Used by the disk-backed council store to make deletes
+/// stick (otherwise a deleted council would resurrect from disk on restart).
+/// A missing file is treated as success (idempotent).
+#[tauri::command]
+pub async fn delete_local_file(path: String) -> Result<(), String> {
+    match std::fs::remove_file(&path) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Failed to delete file: {}", e)),
+    }
+}
+
 #[tauri::command]
 pub async fn list_directory(path: String) -> Result<Vec<FileInfo>, String> {
     use std::path::Path;
