@@ -92,10 +92,10 @@ const CODING_PHASE_TRANSITIONS: Record<string, {
 }> = {
   created:        { validNext: ['decomposing'], terminal: false },
   decomposing:    { validNext: ['implementing'], terminal: false },
-  implementing:   { validNext: ['code_reviewing', 'completed'], terminal: false },
-  code_reviewing: { validNext: ['implementing', 'testing', 'completed'], terminal: false },
-  testing:        { validNext: ['completed', 'debugging'], terminal: false },
-  debugging:      { validNext: ['testing'], terminal: false },
+  implementing:   { validNext: ['code_reviewing', 'completed', 'failed'], terminal: false },
+  code_reviewing: { validNext: ['implementing', 'testing', 'completed', 'failed'], terminal: false },
+  testing:        { validNext: ['completed', 'debugging', 'failed'], terminal: false },
+  debugging:      { validNext: ['testing', 'failed'], terminal: false },
   completed:      { validNext: [], terminal: true },
   failed:         { validNext: [], terminal: true },
   cancelled:      { validNext: [], terminal: true },
@@ -150,6 +150,12 @@ export class CodingOrchestrator {
     try {
       // Git snapshot before any changes
       snapshotSha = await this.createGitSnapshot(council);
+
+      // Pre-create the worker's output dir. A sandboxed CLI worker (e.g. Codex)
+      // often can't mkdir it itself (the patch tool can't create missing parents,
+      // and the shell may be blocked), so the write fails. We create it here via
+      // the Tauri backend, which is NOT inside the CLI's sandbox.
+      await this.ensureWorkspaceDir(council);
 
       // Phase 1: Decompose
       this.transitionPhase(council.id, 'decomposing');
@@ -773,11 +779,36 @@ export class CodingOrchestrator {
       .map(([name, output]) => `## Module: ${name}\n\n${output}`)
       .join('\n\n---\n\n');
 
-    // Create output artifact (uses a dummy directive ID since coding flow
-    // doesn't have the traditional directive artifact)
-    const output = createOutput(council.id, mergedContent, 'coding-workflow');
-
+    // Always record whatever the worker produced as the output artifact so it's
+    // inspectable either way.
+    const output = createOutput(council.id, mergedContent || '(no output)', 'coding-workflow');
     councilStore.setCurrentOutput(council.id, output.id);
+
+    // HONEST COMPLETION: don't report success when the worker produced nothing
+    // usable (e.g. it was blocked by its sandbox/tooling/filesystem and narrated
+    // the failure instead of delivering). Mark the council FAILED, not completed,
+    // so it isn't mistaken for a successful run.
+    if (Object.keys(moduleOutputs).length === 0 || this.looksLikeFailedDeliverable(mergedContent)) {
+      const workers = getPersonaByRole(council, 'worker');
+      const authorId = workers[0]?.id || this.getManager(council).id;
+      this.createEntry(
+        council.id, 'worker', authorId, 'error', 'implementing',
+        `Implementation did not produce a usable deliverable — the worker reported it was blocked ` +
+          `(sandbox / tooling / filesystem). Marking this council FAILED rather than completed.`,
+        0, 0
+      );
+      let failSummary = `Coding workflow FAILED — the worker could not produce a deliverable ` +
+        `(it reported being blocked by its environment/tools). Re-run with a different worker ` +
+        `(e.g. an API model) or fix the environment.`;
+      if (warnings.length > 0) {
+        failSummary += `\n\nWarnings:\n${warnings.map(w => `- ${w}`).join('\n')}`;
+      }
+      councilStore.updateDeliberationState(council.id, { completionSummary: failSummary });
+      this.transitionPhase(council.id, 'failed');
+      councilStore.setStatus(council.id, 'resolved'); // terminal, but phase=failed signals the outcome
+      console.warn('[CodingOrchestrator] Workflow marked FAILED — no usable deliverable');
+      return;
+    }
 
     // Generate completion summary, appending any warnings from recovered phases
     let summary = `Coding workflow completed. ${Object.keys(moduleOutputs).length} module(s) implemented: ${Object.keys(moduleOutputs).join(', ')}`;
@@ -790,6 +821,30 @@ export class CodingOrchestrator {
     councilStore.setStatus(council.id, 'resolved');
 
     console.log('[CodingOrchestrator] Workflow completed successfully');
+  }
+
+  /**
+   * Heuristic: did the worker self-report being BLOCKED (environment/tooling/
+   * sandbox/filesystem) instead of delivering? Requires 2+ distinct strong
+   * markers and a non-huge body, so a genuine deliverable that merely discusses
+   * errors isn't misflagged.
+   */
+  private looksLikeFailedDeliverable(content: string): boolean {
+    const c = (content || '').trim();
+    if (c.length === 0) return true;
+    const markers = [
+      /\bI(?:'m| am) blocked\b/i,
+      /consistently blocked/i,
+      /(?:sandbox|bwrap)\b.*(?:fail|wrapper|setup|block)/i,
+      /tool names? (?:are|is) not available/i,
+      /patch (?:write |tool )?(?:failed|cannot|could not)/i,
+      /environment-level (?:write )?setup/i,
+      /cannot (?:independently )?(?:list|grep|run|create|write|mkdir)/i,
+      /failed before (?:it can |)(?:run|startup|command|startup)/i,
+      /could not (?:create|write|establish) (?:the |)(?:file|directory|output|path)/i,
+    ];
+    const hits = markers.filter((re) => re.test(c)).length;
+    return hits >= 2 && c.length < 4000;
   }
 
   // ==========================================================================
@@ -857,6 +912,18 @@ export class CodingOrchestrator {
    * roll back if workers destroy the codebase.
    * Returns the commit SHA, or null if not in a git repo / no runCommand.
    */
+  /** Ensure `<workingDir>/.kondi/workspace` exists before the worker runs. */
+  private async ensureWorkspaceDir(council: Council): Promise<void> {
+    const workingDir = council.deliberation?.workingDirectory;
+    if (!workingDir || !this.config.runCommand) return;
+    try {
+      // POSIX mkdir -p; harmless no-op error on the rare Windows runner (caught).
+      await this.config.runCommand('mkdir -p .kondi/workspace', workingDir);
+    } catch (err) {
+      console.warn('[CodingOrchestrator] Could not pre-create .kondi/workspace:', (err as Error).message);
+    }
+  }
+
   private async createGitSnapshot(council: Council): Promise<string | null> {
     const workingDir = council.deliberation?.workingDirectory;
     if (!workingDir || !this.config.runCommand) return null;
