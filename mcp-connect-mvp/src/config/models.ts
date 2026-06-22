@@ -400,19 +400,9 @@ export const OPENAI_CLI_MODELS: ModelDefinition[] = [
 // DeepSeek Models
 // ============================================================================
 export const DEEPSEEK_MODELS: ModelDefinition[] = [
-  {
-    id: 'deepseek-v4-pro',
-    name: 'DeepSeek V4 Pro',
-    provider: 'deepseek',
-    contextWindow: 128000,
-    capabilities: ['text', 'code', 'reasoning'],
-    inputCostPer1K: 0.00055,
-    outputCostPer1K: 0.00219,
-    costDisplay: '~$0.002/msg',
-    featured: true,
-    tier: 1,
-    routingCapabilities: ['planning', 'coding', 'code-review', 'reasoning'],
-  },
+  // Flash is listed first + featured so the CASUAL/chat default is the cheap one.
+  // Councils that want the stronger model pick deepseek-v4-pro EXPLICITLY in code
+  // (DEFAULT_MODELS + chat-council-gen), so this doesn't weaken them.
   {
     id: 'deepseek-v4-flash',
     name: 'DeepSeek V4 Flash',
@@ -422,8 +412,21 @@ export const DEEPSEEK_MODELS: ModelDefinition[] = [
     inputCostPer1K: 0.00014,
     outputCostPer1K: 0.00028,
     costDisplay: '~$0.0003/msg',
+    featured: true,
     tier: 2,
     routingCapabilities: ['coding', 'fast-coding', 'refactoring', 'summarization'],
+  },
+  {
+    id: 'deepseek-v4-pro',
+    name: 'DeepSeek V4 Pro',
+    provider: 'deepseek',
+    contextWindow: 128000,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0.00055,
+    outputCostPer1K: 0.00219,
+    costDisplay: '~$0.002/msg',
+    tier: 1,
+    routingCapabilities: ['planning', 'coding', 'code-review', 'reasoning'],
   },
 ];
 
@@ -505,19 +508,8 @@ export const NVIDIA_MODELS: ModelDefinition[] = [
 // Google Models
 // ============================================================================
 export const GOOGLE_MODELS: ModelDefinition[] = [
-  {
-    id: 'models/gemini-2.5-pro',
-    name: 'Gemini 2.5 Pro',
-    provider: 'google',
-    contextWindow: 1048576,
-    capabilities: ['text', 'vision', 'code', 'reasoning'],
-    inputCostPer1K: 0.00125,
-    outputCostPer1K: 0.01,
-    costDisplay: '~$0.005/msg',
-    featured: true,
-    tier: 1,
-    routingCapabilities: ['planning', 'reasoning', 'analysis', 'coding'],
-  },
+  // Flash first so the CASUAL/chat default is the cheap one (councils pick a
+  // specific gemini model explicitly, so this doesn't affect them).
   {
     id: 'models/gemini-2.5-flash',
     name: 'Gemini 2.5 Flash',
@@ -530,6 +522,19 @@ export const GOOGLE_MODELS: ModelDefinition[] = [
     featured: true,
     tier: 2,
     routingCapabilities: ['coding', 'fast-coding', 'general', 'summarization'],
+  },
+  {
+    id: 'models/gemini-2.5-pro',
+    name: 'Gemini 2.5 Pro',
+    provider: 'google',
+    contextWindow: 1048576,
+    capabilities: ['text', 'vision', 'code', 'reasoning'],
+    inputCostPer1K: 0.00125,
+    outputCostPer1K: 0.01,
+    costDisplay: '~$0.005/msg',
+    featured: true,
+    tier: 1,
+    routingCapabilities: ['planning', 'reasoning', 'analysis', 'coding'],
   },
   {
     id: 'models/gemini-2.0-flash',
@@ -701,7 +706,11 @@ export function getModelsForPersonaSelector(): Array<{
     'ollama': 9,
   };
 
-  return ALL_MODELS
+  // NOTE: copy before sort — Array.sort mutates in place, and ALL_MODELS is the
+  // shared catalog. Mutating it reorders models everywhere (e.g. it was pushing
+  // tier-1 Pro models ahead of the cheaper tier-2 default, overriding the
+  // declaration order that makes the casual default the cheap model).
+  return [...ALL_MODELS]
     .sort((a, b) => {
       // Sort by provider first, then by tier
       const aOrder = providerOrder[a.provider] ?? 99;

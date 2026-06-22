@@ -45,7 +45,7 @@ export function useProviderConfig() {
     // neutral API placeholder and a useEffect below switches it to whatever
     // provider the user actually has credentials for once keys load.
     const saved = localStorage.getItem('kondi-provider-id');
-    return saved || 'anthropic-api';
+    return saved || 'google';
   });
   const [openaiKey, setOpenaiKey] = useState('');
   const [anthropicKey, setAnthropicKey] = useState('');

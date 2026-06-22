@@ -607,7 +607,7 @@ const ChatArea: FC<ChatAreaProps> = ({
     google: false,
     ollama: false,
   },
-  selectedProviderId = 'anthropic-api',
+  selectedProviderId = 'google',
   onOpenSettings,
   onProviderModelChange,
   globalWorkingDirectory,
