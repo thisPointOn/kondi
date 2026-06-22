@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { FolderOpen, ChevronDown } from 'lucide-react';
+import { FolderOpen, ChevronDown, Paperclip } from 'lucide-react';
 import { open, ask } from '@tauri-apps/plugin-dialog';
 import type {
   Council,
@@ -68,6 +68,105 @@ interface DeliberationViewProps {
   };
   /** Personas currently thinking/generating responses */
   thinkingPersonas?: Persona[];
+}
+
+interface ComposerModelOption { provider: string; model: string; name: string }
+
+/**
+ * Shared footer composer — renders the SAME chrome as the chat footer (attach
+ * button + chat-input + send button + model-selector bar beneath), so every
+ * deliberation footer matches chat. Behaviour (what send does, the status line)
+ * is passed in; the look is identical everywhere a footer appears.
+ */
+function ComposerFooter({
+  value, onChange, onSend, placeholder, disabled = false, sendDisabled,
+  status, extraButton, preview,
+  modelOptions, selProvider, selModel, onPickModel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSend: () => void;
+  placeholder: string;
+  disabled?: boolean;
+  sendDisabled: boolean;
+  status?: React.ReactNode;
+  extraButton?: React.ReactNode;
+  preview?: React.ReactNode;
+  modelOptions: ComposerModelOption[];
+  selProvider: string;
+  selModel: string;
+  onPickModel: (provider: string, model: string) => void;
+}) {
+  const [showDropdown, setShowDropdown] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const activeName = modelOptions.find(o => o.provider === selProvider && o.model === selModel)?.name || selModel;
+  const groups = new Map<string, ComposerModelOption[]>();
+  for (const o of modelOptions) {
+    const arr = groups.get(o.provider);
+    if (arr) arr.push(o); else groups.set(o.provider, [o]);
+  }
+  const onAttach = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      try {
+        const text = await file.text();
+        onChange(value ? `${value}\n\n${text}` : text);
+      } catch (err) { console.error('[Composer] attach failed:', err); }
+    }
+    if (fileRef.current) fileRef.current.value = '';
+  };
+  return (
+    <div className="input-area">
+      {status}
+      <div className="input-container">
+        <input ref={fileRef} type="file" style={{ display: 'none' }} onChange={onAttach}
+          accept=".txt,.md,.json,.yaml,.yml,.xml,.csv,.js,.ts,.tsx,.jsx,.py,.rb,.go,.rs,.java,.c,.cpp,.h,.hpp,.cs,.php,.swift,.kt,.sql,.sh,.bash,.toml,.ini,.cfg,.conf,.html,.css,.scss" />
+        <button className="attach-btn" onClick={() => fileRef.current?.click()} disabled={disabled} title="Attach a text file">
+          <Paperclip size={18} />
+        </button>
+        <textarea
+          className="chat-input" rows={1} placeholder={placeholder} value={value} disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!sendDisabled) onSend(); } }}
+        />
+        {extraButton}
+        <button className="send-btn" onClick={onSend} disabled={sendDisabled}>↑</button>
+      </div>
+      <div className="model-selector-bar model-selector-bar-bottom">
+        <button className="active-model-btn" onClick={() => setShowDropdown(v => !v)} disabled={disabled}>
+          <span className="provider-color-dot" style={{ backgroundColor: '#6366f1' }} />
+          <span className="active-model-name">{activeName}</span>
+          <span className="active-provider-name">{selProvider}</span>
+          <ChevronDown size={14} className={`model-chevron ${showDropdown ? 'open' : ''}`} />
+        </button>
+        {showDropdown && (
+          <div className="provider-model-dropdown">
+            {[...groups.entries()].map(([prov, models]) => (
+              <div key={prov} className="provider-tile">
+                <div className="provider-tile-header">
+                  <span className="provider-tile-dot" style={{ backgroundColor: '#6366f1' }} />
+                  <span className="provider-tile-name">{prov}</span>
+                </div>
+                <div className="provider-tile-models">
+                  {models.map((m) => {
+                    const current = selProvider === prov && selModel === m.model;
+                    return (
+                      <button key={m.model} className={`model-option-btn ${current ? 'current' : ''}`}
+                        onClick={() => { onPickModel(prov, m.model); setShowDropdown(false); }}>
+                        <span className="model-option-name">{m.name}</span>
+                        {current && <span className="model-check">&#10003;</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {preview}
+    </div>
+  );
 }
 
 export default function DeliberationView({
@@ -134,7 +233,6 @@ export default function DeliberationView({
   const [pausedUserInput, setPausedUserInput] = useState('');
   const [continueInput, setContinueInput] = useState('');
   const [continueModel, setContinueModel] = useState<{ provider: string; model: string } | null>(null);
-  const [showContinueModelDropdown, setShowContinueModelDropdown] = useState(false);
   const [workingDirectory, setWorkingDirectory] = useState(council?.deliberation?.workingDirectory || '');
   const [directoryConstrained, setDirectoryConstrained] = useState(council?.deliberation?.directoryConstrained ?? true);
   const [bootstrapContext, setBootstrapContext] = useState(council?.deliberation?.bootstrapContext ?? true);
@@ -328,7 +426,8 @@ export default function DeliberationView({
       if (lastResp) {
         const comment = stagedComment;
         setStagedComment('');
-        onUserMessage(council, comment, lastResp.id);
+        onUserMessage(council, comment, lastResp.id,
+          continueModel ? { provider: continueModel.provider, model: continueModel.model } : undefined);
       }
     }
   }, [thinkingPersonas.length, stagedComment]);
@@ -375,13 +474,31 @@ export default function DeliberationView({
   const lastResponder = getLastResponder();
   const isPaused = council?.deliberationState?.currentPhase === 'paused';
 
+  // Shared footer model props (one source for every deliberation footer so they
+  // all match the chat composer). Selection is held in continueModel; default is
+  // the manager's model.
+  const composerModelProps = () => {
+    const options: ComposerModelOption[] = filterVisibleModels(getModelsForPersonaSelector())
+      .map((o) => ({ provider: o.provider, model: o.id, name: o.name }));
+    const managerPersona =
+      council?.personas.find(p => council?.deliberation?.roleAssignments?.some(r => r.personaId === p.id && r.role === 'manager'))
+      || council?.personas[0];
+    return {
+      modelOptions: options,
+      selProvider: continueModel?.provider || managerPersona?.provider || '',
+      selModel: continueModel?.model || managerPersona?.model || '',
+      onPickModel: (provider: string, model: string) => setContinueModel({ provider, model }),
+    };
+  };
+
   // Handle user message during pause
   const handlePausedUserMessage = async () => {
     if (!council || !onUserMessage || !pausedUserInput.trim() || !lastResponder) return;
 
     setIsGenerating(true);
     try {
-      await onUserMessage(council, pausedUserInput.trim(), lastResponder.id);
+      await onUserMessage(council, pausedUserInput.trim(), lastResponder.id,
+        continueModel ? { provider: continueModel.provider, model: continueModel.model } : undefined);
       setPausedUserInput('');
     } catch (error) {
       console.error('[DeliberationView] Error sending user message:', error);
@@ -1664,180 +1781,91 @@ export default function DeliberationView({
 
       {/* User Input During Pause — chat-style footer */}
       {activePanel !== 'setup' && isPaused && lastResponder && (
-        <div className="input-area">
-          <div className="council-footer-label">
-            <span className="paused-label">Deliberation Paused</span>
-            <span className="paused-responder">
-              <span
-                className="responder-avatar"
-                style={{ backgroundColor: lastResponder.color + '30', color: lastResponder.color }}
-              >
-                {lastResponder.avatar || '🤖'}
+        <ComposerFooter
+          {...composerModelProps()}
+          value={pausedUserInput}
+          onChange={setPausedUserInput}
+          onSend={handlePausedUserMessage}
+          placeholder="Ask a question or add a comment…"
+          disabled={isGenerating}
+          sendDisabled={!pausedUserInput.trim() || isGenerating}
+          status={
+            <div className="council-footer-label">
+              <span className="paused-label">Deliberation Paused</span>
+              <span className="paused-responder">
+                <span
+                  className="responder-avatar"
+                  style={{ backgroundColor: lastResponder.color + '30', color: lastResponder.color }}
+                >
+                  {lastResponder.avatar || '🤖'}
+                </span>
+                {lastResponder.name} will respond
               </span>
-              {lastResponder.name} will respond
-            </span>
-          </div>
-          <div className="input-container">
-            <textarea
-              className="chat-input"
-              rows={1}
-              placeholder="Ask a question or add a comment…"
-              value={pausedUserInput}
-              onChange={(e) => setPausedUserInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handlePausedUserMessage();
-                }
-              }}
-              disabled={isGenerating}
-            />
-            <button
-              className="send-btn"
-              onClick={handlePausedUserMessage}
-              disabled={!pausedUserInput.trim() || isGenerating}
-            >
-              ↑
-            </button>
-          </div>
-        </div>
+            </div>
+          }
+        />
       )}
 
       {/* Continue the conversation after the council is done — chat-style input
           with the model combo beneath it. */}
       {isTerminal && activePanel !== 'setup' && onUserMessage && (() => {
-        const managerPersona =
-          council.personas.find(p => council.deliberation?.roleAssignments?.some(r => r.personaId === p.id && r.role === 'manager'))
-          || council.personas[0];
-        const selProvider = continueModel?.provider || managerPersona?.provider || '';
-        const selModel = continueModel?.model || managerPersona?.model || '';
-        const opts = filterVisibleModels(getModelsForPersonaSelector());
-        const activeName = opts.find(o => o.provider === selProvider && o.id === selModel)?.name || selModel;
-        const groups = new Map<string, { id: string; name: string }[]>();
-        for (const o of opts) {
-          const arr = groups.get(o.provider);
-          if (arr) arr.push({ id: o.id, name: o.name });
-          else groups.set(o.provider, [{ id: o.id, name: o.name }]);
-        }
-        const send = () => {
-          const text = continueInput.trim();
-          if (!text || isGenerating) return;
-          setContinueInput('');
-          onUserMessage(council, text, undefined, { provider: selProvider, model: selModel });
-        };
+        const m = composerModelProps();
         return (
-          <div className="input-area">
-            <div className="input-container">
-              <textarea
-                value={continueInput}
-                onChange={(e) => setContinueInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-                placeholder="Continue the conversation…"
-                className="chat-input"
-                rows={1}
-                disabled={isGenerating}
-              />
-              <button
-                className="send-btn"
-                onClick={send}
-                disabled={!continueInput.trim() || isGenerating}
-              >
-                ↑
-              </button>
-            </div>
-
-            <div className="model-selector-bar model-selector-bar-bottom">
-              <button className="active-model-btn" onClick={() => setShowContinueModelDropdown(v => !v)} disabled={isGenerating}>
-                <span className="provider-color-dot" style={{ backgroundColor: '#6366f1' }} />
-                <span className="active-model-name">{activeName}</span>
-                <span className="active-provider-name">{selProvider}</span>
-                <ChevronDown size={14} className={`model-chevron ${showContinueModelDropdown ? 'open' : ''}`} />
-              </button>
-              {showContinueModelDropdown && (
-                <div className="provider-model-dropdown">
-                  {[...groups.entries()].map(([prov, models]) => (
-                    <div key={prov} className="provider-tile">
-                      <div className="provider-tile-header">
-                        <span className="provider-tile-dot" style={{ backgroundColor: '#6366f1' }} />
-                        <span className="provider-tile-name">{prov}</span>
-                      </div>
-                      <div className="provider-tile-models">
-                        {models.map((m) => {
-                          const current = selProvider === prov && selModel === m.id;
-                          return (
-                            <button
-                              key={m.id}
-                              className={`model-option-btn ${current ? 'current' : ''}`}
-                              onClick={() => { setContinueModel({ provider: prov, model: m.id }); setShowContinueModelDropdown(false); }}
-                            >
-                              <span className="model-option-name">{m.name}</span>
-                              {current && <span className="model-check">&#10003;</span>}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+          <ComposerFooter
+            {...m}
+            value={continueInput}
+            onChange={setContinueInput}
+            onSend={() => {
+              const text = continueInput.trim();
+              if (!text || isGenerating) return;
+              setContinueInput('');
+              onUserMessage(council, text, undefined, { provider: m.selProvider, model: m.selModel });
+            }}
+            placeholder="Continue the conversation…"
+            disabled={isGenerating}
+            sendDisabled={!continueInput.trim() || isGenerating}
+          />
         );
       })()}
 
       {/* Staged Comment Input — visible while agents are generating (never on setup) */}
       {activePanel !== 'setup' && !isPaused && thinkingPersonas.length > 0 && (
-        <div className="input-area">
-          <div className="council-footer-label">
-            <span className="staged-label">Agents responding</span>
-            {stagedComment && (
-              <span className="staged-badge">Comment staged — will be sent when agents finish</span>
-            )}
-          </div>
-          <div className="input-container">
-            <textarea
-              className="chat-input"
-              rows={1}
-              placeholder={stagedComment ? 'Replace staged comment…' : 'Type a comment to send after agents respond…'}
-              value={stagedCommentInput}
-              onChange={(e) => setStagedCommentInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && stagedCommentInput.trim()) {
-                  e.preventDefault();
-                  setStagedComment(stagedCommentInput.trim());
-                  setStagedCommentInput('');
-                }
-              }}
-            />
-            {stagedComment && (
-              <button
-                className="staged-cancel-btn"
-                onClick={() => setStagedComment('')}
-                title="Cancel staged comment"
-              >
-                ✕
-              </button>
-            )}
+        <ComposerFooter
+          {...composerModelProps()}
+          value={stagedCommentInput}
+          onChange={setStagedCommentInput}
+          onSend={() => {
+            if (stagedCommentInput.trim()) {
+              setStagedComment(stagedCommentInput.trim());
+              setStagedCommentInput('');
+            }
+          }}
+          placeholder={stagedComment ? 'Replace staged comment…' : 'Type a comment to send after agents respond…'}
+          sendDisabled={!stagedCommentInput.trim()}
+          status={
+            <div className="council-footer-label">
+              <span className="staged-label">Agents responding</span>
+              {stagedComment && (
+                <span className="staged-badge">Comment staged — will be sent when agents finish</span>
+              )}
+            </div>
+          }
+          extraButton={stagedComment ? (
             <button
-              className="send-btn"
-              onClick={() => {
-                if (stagedCommentInput.trim()) {
-                  setStagedComment(stagedCommentInput.trim());
-                  setStagedCommentInput('');
-                }
-              }}
-              disabled={!stagedCommentInput.trim()}
+              className="staged-cancel-btn"
+              onClick={() => setStagedComment('')}
+              title="Cancel staged comment"
             >
-              ↑
+              ✕
             </button>
-          </div>
-          {stagedComment && (
+          ) : undefined}
+          preview={stagedComment ? (
             <div className="staged-preview">
               <span className="staged-preview-label">Staged:</span>
               <span className="staged-preview-text">{stagedComment}</span>
             </div>
-          )}
-        </div>
+          ) : undefined}
+        />
       )}
 
 
