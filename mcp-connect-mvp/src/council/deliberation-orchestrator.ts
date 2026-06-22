@@ -1345,7 +1345,7 @@ export class DeliberationOrchestrator {
     // Check if the worker has write permissions (informs the directive to emphasize implementation)
     const worker = this.getWorker(council);
     const workerAssignment = getRoleAssignment(council, worker.id);
-    const hasWritePermissions = this.effectiveWrite(worker, workerAssignment);
+    const hasWritePermissions = this.effectiveWrite(workerAssignment, council.deliberation?.outputType);
     const stepType = council.deliberation?.stepType;
 
     // Build prompts per Section 9.6
@@ -1412,7 +1412,7 @@ export class DeliberationOrchestrator {
     // writePermissions is gated by ACTUAL tool capability so a non-tool worker
     // is driven as a text agent (not told to write files it can't write).
     const workerPermissions: WorkerPermissions = {
-      writePermissions: this.effectiveWrite(worker, assignment),
+      writePermissions: this.effectiveWrite(assignment, council.deliberation?.outputType),
       workingDirectory: council.deliberation?.workingDirectory,
       directoryConstrained: council.deliberation?.directoryConstrained,
     };
@@ -1549,7 +1549,7 @@ export class DeliberationOrchestrator {
     // Check if worker had write permissions (affects review criteria)
     const worker = this.getWorker(council);
     const workerAssignment = getRoleAssignment(council, worker.id);
-    const hasWritePermissions = this.effectiveWrite(worker, workerAssignment);
+    const hasWritePermissions = this.effectiveWrite(workerAssignment, council.deliberation?.outputType);
     const stepType = council.deliberation?.stepType;
 
     // Build prompts per Section 9.8
@@ -1683,7 +1683,7 @@ export class DeliberationOrchestrator {
 
     // Build worker permissions from role assignment + deliberation config
     const workerPermissions: WorkerPermissions = {
-      writePermissions: this.effectiveWrite(worker, assignment),
+      writePermissions: this.effectiveWrite(assignment, council.deliberation?.outputType),
       workingDirectory: council.deliberation?.workingDirectory,
       directoryConstrained: council.deliberation?.directoryConstrained,
     };
@@ -1793,7 +1793,7 @@ export class DeliberationOrchestrator {
 
     // Build worker permissions
     const workerPermissions: WorkerPermissions = {
-      writePermissions: this.effectiveWrite(worker, assignment),
+      writePermissions: this.effectiveWrite(assignment, council.deliberation?.outputType),
       workingDirectory: council.deliberation?.workingDirectory,
       directoryConstrained: council.deliberation?.directoryConstrained,
     };
@@ -2266,16 +2266,23 @@ export class DeliberationOrchestrator {
   }
 
   /**
-   * Effective write capability = writePermissions intent AND the worker can
-   * ACTUALLY execute tools at runtime. A worker on a non-tool provider (e.g. a
-   * deepseek/API worker) with writePermissions=true cannot write files — telling
-   * it to "write files" makes it hallucinate file-creation narration instead of
-   * producing the deliverable. When false, the worker is driven as a text agent
-   * and its output is sanitized.
+   * Whether the worker should be driven in FILE-WRITING mode vs as a text agent.
+   * This is decided by the EXPECTED OUTPUT TYPE, not by provider capability — a
+   * step whose output is a `string` or `json` produces a TEXT deliverable, so the
+   * worker must NOT be told to "write files / explore the codebase / call
+   * write_file" (that framing makes models narrate fake file creation instead of
+   * producing the actual content — the "string not code" failure). Only `file`
+   * and `directory` outputs are produced by writing to disk. When false, the
+   * worker emits the deliverable as its reply and the output is sanitized.
    */
-  private effectiveWrite(worker: Persona, assignment?: { writePermissions?: boolean }): boolean {
+  private effectiveWrite(
+    assignment?: { writePermissions?: boolean },
+    outputType?: 'string' | 'file' | 'directory' | 'json',
+  ): boolean {
     if (!assignment?.writePermissions) return false;
-    return this.config.canUseTools ? this.config.canUseTools(worker) : true;
+    // Text deliverables (string/json) and plain deliberations (no output type)
+    // are never file-writing work, regardless of which model runs the worker.
+    return outputType === 'file' || outputType === 'directory';
   }
 
   private getPersonaDisplayName(council: Council, personaId: string): string {
