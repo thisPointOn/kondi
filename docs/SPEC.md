@@ -79,7 +79,7 @@ docs/
 | `anthropic-api` | API key | — | claude-sonnet-4-5-20250929, claude-haiku-4-5-20251001 |
 | `anthropic-cli` | Subscription | Claude Code | claude-opus-4-6, claude-sonnet-4-5-20250929, claude-opus-4-5-20251101 |
 | `openai-api` | API key | — | gpt-4o, gpt-4o-mini, o1-preview |
-| `openai-cli` | Subscription | Codex | gpt-5.5 (default), gpt-5.5-pro, gpt-5.4, gpt-5.4-mini, gpt-5.4-nano, gpt-5.x-codex |
+| `openai-cli` | Subscription | Codex | gpt-5.5 (default), gpt-5.5-pro, gpt-5.4, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-codex, gpt-5.2-codex |
 | `deepseek` | API key | — | deepseek-v4-pro (default), deepseek-v4-flash |
 | `google` | API key | — | gemini-2.5-pro, gemini-2.5-flash |
 | `xai` | API key | — | grok-3, grok-3-mini |
@@ -94,7 +94,7 @@ Type: `ModelProvider = 'anthropic-api' | 'anthropic-cli' | 'openai-api' | 'opena
 
 `ModelDefinition` gained an optional `routingCapabilities?: string[]` field — richer capability tags (`planning`, `coding`, `fast-coding`, `code-review`, `summarization`, …) consumed by the Smart Router; the registry derives them from `capabilities` + `tier` when absent.
 
-`openai-cli` / `CODEX_MODELS` model IDs are kept current against the installed Codex binary (verified v0.139.0). `codex update` may bump the set; refresh `OPENAI_CLI_MODELS` (`config/models.ts`) and `CODEX_MODELS` (`codexClient.ts`) when it does.
+`openai-cli` / `CODEX_MODELS` model IDs are kept current against the installed Codex binary (verified v0.139.0). `codex update` may bump the set; refresh `OPENAI_CLI_MODELS` (`config/models.ts`) and `CODEX_MODELS` (`codexClient.ts`) when it does. The stale `gpt-5.1`, `gpt-5.1-codex-max`, and `gpt-5.1-codex-mini` SKUs were removed from the catalog, the Codex client list, and the CLI→API fallback map; all council/pipeline defaults that pointed at `gpt-5.1-codex-max` (CouncilLibrary, StepConfigPanel, templates) now point at `gpt-5.5`.
 
 ### 3b. Model Availability Probe (`src/services/modelProbe.ts`)
 
@@ -111,6 +111,10 @@ The API-side equivalent of reading the Codex binary's model list: for API provid
 
 - **Discoverable providers:** `anthropic-api`, `openai-api`, `deepseek`, `xai`, `zai`, `nvidia-router`, `ollama`. Google (cloudcode-pa OAuth) and CLI providers are excluded (no clean public list; verified via binary + probe instead).
 - **Advisory only.** It surfaces drift (catalog IDs the API no longer lists; chat-capable IDs the API offers that we don't carry — filtered against a `NON_CHAT` regex to cut embeddings/tts/image/etc. noise) but never hides a model itself. `/models` lists can be incomplete (restricted key scopes, partial catalogs), so the live probe remains the sole authority for hiding. Anthropic/OpenAI keys resolve via `resolveApiKey(provider, PROFILE_IDS.*ApiKey)`; OpenAI-compatible clients use their own configured key.
+
+### 3d. Launch-Time Model Validation (`src/council/model-validation.ts`)
+
+A pre-flight that repairs a council's persona models BEFORE the deliberation/coding workflow starts (runs in `useCouncilHandlers.ts` `onFrameProblem`, for both orchestrator paths). `validateCouncilModels(council, configuredProviders)` swaps any persona model that is **unknown** (removed from `ALL_MODELS` after a catalog/codex update), **proven-broken** (`modelProbe.isModelBroken`, §3b), OR whose **provider isn't configured** → a working, configured model. Fallback order is cheap-first: persona's own provider (when it has a working model) → `google`, `deepseek`, `anthropic-api`, `openai-api`, `xai`, `zai`, `anthropic-cli`, `openai-cli`. Routed pseudo-models (`provider:'router'` / `model:'route:*'`) are left as-is (resolved later in `llm-router`, §3a). Swaps are persisted (`updateCouncil`) so the setup panel reflects the working models. Throws only if NO working, configured model exists at all (the error prompts the user to add an API key). This prevents a template persona hardcoded to e.g. `openai-api` from crashing a council mid-deliberation on a machine that only has Gemini configured.
 
 ### 3a. Smart Router (`src/router/`)
 
@@ -154,11 +158,15 @@ Entry types: `problem_statement`, `analysis`, `proposal`, `response`, `context_a
 
 Extends the deliberation lifecycle with code-specific phases:
 ```
-created → problem_framing → decomposing → implementing → code_reviewing →
-testing → (debugging loop or) completed
+created → decomposing → (consultant advisory) → implementing → code_reviewing →
+testing → (debugging loop or) completed | failed
 ```
 
 Additional entry types: `decomposition`, `module_directive`, `module_output`, `code_review`, `test_result`, `debug_fix`
+
+**Respects consultants.** Between decompose and implement, `consultOnPlan()` runs an advisory pass: each assigned consultant reviews the decomposed plan with NO tools (recorded as a consultant `analysis` entry under the `decomposing` phase) and their guidance is folded into the implementation spec. No consultants → no-op. (Previously the coding flow skipped consultant deliberation entirely.)
+
+**Honest completion + files manifest.** `mergeAndComplete()` marks the council phase `failed` (a mapped terminal phase, in the `validNext` of `implementing`/`code_reviewing`/`testing`/`debugging`) instead of `completed` when there are ZERO module outputs OR the merged output is self-reported blockage (`looksLikeFailedDeliverable` — 2+ strong failure markers AND body <4000 chars). So a worker that narrates being blocked (sandbox/tooling/filesystem) yields a FAILED council, not a false success. The output artifact + completion summary both begin with a `## Files produced (N)` section listing the worker's ACTUAL changed files from `git status --porcelain` (`listChangedFiles`), not its prose. `createGitSnapshot` `git init`s the working dir (+ a local git identity) when it isn't already a repo so both snapshot/rollback and the post-run diff work (matches the CLI path, §7 gotcha 6); `ensureWorkspaceDir` pre-creates `<workingDir>/.kondi/workspace` via the Tauri backend (outside the CLI sandbox) before the worker runs.
 
 **UI parity requirement:** All `Record<Phase, ...>` and `Record<EntryType, ...>` maps in UI components MUST include entries for BOTH orchestrators. Missing entries crash the React tree (no error boundary). Affected files: `PhaseIndicator.tsx`, `LedgerEntryCard.tsx`, `LedgerTimeline.tsx`, `DeliberationView.tsx`.
 
@@ -199,6 +207,8 @@ Asking chat to "create/spin up/generate a council to …" builds and **opens** o
 | `file` | File path — downstream steps instructed to read the file |
 | `directory` | Directory path — downstream steps instructed to read all files |
 | `json` | Structured JSON — downstream steps can access fields via `{{input.fieldName}}` templates |
+
+**File-writing is gated by output type, not capability.** `effectiveWrite(assignment, outputType)` (`deliberation-orchestrator.ts`) returns true ONLY when `assignment.writePermissions` AND `outputType` is `'file'` or `'directory'`. For `'string'`/`'json'` (or a plain deliberation with no output type) it's false — the worker gets the text-deliverable prompt and emits the actual content instead of narrating fake `write_file(...)` calls. (`canUseTools` is no longer consulted here; it remains only for the runtime tool-exec gate.)
 
 ### 5a-2. Input Template Syntax
 
@@ -322,7 +332,7 @@ Entry point: `npx tsx cli/run-pipeline.ts <pipeline.json> [options]`
 3. **`--print` requires `--verbose`** when using `--output-format stream-json`
 4. **Codex resume**: `codex exec resume <thread_id>` — no `--sandbox`/`--full-auto` flags on resume
 5. **Per-persona session persistence** via `personaSessionIds` Map (cleared on new council/step)
-6. **Write containment is enforced by a PreToolUse hook, NOT by Claude Code permission flags.** Empirically (headless `--print`): `--permission-mode acceptEdits` still writes files outside the working dir, absolute `--allowedTools "Write(//abs/**)"` rules silently fail to match, and `bypassPermissions` disables confinement entirely — a worker escaped and wrote into the parent git repo's `docs/`. The fix (`src/services/cli-workdir-guard.ts`) installs a `PreToolUse` hook via `--settings` (matcher `Write|Edit|MultiEdit|NotebookEdit|Bash`) that resolves the real target path and **denies any write whose resolved path is outside the working dir** (root = `KONDI_WORKDIR` env, fallback hook payload `cwd`); Bash redirects/mutations to absolute paths outside the dir are blocked too (reads allowed). **Three non-obvious mechanics make the hook actually fire** (an inline base64 `node -e` hook silently never ran — verified via the raw claude stream): (a) the guard must be a `.cjs` FILE invoked as two UNQUOTED tokens `<node> <file>` — claude splits the hook command on whitespace with no shell, so a quoted `-e "…"` arg is mangled; (b) the FIRST token must be the ABSOLUTE node binary (`process.execPath`) — claude runs hooks with a sanitized PATH that excludes nvm/volta, so bare `node` is not-found and the hook falls open; (c) allow = `exit 0` silently (an explicit `permissionDecision:'allow'` interfered with in-sandbox writes), deny = emit the deny JSON. `cli/claude-caller.ts` (CLI runner) writes the file + uses `process.execPath`; `src/services/claudeCliClient.ts` (webview) installs it via the `run_command` Tauri backend (writes the script, resolves `command -v node`). Workers keep `bypassPermissions` + full tools; they just cannot escape. The system-prompt "working directory override" text is advisory only. **The `openai-cli` (Codex) path needs no such hook** — `codex-caller.ts` runs `--full-auto` (`--sandbox workspace-write` + `--cd <workingDir>`), whose OS-level sandbox (landlock/seatbelt) already confines writes to the working dir (verified: an out-of-dir write is refused). API providers (deepseek/gemini) have no file tools.
+6. **Write containment is enforced by a PreToolUse hook, NOT by Claude Code permission flags.** Empirically (headless `--print`): `--permission-mode acceptEdits` still writes files outside the working dir, absolute `--allowedTools "Write(//abs/**)"` rules silently fail to match, and `bypassPermissions` disables confinement entirely — a worker escaped and wrote into the parent git repo's `docs/`. The fix (`src/services/cli-workdir-guard.ts`) installs a `PreToolUse` hook via `--settings` (matcher `Write|Edit|MultiEdit|NotebookEdit|Bash`) that resolves the real target path and **denies any write whose resolved path is outside the working dir** (root = `KONDI_WORKDIR` env, fallback hook payload `cwd`); Bash redirects/mutations to absolute paths outside the dir are blocked too (reads allowed). **Three non-obvious mechanics make the hook actually fire** (an inline base64 `node -e` hook silently never ran — verified via the raw claude stream): (a) the guard must be a `.cjs` FILE invoked as two UNQUOTED tokens `<node> <file>` — claude splits the hook command on whitespace with no shell, so a quoted `-e "…"` arg is mangled; (b) the FIRST token must be the ABSOLUTE node binary (`process.execPath`) — claude runs hooks with a sanitized PATH that excludes nvm/volta, so bare `node` is not-found and the hook falls open; (c) allow = `exit 0` silently (an explicit `permissionDecision:'allow'` interfered with in-sandbox writes), deny = emit the deny JSON. `cli/claude-caller.ts` (CLI runner) writes the file + uses `process.execPath`; `src/services/claudeCliClient.ts` (webview) installs it via the `run_command` Tauri backend (writes the script, resolves `command -v node`). Workers keep `bypassPermissions` + full tools; they just cannot escape. The system-prompt "working directory override" text is advisory only. **The `openai-cli` (Codex) path needs no such hook** — `codex-caller.ts` runs `--full-auto` (`--sandbox workspace-write` + `--cd <workingDir>`), whose OS-level sandbox (landlock/seatbelt) already confines writes to the working dir (verified: an out-of-dir write is refused). API providers (deepseek/gemini) have no file tools. **Codex no-sandbox toggle:** Settings → General → "CLI Workers" → "Run Codex without its OS sandbox" (localStorage `kondi-codex-no-sandbox` for the webview, env `KONDI_CODEX_NO_SANDBOX=true` for the CLI) swaps `--sandbox workspace-write`/`--full-auto` for `--dangerously-bypass-approvals-and-sandbox` — for hosts that restrict unprivileged user namespaces (recent Ubuntu/AppArmor) where Codex's bwrap sandbox can't init. Containment then relies ONLY on Kondi git-scoping the working dir (less strict; warned in the UI).
 
 ### Output
 - Execution report: `<working-dir>/kondi-execution-report.json`
@@ -377,7 +387,7 @@ OAuth tokens from Claude Code and ChatGPT subscriptions only work from their res
 
 ## 9. Data Storage
 
-All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an in-memory `Map<string,string>` with no size limit. Browser `localStorage` is a best-effort cache; quota errors are silently ignored. The CLI uses the same pattern via `localStorage-shim.ts`.
+All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an in-memory `Map<string,string>` with no size limit. Browser `localStorage` is a best-effort cache; quota errors are silently ignored. The CLI uses the same pattern via `localStorage-shim.ts`. The store ALSO mirrors the full value of every council/pipeline key to disk (the durable backstop vs the ~5MB localStorage quota — see Storage Architecture below).
 
 ### Key Namespaces
 
@@ -397,6 +407,8 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 | `kondi-input-history` | components/ChatArea.tsx | Chat input history |
 | `kondi-model-status` | services/modelProbe.ts | Per-model availability (ok/broken/soft-fail) — hides proven-broken models |
 | `kondi-catalog-sync` | services/modelCatalogSync.ts | Last live `/models` reconciliation per API provider (advisory drift report) |
+| `kondi-council-store-dir` | council/storage-cleanup.ts | User override for the on-disk council store directory (empty = `<dataDir>/council-store`) |
+| `kondi-codex-no-sandbox` | services/codexCliClient.ts | Opt-in: run Codex with `--dangerously-bypass-approvals-and-sandbox` instead of `--sandbox workspace-write` |
 | `context-{councilId}` | council/context-store.ts | Current ContextArtifact |
 | `context-history-{councilId}` | council/context-store.ts | ContextArtifact[] (all versions) |
 | `context-patches-{councilId}` | council/context-store.ts | ContextPatch[] |
@@ -409,14 +421,17 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 
 ### Storage Architecture (`council/storage-cleanup.ts`)
 
-`CouncilDataStore` is a singleton in-memory `Map` that all stores use for reads and writes:
+`CouncilDataStore` is a singleton in-memory `Map` (primary), with a localStorage cache AND a durable disk mirror. All stores use it for reads and writes:
 - `getItem(key)`: checks in-memory Map first, falls back to localStorage (promotes to Map on hit)
-- `setItem(key, value)`: always succeeds in Map; localStorage write is try/catch silenced
-- `removeItem(key)`: removes from both Map and localStorage
+- `setItem(key, value)`: always succeeds in Map; localStorage write is try/catch silenced; the FULL value is also scheduled to disk
+- `setItemDurable(key, value, slim)`: full value to Map + disk regardless of localStorage quota; localStorage gets the full value, or `slim()` if that throws — keeps DEFINITIONS (councils, pipelines) surviving a restart even when their live data pushed the blob past the cap
+- `removeItem(key)`: removes from Map, localStorage, and disk (`delete_local_file`)
+
+**Disk mirror (durable backstop).** localStorage's ~5MB quota means a full deliberation (ledger chunks + deliberation state) may not fit — on a restart the empty Map would lose anything that didn't. The store mirrors the FULL value of every council/pipeline key to disk at `<dataDir>/council-store/<hex(key)>.kv` (hex-encoded key as filename, via the `write_local_file`/`delete_local_file`/`list_directory`/`read_local_file` Tauri commands). Writes are debounced (250ms, `armFlush`/`flushDisk`) and flushed on `beforeunload`. `hydrateFromDisk()` loads disk → the Map at startup and migrates any pre-existing localStorage council data to disk once; it's `await`ed in `src/main.tsx` (after `initKondiPaths()`) BEFORE the first React render, so councils + full ledger/deliberation survive an app restart. The store dir is user-configurable (Settings → General → "Council Deliberation Store"; `setDiskDir`/`getDiskDir`/`getDiskDirOverride`/`getDefaultDiskDir`; override localStorage key `kondi-council-store-dir`; default `<dataDir>/council-store`, where `<dataDir>` is resolved cross-platform by the Rust `get_kondi_data_dir` command via `kondiPaths.ts`). This auto-reload of the FULL deliberation is SEPARATE from a council's per-council `saveDeliberationMode` (full/abbreviated), which exports human-readable markdown to the WORKING directory (`<workingDir>/.kondi/outputs/...` via `deliberationSaveService`).
 
 **Stores using `councilDataStore`**: `context-store.ts`, `ledger-store.ts`, `council/store.ts`, `pipeline/store.ts`, `session-import.ts`.
 
-**No data destruction.** Deliberation history is never purged. After each pipeline step extracts its artifact, `stripCompletedCouncil(councilId)` trims only the localStorage copy of the `mcp-councils` entry to keep the cache small. The authoritative data remains in the Map.
+**No data destruction.** Deliberation history is never purged. After each pipeline step extracts its artifact, `stripCompletedCouncil(councilId)` trims only the localStorage copy of the `mcp-councils` entry to keep the cache small. The authoritative data remains in the Map and on disk.
 
 ---
 
@@ -454,6 +469,15 @@ npm run tauri dev          # Starts Rust backend + Vite dev server
 ```bash
 npm run tauri build        # Production build
 ```
+
+The npm `tauri` script is plain `tauri` (the `WEBKIT_DISABLE_DMABUF_RENDERER=1` POSIX inline-env — a Linux-runtime-only flag — was removed because it fails on Windows `cmd`; `tauri:dev` keeps it for the Linux dev box). The guard sidecar must be built first: `src-tauri/build-guard.sh` runs `cargo build --release -p kondi-guard` and copies it to `binaries/kondi-guard-<target-triple>` where Tauri's `externalBin` expects it.
+
+### Packaging / CI / Releasing
+
+- **`kondi-guard` is a standalone workspace crate** (`src-tauri/kondi-guard/`, serde_json + std only, `license = MIT`) — split out of the Tauri app crate so building it doesn't run `tauri-build`/GTK or hit the `externalBin` chicken-and-egg. Built via `cargo build -p kondi-guard`.
+- **Workflows** live at the repo root `.github/workflows/`: `ci.yml` (typecheck + `vite build` + verify `kondi-guard` compiles) and `release.yml` (multi-platform Tauri bundle on tag). The macOS Intel leg (`macos-13`) is `continue-on-error` (scarce free runners queue for hours).
+- **Signing is intentionally OFF** in `release.yml` (the macOS/Tauri `APPLE_*` / `TAURI_SIGNING_*` env vars are COMMENTED OUT). A defined-but-empty `APPLE_CERTIFICATE` makes Tauri's bundler try to import an empty cert and fail the whole macOS build. To enable: add the repo secrets FIRST, then uncomment. `docs/RELEASING.md` documents the signing setup.
+- **License split:** the backend `src-tauri/` (Rust/Tauri, including `kondi-guard`) is **MIT** (`Cargo.toml` `license = MIT`, `src-tauri/LICENSE`); the frontend + the project as a whole are **AGPL-3.0-only** (`package.json`, root `LICENSE`). See `LICENSING.md`.
 
 ### CLI Pipeline
 ```bash
