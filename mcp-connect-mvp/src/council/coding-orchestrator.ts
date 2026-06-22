@@ -779,9 +779,16 @@ export class CodingOrchestrator {
       .map(([name, output]) => `## Module: ${name}\n\n${output}`)
       .join('\n\n---\n\n');
 
+    // List the files the worker ACTUALLY produced (from git, not its prose) so the
+    // final output names exactly what was made — no hunting around the folder.
+    const changedFiles = await this.listChangedFiles(council);
+    const filesSection = changedFiles.length
+      ? `## Files produced (${changedFiles.length})\n${changedFiles.map(f => `- ${f}`).join('\n')}\n\n---\n\n`
+      : '';
+
     // Always record whatever the worker produced as the output artifact so it's
-    // inspectable either way.
-    const output = createOutput(council.id, mergedContent || '(no output)', 'coding-workflow');
+    // inspectable either way (files-produced list first, then the merged output).
+    const output = createOutput(council.id, `${filesSection}${mergedContent || '(no output)'}`, 'coding-workflow');
     councilStore.setCurrentOutput(council.id, output.id);
 
     // HONEST COMPLETION: don't report success when the worker produced nothing
@@ -812,6 +819,9 @@ export class CodingOrchestrator {
 
     // Generate completion summary, appending any warnings from recovered phases
     let summary = `Coding workflow completed. ${Object.keys(moduleOutputs).length} module(s) implemented: ${Object.keys(moduleOutputs).join(', ')}`;
+    if (changedFiles.length) {
+      summary += `\n\nFiles produced (${changedFiles.length}):\n${changedFiles.map(f => `- ${f}`).join('\n')}`;
+    }
     if (warnings.length > 0) {
       summary += `\n\nWarnings:\n${warnings.map(w => `- ${w}`).join('\n')}`;
     }
@@ -912,6 +922,35 @@ export class CodingOrchestrator {
    * roll back if workers destroy the codebase.
    * Returns the commit SHA, or null if not in a git repo / no runCommand.
    */
+  /**
+   * The files the worker actually created/modified, read from git (not the
+   * worker's prose). The pre-work git snapshot means `git status --porcelain`
+   * shows exactly the worker's changes (modified + added + untracked). Used to
+   * name the deliverable in the final output so the user doesn't have to hunt.
+   */
+  private async listChangedFiles(council: Council): Promise<string[]> {
+    const workingDir = council.deliberation?.workingDirectory;
+    if (!workingDir || !this.config.runCommand) return [];
+    try {
+      const res = await this.config.runCommand('git status --porcelain', workingDir);
+      const files = new Set<string>();
+      for (const line of res.stdout.split('\n')) {
+        const trimmed = line.replace(/\r$/, '');
+        if (!trimmed.trim()) continue;
+        // porcelain: "XY path" (untracked "?? path"); renames "R  old -> new".
+        let path = trimmed.slice(3).trim();
+        const arrow = path.indexOf(' -> ');
+        if (arrow !== -1) path = path.slice(arrow + 4).trim();
+        path = path.replace(/^"|"$/g, '');
+        if (path) files.add(path);
+      }
+      return [...files].sort();
+    } catch (err) {
+      console.warn('[CodingOrchestrator] Could not list changed files:', (err as Error).message);
+      return [];
+    }
+  }
+
   /** Ensure `<workingDir>/.kondi/workspace` exists before the worker runs. */
   private async ensureWorkspaceDir(council: Council): Promise<void> {
     const workingDir = council.deliberation?.workingDirectory;
@@ -929,9 +968,16 @@ export class CodingOrchestrator {
     if (!workingDir || !this.config.runCommand) return null;
 
     try {
-      // Check if inside a git repo
+      // Check if inside a git repo; if not, initialize one so snapshot/rollback
+      // AND the post-run "files produced" diff work (matches the CLI path, rule #15).
       const check = await this.config.runCommand('git rev-parse --is-inside-work-tree', workingDir);
-      if (check.exit_code !== 0) return null;
+      if (check.exit_code !== 0) {
+        console.log('[CodingOrchestrator] Working dir is not a git repo — initializing for snapshot + file tracking');
+        const init = await this.config.runCommand('git init -q', workingDir);
+        if (init.exit_code !== 0) return null;
+        // git needs an identity to commit; set a local one if missing (harmless).
+        await this.config.runCommand('git config user.email kondi@local && git config user.name Kondi', workingDir);
+      }
 
       // Stage everything and commit (allow-empty in case there are no changes)
       await this.config.runCommand('git add -A', workingDir);
