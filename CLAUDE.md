@@ -62,6 +62,8 @@ The "Refresh models" button ALSO runs `modelCatalogSync.ts` for API providers: i
 
 19. **Condition steps can `loop_to_stage` (bounded iterative councils).** A `condition` step's action can rewind flow to an earlier stage (`loopTargetStageId`) and re-run from there — refine→review→refine. Bounded by `maxLoops` (default 3) PER condition step via an in-run counter in the executor; once exhausted it falls through to `continue` and can never loop forever. The executor resets the intervening stages to `pending` and rewinds the stage loop. UI: StepConfigPanel exposes the action + target-stage picker + budget.
 
+20. **Subagents are provider-agnostic worker fan-out (`docs/SUBAGENTS.md`).** A `Persona` can carry `subagents: SubagentSpec[]` (name + ANY `provider`/`model` + `task` + optional `systemPrompt`). In `deliberation-orchestrator.ts` `executeWork`, `runSubagents(council, worker, directive)` runs them in PARALLEL before the worker's own call — each via `invokeAgentSafe` with a SYNTHETIC persona carrying the subagent's provider/model, so dispatch goes wherever that model lives (the whole point: not Claude-only). Each result is a ledger `analysis` entry under `executing` (rule #1-safe); the combined findings are folded into the worker's directive (`SUBAGENT FINDINGS`) and the worker synthesizes. Bounded to 4, tools off, failures non-fatal. Config UI: a "Subagents" section in `AddPersonaModal` (per-row any-provider model picker + task). v1 is worker-only; manager/reviewer fan-out and dynamic runtime spawning are roadmap (see the doc).
+
 ## Self-Update Protocol
 
 Any LLM agent modifying this codebase: when you change any of the following, update `docs/SPEC.md` to match:
