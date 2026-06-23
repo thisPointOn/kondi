@@ -4,7 +4,7 @@
  */
 
 import { useState, useMemo } from 'react';
-import type { PresetPersona, Persona, DeliberationRole, DeliberationRoleAssignment } from '../../council/types';
+import type { PresetPersona, Persona, DeliberationRole, DeliberationRoleAssignment, SubagentSpec } from '../../council/types';
 import { getModelsForPersonaSelector } from '../../config/models';
 import { getRoutedProfileOptions } from '../../router/profile-options';
 import { filterVisibleModels, useModelStatus } from '../../services/modelProbe';
@@ -121,6 +121,15 @@ export default function AddPersonaModal({
   const [stance, setStance] = useState(existingRoleAssignment?.stance || '');
   const [suppressPersona, setSuppressPersona] = useState(existingRoleAssignment?.suppressPersona ?? true);
   const [allowedServerIds, setAllowedServerIds] = useState<string[] | undefined>(editingPersona?.allowedServerIds ?? []);
+  const [subagents, setSubagents] = useState<SubagentSpec[]>(editingPersona?.subagents ?? []);
+  const addSubagent = () => setSubagents((s) => [...s, {
+    id: `sa-${crypto.randomUUID().slice(0, 8)}`, name: `Subagent ${s.length + 1}`,
+    provider: selectedProvider || 'google', model: selectedModel || 'gemini-2.5-flash',
+    task: '', enabled: true,
+  }]);
+  const updateSubagent = (id: string, patch: Partial<SubagentSpec>) =>
+    setSubagents((s) => s.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  const removeSubagent = (id: string) => setSubagents((s) => s.filter((x) => x.id !== id));
 
   // Check role availability (allow the role if it's the persona being edited)
   const hasManager = existingRoleAssignments.some((r) => r.role === 'manager' && r.personaId !== editingPersona?.id);
@@ -181,6 +190,7 @@ export default function AddPersonaModal({
         verbosity,
         preferredDeliberationRole: selectedRole,
         allowedServerIds,
+        subagents: subagents.length ? subagents : undefined,
         predisposition: {
           ...editingPersona.predisposition,
           systemPrompt: customPrompt || editingPersona.predisposition.systemPrompt,
@@ -217,6 +227,7 @@ export default function AddPersonaModal({
       // Store preferred deliberation role on persona
       preferredDeliberationRole: isDeliberationMode ? selectedRole : undefined,
       allowedServerIds,
+      subagents: subagents.length ? subagents : undefined,
       // Include traits if modified from template defaults
       ...(traits.length > 0 && {
         predisposition: {
@@ -679,6 +690,46 @@ export default function AddPersonaModal({
                   )}
                 </>
               )}
+            </div>
+          )}
+
+          {(selectedRole === 'worker' || !isDeliberationMode) && (
+            <div className="config-field" style={{ marginTop: '1rem' }}>
+              <label>Subagents</label>
+              <p className="field-hint">This worker runs these helpers (each on any provider/model) and folds their findings into its work before synthesizing. Optional.</p>
+              {subagents.map((sa) => (
+                <div key={sa.id} style={{ border: '1px solid var(--border-color, #333)', borderRadius: 6, padding: '0.5rem', marginBottom: '0.5rem' }}>
+                  <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.4rem', alignItems: 'center' }}>
+                    <input
+                      style={{ flex: 1 }}
+                      value={sa.name}
+                      onChange={(e) => updateSubagent(sa.id, { name: e.target.value })}
+                      placeholder="Subagent name"
+                    />
+                    <select
+                      value={`${sa.provider}|||${sa.model}`}
+                      onChange={(e) => { const [p, m] = e.target.value.split('|||'); updateSubagent(sa.id, { provider: p, model: m }); }}
+                    >
+                      {Object.entries(MODELS_BY_PROVIDER).map(([prov, list]) => (
+                        <optgroup key={prov} label={prov}>
+                          {list.map((m) => (
+                            <option key={`${m.provider}|||${m.id}`} value={`${m.provider}|||${m.id}`}>{m.name}</option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                    <button type="button" className="modal-cancel-btn" onClick={() => removeSubagent(sa.id)} title="Remove subagent">×</button>
+                  </div>
+                  <textarea
+                    rows={2}
+                    style={{ width: '100%' }}
+                    value={sa.task}
+                    onChange={(e) => updateSubagent(sa.id, { task: e.target.value })}
+                    placeholder="What should this subagent produce? Use {{directive}} for the worker's directive."
+                  />
+                </div>
+              ))}
+              <button type="button" className="modal-cancel-btn" onClick={addSubagent}>+ Add subagent</button>
             </div>
           )}
         </div>
