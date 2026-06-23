@@ -296,9 +296,37 @@ xcode-select --install
 **Windows:**
 Install [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 
-### Pre-built Binary (Linux)
+### Install a Release (recommended)
 
-Download the `.AppImage` from the latest release and run directly — no build required.
+Download the installer for your platform from the
+**[latest GitHub Release](https://github.com/thisPointOn/kondi/releases/latest)** — no build required:
+
+| Platform | File | Install |
+|----------|------|---------|
+| **Windows** | `Kondi_*_x64-setup.exe` (or `_x64_en-US.msi`) | Double-click → install. |
+| **macOS** (Apple silicon) | `Kondi_*_aarch64.dmg` | Open the `.dmg`, drag **Kondi** to Applications. |
+| **Linux** (portable) | `Kondi_*_amd64.AppImage` | `chmod +x Kondi_*.AppImage && ./Kondi_*.AppImage` |
+| **Linux** (Debian/Ubuntu) | `Kondi_*_amd64.deb` | `sudo apt install ./Kondi_*.deb` |
+| **Linux** (Fedora/RHEL) | `Kondi-*-1.x86_64.rpm` | `sudo dnf install ./Kondi-*.rpm` |
+
+> **Releases are currently unsigned** (code-signing certs not yet configured), so the OS
+> warns on first launch. The app is safe — these steps dismiss the warning:
+>
+> - **Windows:** SmartScreen → **More info → Run anyway**.
+> - **macOS:** a plain double-click may say *"Kondi is damaged and can't be opened"*
+>   (Gatekeeper quarantine on unsigned apps). Either **right-click the app → Open → Open**,
+>   or clear the quarantine flag once:
+>   ```bash
+>   xattr -dr com.apple.quarantine /Applications/Kondi.app
+>   ```
+> - **Linux:** none. The `.deb`/`.rpm` pull in their deps (`libwebkit2gtk-4.1-0`,
+>   `libgtk-3-0`); for the `.AppImage` those libs must be present, plus FUSE
+>   (`sudo apt install libfuse2`) — or run it with `--appimage-extract-and-run`.
+
+**Notes:**
+- macOS ships **Apple-silicon only** right now; an Intel (`x64`) `.dmg` isn't built yet.
+- Signing/notarization (removes the warnings entirely) is documented in
+  [`docs/RELEASING.md`](docs/RELEASING.md) — add the certs as repo secrets and it's automatic.
 
 ### Build from Source
 

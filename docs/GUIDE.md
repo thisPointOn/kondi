@@ -1,6 +1,16 @@
 # Kondi User Guide
 
-This guide covers every feature in Kondi, from basic chat through multi-stage pipeline execution. It assumes you have the app running — see the main [README](../README.md) for installation.
+This guide covers every feature in Kondi, from basic chat through multi-stage pipeline execution.
+
+## Installing
+
+Download the installer for your OS from the **[latest release](https://github.com/thisPointOn/kondi/releases/latest)**:
+
+- **Windows** — `Kondi_*_x64-setup.exe` or `.msi`. SmartScreen warns (unsigned): **More info → Run anyway**.
+- **macOS** (Apple silicon) — `Kondi_*_aarch64.dmg`; drag to Applications. If it says *"damaged"* (unsigned Gatekeeper), right-click → **Open**, or run `xattr -dr com.apple.quarantine /Applications/Kondi.app`.
+- **Linux** — `Kondi_*_amd64.AppImage` (`chmod +x` then run; needs FUSE), `.deb` (`sudo apt install ./Kondi_*.deb`), or `.rpm` (`sudo dnf install ./Kondi-*.rpm`).
+
+Builds are currently **unsigned**, so those warnings are expected and harmless. Full per-platform notes + signing setup are in the [README](../README.md#install-a-release-recommended) and [docs/RELEASING.md](RELEASING.md).
 
 ---
 
