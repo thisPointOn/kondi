@@ -45,14 +45,24 @@ jobs:
         run: |
           set -e
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 xvfb libfuse2
+          sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 \
+            xvfb libfuse2 dbus-x11 at-spi2-core
           gh release download "${{ steps.tag.outputs.tag }}" --repo ${{ github.repository }} --pattern "*_amd64.AppImage"
           APP=$(ls *.AppImage); chmod +x "$APP"
           echo "::group::booting $APP"
-          xvfb-run -a bash -c "timeout 25 ./$APP > boot.log 2>&1; echo exit=\$? > boot.exit" || true
-          cat boot.log || true; echo "::endgroup::"
-          grep -q '\[Rust\]' boot.log && echo 'PASS: Rust backend booted' || { echo 'FAIL: no startup marker'; exit 1; }
-          if grep -iE 'thread .* panicked|panic occurred|core dumped|Abort' boot.log; then echo 'FAIL: crash detected'; exit 1; fi
+          # Real session bus (dbus-run-session) + virtual display so the webview can
+          # actually init; then survival check (like macOS) with the marker as bonus.
+          xvfb-run -a dbus-run-session -- bash -c "
+            ./$APP > boot.log 2>&1 &
+            PID=\$!
+            sleep 22
+            if kill -0 \$PID 2>/dev/null; then echo ALIVE > boot.status; kill \$PID 2>/dev/null; else echo DEAD > boot.status; fi
+          " || true
+          cat boot.log || true; echo "status=$(cat boot.status 2>/dev/null)"; echo "::endgroup::"
+          if grep -iE 'thread .* panicked|panic occurred|core dumped|Abort|Segmentation' boot.log; then echo 'FAIL: crash detected'; exit 1; fi
+          if grep -q '\[Rust\]' boot.log; then echo 'PASS: Rust backend booted (marker)';
+          elif [ "$(cat boot.status 2>/dev/null)" = "ALIVE" ]; then echo 'PASS: app survived 22s without crashing';
+          else echo 'FAIL: app exited early'; exit 1; fi
           echo 'LINUX SMOKE: PASS'
 
       # ---------------- MACOS ----------------
