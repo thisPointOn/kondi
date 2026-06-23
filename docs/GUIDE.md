@@ -47,7 +47,7 @@ If you have Claude Code, Codex, or Gemini CLI installed and authenticated:
 1. Kondi detects them automatically at startup.
 2. The provider card shows a green status indicator.
 3. No API key needed — CLI tools use your existing subscription.
-4. CLI providers give you access to models not available via API (Opus 4.6, GPT-5.2 Codex, etc.).
+4. CLI providers give you access to models not available via API (Opus 4.6, GPT-5.5 Codex, etc.). The default Codex (OpenAI CLI) model is `gpt-5.5`.
 
 ### API Providers (Key-Based)
 
@@ -393,6 +393,8 @@ A council is a group of AI personas that collaborate on a task following a speci
 4. Add personas (see [Personas](#7-personas)).
 5. Click **Start**.
 
+> **Automatic model fix-up**: When you start a council, Kondi validates every persona's model first. If a persona points at a model that's unknown, proven-broken, or belongs to a provider you haven't configured (common with template personas), Kondi swaps it for a working model you do have set up — preferring the persona's own provider, then a cheaper fallback — and shows the swap in the setup panel. This means a council won't crash mid-run because of a stale or unconfigured model. (You only get an error if you have no working provider at all — open Settings → Providers and add a key.)
+
 ### Council Modes
 
 **Deliberation**: The most structured mode. Follows a deterministic state machine through problem framing, analysis, decision, execution, and review. Best for complex decisions that need multiple perspectives.
@@ -488,7 +490,7 @@ Click "Create Custom" when adding a persona to define every field from scratch. 
 One of Kondi's key capabilities is putting different models in the same council. For example:
 
 - **Manager**: Claude Opus 4.6 (strong reasoning, expensive) — makes the final call
-- **Security Consultant**: GPT-5.2 Codex (code understanding) — reviews for vulnerabilities
+- **Security Consultant**: GPT-5.5 Codex (code understanding) — reviews for vulnerabilities
 - **Cost Consultant**: Haiku 4.5 (fast, cheap) — provides quick sanity checks
 - **Worker**: Sonnet 4.5 (balanced) — implements the decision
 - **Creative Consultant**: Grok-2 (different perspective) — offers unconventional ideas
@@ -567,6 +569,10 @@ The Manager receives the implementation spec and breaks it into **modules** — 
 - A per-worker directive
 - Priority and estimated complexity
 
+### Phase 1.5: Consultant Advisory
+
+If you assigned any **consultants** to the coding council, they run an advisory pass over the decomposed plan before implementation begins. Each consultant gives concise guidance from their perspective — risks, better approaches, edge cases, things to verify — without writing code or calling tools. This guidance is fed into the workers' implementation prompts, so a coding council with consultants gets a plan review before any code is written.
+
 ### Phase 2: Implementing
 
 Workers receive their assigned modules and implement them. Workers have **file write permissions** — they use `write_file` and `run_command` to actually create the code, not just describe it.
@@ -601,6 +607,12 @@ If tests fail, the Worker enters a debug loop:
 4. Re-run tests
 
 This loop continues for up to `maxDebugCycles` (default: 3) or until tests pass.
+
+### Output and Honest Completion
+
+The coding output begins with a **`Files produced (N)`** list — the actual files the worker created or modified, read from git (not from the worker's prose). This tells you exactly what was made without hunting through the folder.
+
+The orchestrator completes **honestly**: if the worker produced nothing usable — for example it was blocked by its sandbox, tooling, or filesystem and only narrated the failure — the council is marked **failed**, not completed, with a summary explaining why (and suggesting you re-run with a different worker, such as an API model). You will never see a false "completed" run.
 
 ### Safeguards
 
@@ -795,8 +807,12 @@ When the search service is connected as an MCP server, council personas can sear
 Accessible from **Settings** in the sidebar:
 
 - **Working Directory** — default working directory for all chats and councils. Can be overridden per-chat or per-council.
+- **Council Deliberation Store** — where council deliberations are saved on disk so they reload with their **full** output (ledger, deliberation state, context) when you reopen Kondi. Defaults to `<dataDir>/council-store` (e.g. `~/.local/share/kondi/council-store` on Linux); set a custom path with Browse, or "Use default" to revert. Changing the path copies existing deliberations to the new location. This is distinct from a council's "save deliberation" export (see below).
+- **CLI Workers → "Run Codex without its OS sandbox"** — an opt-in for hosts where the Codex sandbox can't start (typically a `bwrap` / user-namespace error on a restricted kernel). When on, Codex workers run without their OS sandbox and containment relies only on Kondi git-scoping the working directory (less strict — leave off unless you need it). Claude Code is unaffected; it uses a different guard.
 - **Theme** — dark or light mode.
 - **Updates** — check for new versions.
+
+> **Durable store vs. "save deliberation" export — two different things.** The Council Deliberation Store above is an automatic, machine-readable backstop that reloads a council's full deliberation when you reopen the app. A council's optional **"save deliberation"** mode (full or summary) is a separate, human-readable **markdown export** written to the council's own working directory at `<workingDir>/.kondi/outputs/<name>_<timestamp>/`. Use the store for "don't lose my work on restart"; use the export for "give me readable artifacts I can share or commit."
 
 ### Provider Settings
 
@@ -804,15 +820,15 @@ Accessible from **LLM Providers** in the sidebar (see [Section 2](#2-configuring
 
 ### Data Storage
 
-All council, pipeline, ledger, and context data routes through an in-memory `CouncilDataStore` (unlimited size). Browser `localStorage` is used only as a best-effort cache — quota errors are silently ignored. No deliberation data is ever destroyed during a session.
+All council, pipeline, ledger, and context data routes through an in-memory `CouncilDataStore` (unlimited size), backed by a **durable disk mirror** (no quota) and a best-effort `localStorage` cache (quota errors silently ignored). On reopen, the full deliberation is reloaded from disk — councils and their complete output now survive an app restart even when they exceeded the ~5 MB localStorage limit. No deliberation data is ever destroyed during a session.
 
 | Data | Location |
 |------|----------|
 | Chat history | Tauri app data directory (primary), localStorage (backup) |
-| Council state | In-memory CouncilDataStore + localStorage cache (`mcp-councils`) |
-| Pipeline definitions | In-memory CouncilDataStore + localStorage cache (`mcp-pipelines`, version 5) |
-| Ledger entries | In-memory CouncilDataStore + localStorage cache (`kondi-ledger-*`) |
-| Context artifacts | In-memory CouncilDataStore + localStorage cache (`kondi-context-*`) |
+| Council state | In-memory CouncilDataStore + disk mirror (`<dataDir>/council-store`) + localStorage cache (`mcp-councils`) |
+| Pipeline definitions | In-memory CouncilDataStore + disk mirror + localStorage cache (`mcp-pipelines`, version 5) |
+| Ledger entries | In-memory CouncilDataStore + disk mirror + localStorage cache (`kondi-ledger-*`) |
+| Context artifacts | In-memory CouncilDataStore + disk mirror + localStorage cache (`kondi-context-*`) |
 | Per-chat working dirs | localStorage (`kondi-chat-working-dirs`) |
 | Provider config | localStorage (`kondi-provider-*`) |
 | OAuth tokens | `~/.local/share/kondi/proxies/{id}.json` |

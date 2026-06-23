@@ -67,6 +67,12 @@ Kondi is a Tauri 2.9 desktop application. The frontend is React 19 + TypeScript 
 - **JS <-> MCP**: Tool calls route through the MCP client which manages connections, tool discovery, and execution via stdio or SSE transport.
 - **JS <-> LLM**: Provider clients make direct HTTP calls (API providers) or spawn CLI processes via Tauri commands (CLI providers).
 
+### Packaging and Licensing
+
+The app ships as cross-platform Tauri installers built by `.github/workflows/release.yml` (matrix: macOS arm64/x64 `.dmg`, Linux `.AppImage`/`.deb`/`.rpm` from `ubuntu-22.04`, Windows `.exe`/`.msi`). The `kondi-guard` containment sidecar is a Cargo workspace crate under `src-tauri/kondi-guard`.
+
+License split (see `LICENSING.md`): the Rust/Tauri backend (`src-tauri/`, including `kondi-guard`) is **MIT**; the frontend and the project as a whole are **AGPL-3.0-only**.
+
 ---
 
 ## 2. Runtime Architecture
@@ -150,8 +156,10 @@ resolveApiKeySync(provider):
 
 CLI providers spawn external processes:
 - **Claude Code**: `claude --print --verbose --output-format stream-json [--allowedTools ...] [--resume <id>]`
-- **Codex**: `codex exec --json [--sandbox off | --full-auto]`
+- **Codex**: `codex exec --json [--full-auto]`
 - **Gemini**: `gemini --output-format json`
+
+Codex normally runs `--full-auto` (`--sandbox workspace-write`), confining writes to the working dir natively. Settings → General → "CLI Workers" exposes a **"Run Codex without its OS sandbox"** opt-in (localStorage `kondi-codex-no-sandbox`), for hosts whose kernel restricts unprivileged user namespaces and can't start the Codex sandbox (`bwrap` errors). When on, Codex runs `--dangerously-bypass-approvals-and-sandbox` and containment relies only on Kondi git-scoping the working dir (less strict). Claude Code is unaffected — its write containment is a PreToolUse guard hook, not an OS sandbox.
 
 Prompts are piped via stdin (not as positional args) to handle long content and avoid issues with `--allowedTools` being variadic.
 
@@ -260,6 +268,10 @@ MCPClient ----HTTP----> kondi-mcp-proxy (localhost:PORT)
 
 ## 6. Council Orchestration Engine
 
+### Launch-Time Model Validation (`model-validation.ts`)
+
+Before a council runs, `validateCouncilModels()` (called in `useCouncilHandlers.onFrameProblem`) checks every persona's model against the catalog (`ALL_MODELS`), the probe status (`isModelBroken`), and the set of configured providers. Any model that is unknown (catalog-removed), proven-broken, or points at an unconfigured provider is swapped in place for a working configured model — the persona's own provider first, then a cheap-first fallback order. Routed pseudo-models (`route:*`) are left for `llm-router` to resolve. This stops a council from crashing mid-run because a (often template-seeded) persona pointed at a model the user's account/plan can't use; the substitutions are surfaced in the setup panel. It throws only if no working configured model exists at all.
+
 ### Deliberation Orchestrator (`deliberation-orchestrator.ts`)
 
 A deterministic state machine with well-defined phase transitions:
@@ -351,15 +363,18 @@ Entries are immutable once written. The UI renders them as a timeline.
 Uses the same LLM adapter and store infrastructure but different phases:
 
 ```
-decomposing -> implementing -> code_reviewing -> testing -> debugging -> complete
+decomposing -> (consult) -> implementing -> code_reviewing -> testing -> debugging -> complete
 ```
 
 Key differences from deliberation:
 - **decomposing** produces a module list (files, interfaces, dependencies)
+- **consult** (`consultOnPlan`): between decompose and implement, any assigned consultants run an advisory-only pass over the plan (risks, edge cases, better approaches — no code, no tools). Their guidance is fed into the implementation prompt.
 - **implementing** uses write permissions by default
 - **code_reviewing** uses severity ratings
 - **testing** executes actual commands (install, build, test) via `run_command`
 - **debugging** is a loop (fix -> test -> check exit code -> repeat)
+
+**Honest completion** (`mergeAndComplete`): the council is marked `failed` (not `completed`) when the worker produced no module output or self-reported being blocked (`looksLikeFailedDeliverable`) — preventing false "completed" runs. The final output artifact begins with a `## Files produced (N)` list derived from real git changes (not the worker's prose), so the output names exactly what was made.
 
 ### Build/Test/Install Detection
 
@@ -474,14 +489,25 @@ Provenance header format:
 
 ### CouncilDataStore (`council/storage-cleanup.ts`)
 
-All council, pipeline, ledger, and context data routes through `CouncilDataStore` — an in-memory `Map<string,string>` with no size limit. Browser `localStorage` is used only as a best-effort cache; quota errors are silently ignored. The CLI uses the same pattern via `localStorage-shim.ts`.
+All council, pipeline, ledger, and context data routes through `CouncilDataStore` — an in-memory `Map<string,string>` with no size limit. The Map is the primary authority; it is backed by two mirrors: a best-effort `localStorage` cache (for same-session UI observation, quota errors silently ignored) and a **durable disk mirror** that has no quota.
 
 - `getItem(key)`: checks in-memory Map first, falls back to localStorage (promotes to Map on hit)
-- `setItem(key, value)`: always succeeds in Map; localStorage write is try/catch silenced
-- `setItemPersistent(key, value)`: same as setItem but ensures localStorage write for data that must survive restarts (pipeline configs)
-- `removeItem(key)`: removes from both Map and localStorage
+- `setItem(key, value)`: always succeeds in Map; localStorage write is try/catch silenced; full value is queued to disk
+- `setItemDurable(key, value, slim)`: full value to Map + disk; localStorage gets the full value if it fits, else the `slim()` value (used for definitions like councils/pipelines so they survive restart even when live data has pushed the localStorage blob past ~5 MB)
+- `setItemPersistent(key, value)`: same as setItem but throws on localStorage failure for data that must survive restarts (pipeline configs)
+- `removeItem(key)`: removes from Map, localStorage, and disk
 
 **Stores using `councilDataStore`**: `context-store.ts`, `ledger-store.ts`, `council/store.ts`, `pipeline/store.ts`, `session-import.ts`.
+
+### Durable Disk Mirror
+
+On a restart the in-memory Map starts empty, so without a durable backstop any council whose full output (ledger chunks, deliberation state) didn't fit in the ~5 MB localStorage cache would be gone. The disk mirror holds the FULL value for every council key:
+
+- **Location**: `<dataDir>/council-store/<hex(key)>.kv` (default `~/.local/share/kondi/council-store` on Linux). Each key is hex-encoded into a decodable `.kv` filename. The directory is user-configurable (Settings → General → "Council Deliberation Store", persisted in localStorage `kondi-council-store-dir`); changing it migrates the in-memory data to the new directory.
+- **Writes** are debounced (250 ms, last-value-wins) and flushed to disk via the `write_local_file`/`delete_local_file` Tauri commands. `flushDisk()` is public so callers can force durability.
+- **Hydration**: `hydrateFromDisk()` is awaited in `main.tsx` BEFORE the first React render, so councils and their full deliberation are present on reopen. It also performs a one-time migration of any pre-existing localStorage-only council data onto disk. If Tauri/disk is unavailable it falls back to localStorage-only.
+
+This durable store (auto-reload of the full deliberation) is distinct from a council's "save deliberation" export (`deliberationSaveService.ts`), which writes human-readable markdown to `<workingDir>/.kondi/outputs/<name>_<timestamp>/` in `full` or `abbreviated` mode.
 
 ### Primary Stores
 
@@ -492,6 +518,7 @@ All council, pipeline, ledger, and context data routes through `CouncilDataStore
 | Ledger entries | CouncilDataStore | `kondi-ledger-{councilId}` | Append-only, per-council, chunked |
 | Context artifacts | CouncilDataStore | `kondi-context-{councilId}` | Versioned, per-council |
 | Pipeline definitions | CouncilDataStore (persistent) | `mcp-pipelines` (version 5) | JSON array of pipeline objects |
+| Council durable mirror | Filesystem | `<dataDir>/council-store/<hex>.kv` | Full council/ledger/context per key; survives restart |
 | Provider config | localStorage | `kondi-provider-*` | Keys, models, defaults |
 | Chat working dirs | localStorage | `kondi-chat-working-dirs` | JSON object: chatId -> path |
 | MCP servers | localStorage | (MCPClient internal) | Server configs with metadata |
@@ -634,7 +661,7 @@ Different models have different strengths. Claude excels at nuanced reasoning, G
 
 ### Why CLI + API Dual Paths?
 
-CLI tools (Claude Code, Codex, Gemini CLI) provide access to models not available via API (Opus 4.6, GPT-5.2 Codex) and use existing subscriptions. API keys provide direct access without CLI installation. Supporting both maximizes model availability and lets users choose based on their existing setup.
+CLI tools (Claude Code, Codex, Gemini CLI) provide access to models not available via API (Opus 4.6, GPT-5.5 Codex) and use existing subscriptions. API keys provide direct access without CLI installation. Supporting both maximizes model availability and lets users choose based on their existing setup.
 
 ### Why Local-First?
 
