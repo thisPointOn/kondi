@@ -68,6 +68,10 @@ export interface Persona {
 
   /** Subagents this persona may fan work out to (provider-agnostic). See SubagentSpec. */
   subagents?: SubagentSpec[];
+
+  /** When true, the persona may also PROPOSE subagents at runtime (dynamic spawning),
+   *  in addition to any configured `subagents`. See docs/SUBAGENTS.md (v2). */
+  dynamicSubagents?: boolean;
 }
 
 /**

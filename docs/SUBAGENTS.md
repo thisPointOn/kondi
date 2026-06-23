@@ -63,10 +63,11 @@ per-call timeout. No nesting in v1 (a subagent cannot itself spawn subagents).
 
 ## Roadmap
 
-- **v1 (this pass):** data model + worker fan-out engine + ledger visibility. Subagents
-  configured in the persona object (JSON / programmatic); minimal/no dedicated UI yet.
-- **v2:** persona-config UI (model picker per subagent, task editor), enable for manager
-  (analysis fan-out) and reviewer.
-- **v3:** worker-*dynamic* spawning (the worker decides at runtime how many subagents and
-  what each does, via a `spawn_subagents` directive the orchestrator executes), and
-  optional tool access per subagent.
+- **v1 (done):** data model + worker fan-out engine + ledger visibility.
+- **v2 (done):** config UI (`AddPersonaModal` "Subagents" section — per-row any-provider
+  model picker + task + a dynamic-spawn toggle); fan-out enabled for the **manager
+  decision** (`makeDecision`) as well as the worker (`executeWork` + `runDirectExecution`);
+  **dynamic spawning** — when `persona.dynamicSubagents` is set, `planDynamicSubagents` asks
+  the persona to propose up to 3 subagents at runtime (`NAME | provider/model | task`;
+  `self` reuses the persona's model), which run through the same engine.
+- **v3 (next):** reviewer fan-out, optional tool access per subagent, and nested subagents.

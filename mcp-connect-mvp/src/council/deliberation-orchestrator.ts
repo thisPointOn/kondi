@@ -22,6 +22,7 @@ import type {
   ContextArtifact,
   ContextPatch,
   ArtifactRef,
+  SubagentSpec,
 } from './types';
 
 import {
@@ -1224,10 +1225,14 @@ export class DeliberationOrchestrator {
     const decisionCriteria = council.deliberation?.decisionCriteria;
     const expectedOutput = council.deliberation?.expectedOutput;
 
+    // Manager subagent fan-out (provider-agnostic): the manager's subagents advise on
+    // the decision context before it decides.
+    const contextForDecision = await this.runSubagents(council, manager, fullContext);
+
     // Build prompts
     const systemPrompt = manager.predisposition.systemPrompt;
     const stepType = council.deliberation?.stepType;
-    const userMessage = buildManagerDecisionPrompt(fullContext, decisionCriteria, expectedOutput, stepType, (council.deliberation?.savedProblem || council.topic || '').trim());
+    const userMessage = buildManagerDecisionPrompt(contextForDecision, decisionCriteria, expectedOutput, stepType, (council.deliberation?.savedProblem || council.topic || '').trim());
 
     const response = await this.invokeAgentSafe(
       { personaId: manager.id, systemPrompt, userMessage },
@@ -1405,7 +1410,61 @@ export class DeliberationOrchestrator {
    * the subagent's model lives (Claude, GPT, Gemini, DeepSeek, a routed profile, …).
    */
   private async runSubagents(council: Council, persona: Persona, directive: string): Promise<string> {
-    const subs = (persona.subagents || []).filter((s) => s.enabled !== false && s.task?.trim()).slice(0, 4);
+    // Static (configured) subagents first, then dynamic (runtime-proposed) ones.
+    let dir = await this.runSubagentSpecs(council, persona, directive, persona.subagents || []);
+    if (persona.dynamicSubagents) {
+      const proposed = await this.planDynamicSubagents(council, persona, directive);
+      if (proposed.length) dir = await this.runSubagentSpecs(council, persona, dir, proposed);
+    }
+    return dir;
+  }
+
+  /** Dynamic spawning: ask the persona to PROPOSE up to 3 subagents for this directive.
+   *  provider/model defaults to the persona's own when omitted or 'self'. Non-fatal. */
+  private async planDynamicSubagents(council: Council, persona: Persona, directive: string): Promise<SubagentSpec[]> {
+    void council;
+    const systemPrompt = `You plan helper subagents. If splitting this work across a few focused helpers would clearly improve the result, propose up to 3; otherwise propose none. Be conservative.`;
+    const userMessage =
+      `DIRECTIVE:\n${directive}\n\n` +
+      `Propose subagents, ONE PER LINE, EXACTLY as:  NAME | provider/model | task\n` +
+      `Use 'self' for provider/model to reuse your own model. If none are needed, reply with exactly: NONE\n` +
+      `Output only those lines (or NONE).`;
+    let text = '';
+    try {
+      const resp = await this.invokeAgentSafe(
+        { personaId: persona.id, systemPrompt, userMessage, skipTools: true, conversationId: `council-${crypto.randomUUID()}` },
+        persona, 'subagent'
+      );
+      text = (resp.content || '').trim();
+    } catch (err) {
+      console.warn('[Orchestrator] Dynamic subagent planning failed:', (err as Error).message);
+      return [];
+    }
+    if (/^none\b/i.test(text)) return [];
+    const specs: SubagentSpec[] = [];
+    for (const raw of text.split('\n')) {
+      const line = raw.trim().replace(/^[-*\d.)]+\s*/, '');
+      if (!line || /^none$/i.test(line)) continue;
+      const parts = line.split('|').map((p) => p.trim());
+      let name = '', pm = 'self', task = '';
+      if (parts.length >= 3) { name = parts[0]; pm = parts[1]; task = parts.slice(2).join(' | '); }
+      else if (parts.length === 2) { name = parts[0]; task = parts[1]; }
+      else continue;
+      if (!name || !task) continue;
+      let provider = persona.provider, model = persona.model;
+      const slash = pm.indexOf('/');
+      if (pm && !/^self$/i.test(pm) && slash > 0) { provider = pm.slice(0, slash).trim(); model = pm.slice(slash + 1).trim(); }
+      specs.push({ id: `dyn-${crypto.randomUUID().slice(0, 8)}`, name: name.slice(0, 60), provider, model, task, enabled: true });
+      if (specs.length >= 3) break;
+    }
+    console.log(`[Orchestrator] Dynamic spawn: ${persona.name} proposed ${specs.length} subagent(s)`);
+    return specs;
+  }
+
+  /** Core fan-out: run `specs` in parallel (each on its own provider/model), record each
+   *  in the ledger, and fold the findings into the directive. */
+  private async runSubagentSpecs(council: Council, persona: Persona, directive: string, specs: SubagentSpec[]): Promise<string> {
+    const subs = specs.filter((s) => s.enabled !== false && s.task?.trim()).slice(0, 4);
     if (subs.length === 0) return directive;
     console.log(`[Orchestrator] Fan-out: ${subs.length} subagent(s) for ${persona.name}`);
 
@@ -1870,7 +1929,9 @@ export class DeliberationOrchestrator {
       ? getMinimalWorkerSystemPrompt(workerPermissions, stepType)
       : worker.predisposition.systemPrompt;
 
-    const userMessage = buildWorkerExecutionPrompt(enrichedProblem, workerPermissions, stepType);
+    // Subagent fan-out (static + dynamic) on the direct-execution path too.
+    const effectiveProblem = await this.runSubagents(council, worker, enrichedProblem);
+    const userMessage = buildWorkerExecutionPrompt(effectiveProblem, workerPermissions, stepType);
 
     const response = await this.invokeAgentSafe(
       { personaId: worker.id, systemPrompt, userMessage },

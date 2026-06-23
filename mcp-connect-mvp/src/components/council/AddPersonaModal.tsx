@@ -122,6 +122,7 @@ export default function AddPersonaModal({
   const [suppressPersona, setSuppressPersona] = useState(existingRoleAssignment?.suppressPersona ?? true);
   const [allowedServerIds, setAllowedServerIds] = useState<string[] | undefined>(editingPersona?.allowedServerIds ?? []);
   const [subagents, setSubagents] = useState<SubagentSpec[]>(editingPersona?.subagents ?? []);
+  const [dynamicSubagents, setDynamicSubagents] = useState<boolean>(editingPersona?.dynamicSubagents ?? false);
   const addSubagent = () => setSubagents((s) => [...s, {
     id: `sa-${crypto.randomUUID().slice(0, 8)}`, name: `Subagent ${s.length + 1}`,
     provider: selectedProvider || 'google', model: selectedModel || 'gemini-2.5-flash',
@@ -191,6 +192,8 @@ export default function AddPersonaModal({
         preferredDeliberationRole: selectedRole,
         allowedServerIds,
         subagents: subagents.length ? subagents : undefined,
+      dynamicSubagents: dynamicSubagents || undefined,
+        dynamicSubagents: dynamicSubagents || undefined,
         predisposition: {
           ...editingPersona.predisposition,
           systemPrompt: customPrompt || editingPersona.predisposition.systemPrompt,
@@ -228,6 +231,7 @@ export default function AddPersonaModal({
       preferredDeliberationRole: isDeliberationMode ? selectedRole : undefined,
       allowedServerIds,
       subagents: subagents.length ? subagents : undefined,
+      dynamicSubagents: dynamicSubagents || undefined,
       // Include traits if modified from template defaults
       ...(traits.length > 0 && {
         predisposition: {
@@ -693,10 +697,14 @@ export default function AddPersonaModal({
             </div>
           )}
 
-          {(selectedRole === 'worker' || !isDeliberationMode) && (
+          {(selectedRole === 'worker' || selectedRole === 'manager' || !isDeliberationMode) && (
             <div className="config-field" style={{ marginTop: '1rem' }}>
               <label>Subagents</label>
-              <p className="field-hint">This worker runs these helpers (each on any provider/model) and folds their findings into its work before synthesizing. Optional.</p>
+              <p className="field-hint">This {selectedRole === 'manager' ? 'manager' : 'worker'} runs these helpers (each on any provider/model) and folds their findings into its work before synthesizing. Optional.</p>
+              <label className="checkbox-label" style={{ marginBottom: '0.5rem' }}>
+                <input type="checkbox" checked={dynamicSubagents} onChange={(e) => setDynamicSubagents(e.target.checked)} />
+                <span>Let it spawn subagents dynamically (propose its own helpers at runtime, any provider)</span>
+              </label>
               {subagents.map((sa) => (
                 <div key={sa.id} style={{ border: '1px solid var(--border-color, #333)', borderRadius: 6, padding: '0.5rem', marginBottom: '0.5rem' }}>
                   <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.4rem', alignItems: 'center' }}>
