@@ -20,7 +20,9 @@ jobs:
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 20
     permissions:
-      contents: read
+      # write (not read) so the token can see/download DRAFT releases — smoke-testing
+      # before publishing is the common case. The job only downloads; it writes nothing.
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
