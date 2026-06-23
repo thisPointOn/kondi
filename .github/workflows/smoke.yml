@@ -1,0 +1,101 @@
+name: Smoke Test (boot installers)
+
+# Downloads the PUBLISHED release installers and actually boots the app on each OS
+# to prove it launches (not just that it built). Run manually:
+#   Actions → Smoke Test → Run workflow (optionally pass a tag; default = latest).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to test (blank = latest)'
+        required: false
+        default: ''
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-22.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          T="${{ github.event.inputs.tag }}"
+          if [ -z "$T" ]; then
+            T=$(gh release view --repo ${{ github.repository }} --json tagName -q .tagName)
+          fi
+          echo "tag=$T" >> "$GITHUB_OUTPUT"
+          echo "Testing release: $T on ${{ matrix.platform }}"
+
+      # ---------------- LINUX ----------------
+      - name: Linux — download + boot AppImage
+        if: matrix.platform == 'ubuntu-22.04'
+        shell: bash
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          WEBKIT_DISABLE_COMPOSITING_MODE: '1'
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 xvfb libfuse2
+          gh release download "${{ steps.tag.outputs.tag }}" --repo ${{ github.repository }} --pattern "*_amd64.AppImage"
+          APP=$(ls *.AppImage); chmod +x "$APP"
+          echo "::group::booting $APP"
+          xvfb-run -a bash -c "timeout 25 ./$APP > boot.log 2>&1; echo exit=\$? > boot.exit" || true
+          cat boot.log || true; echo "::endgroup::"
+          grep -q '\[Rust\]' boot.log && echo 'PASS: Rust backend booted' || { echo 'FAIL: no startup marker'; exit 1; }
+          if grep -iE 'thread .* panicked|panic occurred|core dumped|Abort' boot.log; then echo 'FAIL: crash detected'; exit 1; fi
+          echo 'LINUX SMOKE: PASS'
+
+      # ---------------- MACOS ----------------
+      - name: macOS — download dmg + boot .app
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          set -e
+          gh release download "${{ steps.tag.outputs.tag }}" --repo ${{ github.repository }} --pattern "*aarch64.dmg"
+          DMG=$(ls *.dmg)
+          hdiutil attach "$DMG" -nobrowse -mountpoint /Volumes/KondiSmoke
+          cp -R /Volumes/KondiSmoke/*.app ./Kondi.app
+          hdiutil detach /Volumes/KondiSmoke || true
+          xattr -dr com.apple.quarantine ./Kondi.app || true
+          BIN="./Kondi.app/Contents/MacOS/$(ls ./Kondi.app/Contents/MacOS | head -1)"
+          echo "::group::booting $BIN"
+          "$BIN" > boot.log 2>&1 &
+          PID=$!
+          sleep 22
+          ALIVE=0; if kill -0 "$PID" 2>/dev/null; then ALIVE=1; kill "$PID" 2>/dev/null || true; fi
+          cat boot.log || true; echo "::endgroup::"
+          if grep -q '\[Rust\]' boot.log; then echo 'PASS: Rust backend booted (marker)';
+          elif [ "$ALIVE" = "1" ]; then echo 'PASS: app survived 22s (no stdout marker captured)';
+          else echo 'FAIL: app exited early with no startup marker'; exit 1; fi
+          if grep -iE 'thread .* panicked|panic occurred' boot.log; then echo 'FAIL: crash detected'; exit 1; fi
+          echo 'MACOS SMOKE: PASS'
+
+      # ---------------- WINDOWS ----------------
+      - name: Windows — install msi + boot
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          gh release download "${{ steps.tag.outputs.tag }}" --repo ${{ github.repository }} --pattern "*_x64_en-US.msi"
+          $msi = Get-ChildItem *.msi | Select-Object -First 1
+          Write-Host "Installing $($msi.Name) ..."
+          Start-Process msiexec.exe -ArgumentList "/i `"$($msi.FullName)`" /quiet /norestart" -Wait
+          $exe = Get-ChildItem "C:\Program Files\Kondi" -Filter *.exe -Recurse -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Name -notmatch 'uninstall' } | Select-Object -First 1
+          if (-not $exe) { Write-Host 'FAIL: installed exe not found under C:\Program Files\Kondi'; exit 1 }
+          Write-Host "Booting $($exe.FullName) ..."
+          $p = Start-Process -FilePath $exe.FullName -PassThru
+          Start-Sleep -Seconds 22
+          if ($p.HasExited) { Write-Host "FAIL: app exited early (exit code $($p.ExitCode))"; exit 1 }
+          Write-Host 'PASS: app process alive after 22s (booted without crashing)'
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Write-Host 'WINDOWS SMOKE: PASS'
