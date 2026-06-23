@@ -4,6 +4,8 @@ import { CodingOrchestrator } from '../council/coding-orchestrator';
 import { updateCouncil } from '../council/store';
 import { validateCouncilModels } from '../council/model-validation';
 import { ledgerStore } from '../council/ledger-store';
+import { buildFullDeliberation, buildAbbreviatedSummary } from '../services/deliberationSummary';
+import { getDecision } from '../council/context-store';
 import { callLLM } from '../pipeline/gui-caller';
 import { roleToPhase } from '../router/profile-options';
 import { filterToolsByServerIds, verifyRequiredTools } from '../utils/filterTools';
@@ -233,10 +235,13 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
   }, [makeDeliberator]);
 
   const onUserMessage = useCallback(async (council: Council, message: string, lastResponderId?: string, modelOverride?: { provider: string; model: string }) => {
-    // Pick who replies: the named responder, else the Manager, else first persona.
+    // Pick who replies: the named (selected) agent; otherwise a NON-manager persona
+    // (the agents did the work — the manager only orchestrates), else first persona.
     const managerId = council.deliberation?.roleAssignments?.find(r => r.role === 'manager')?.personaId;
+    const roleOf = (id: string) => council.deliberation?.roleAssignments?.find(r => r.personaId === id)?.role;
     const responder = council.personas.find(p => p.id === lastResponderId)
-      || council.personas.find(p => p.id === managerId)
+      || council.personas.find(p => { const r = roleOf(p.id); return r && r !== 'manager'; })
+      || council.personas.find(p => p.id !== managerId)
       || council.personas[0];
     if (!responder) return;
     const useProvider = modelOverride?.provider || responder.provider;
@@ -259,11 +264,25 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
     // Have the last responder reply
     setThinkingPersonas([responder]);
     try {
+      // Give the responder the WHOLE deliberation as context (the previous version
+      // claimed to but never actually included it — so the agent had no idea what was
+      // discussed). Prefer the full deliberation; fall back to the abbreviated summary
+      // if it's very large. Append the decision explicitly in case the summary trims it.
+      let deliberationContext = buildFullDeliberation(council);
+      if (deliberationContext.length > 60000) deliberationContext = buildAbbreviatedSummary(council);
+      const decision = getDecision(council.id);
+      const decisionBlock = decision?.content ? `\n\nFINAL DECISION:\n${decision.content}` : '';
+
       const result = await callLLM({
         model: useModel,
         provider: useProvider,
         systemPrompt: responder.predisposition.systemPrompt,
-        userMessage: `The user is continuing the conversation after the council's deliberation:\n\n"${message}"\n\nRespond helpfully, drawing on the deliberation's context and conclusions.`,
+        userMessage:
+          `You are ${responder.name}, and you took part in a council deliberation that has now concluded. ` +
+          `Below is the FULL deliberation — the problem, the discussion/rounds, the decision, and the output. This is your context:\n\n` +
+          `<deliberation>\n${deliberationContext}${decisionBlock}\n</deliberation>\n\n` +
+          `The user now asks a follow-up:\n"${message}"\n\n` +
+          `Answer directly and specifically, grounded in the deliberation above. Do NOT ask what was discussed or decided — it is all provided. Respond as ${responder.name}.`,
         temperature: responder.temperature,
         availableTools,
       });

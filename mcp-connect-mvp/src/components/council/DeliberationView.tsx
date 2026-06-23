@@ -233,6 +233,7 @@ export default function DeliberationView({
   const [pausedUserInput, setPausedUserInput] = useState('');
   const [continueInput, setContinueInput] = useState('');
   const [continueModel, setContinueModel] = useState<{ provider: string; model: string } | null>(null);
+  const [continueAgentId, setContinueAgentId] = useState<string | null>(null);
   const [workingDirectory, setWorkingDirectory] = useState(council?.deliberation?.workingDirectory || '');
   const [directoryConstrained, setDirectoryConstrained] = useState(council?.deliberation?.directoryConstrained ?? true);
   const [bootstrapContext, setBootstrapContext] = useState(council?.deliberation?.bootstrapContext ?? true);
@@ -1809,21 +1810,34 @@ export default function DeliberationView({
       {/* Continue the conversation after the council is done — chat-style input
           with the model combo beneath it. */}
       {isTerminal && activePanel !== 'setup' && onUserMessage && (() => {
-        const m = composerModelProps();
+        // A post-completion follow-up is answered by the SELECTED AGENT (not the
+        // manager) — picked in the bar below, defaulting to the last agent who spoke.
+        // It replies on its own model with the FULL deliberation as context.
+        const nonManager = council.personas.filter(
+          (p) => council.deliberation?.roleAssignments?.find((r) => r.personaId === p.id)?.role !== 'manager'
+        );
+        const pool = nonManager.length ? nonManager : council.personas;
+        const selected = pool.find((p) => p.id === continueAgentId)
+          || pool.find((p) => p.id === lastResponder?.id)
+          || pool[0];
+        const agentOptions = pool.map((p) => ({ provider: p.provider, model: p.id, name: p.name }));
         return (
           <ComposerFooter
-            {...m}
             value={continueInput}
             onChange={setContinueInput}
             onSend={() => {
               const text = continueInput.trim();
-              if (!text || isGenerating) return;
+              if (!text || isGenerating || !selected) return;
               setContinueInput('');
-              onUserMessage(council, text, undefined, { provider: m.selProvider, model: m.selModel });
+              onUserMessage(council, text, selected.id);
             }}
-            placeholder="Continue the conversation…"
+            placeholder={selected ? `Ask ${selected.name} a follow-up…` : 'Continue the conversation…'}
             disabled={isGenerating}
             sendDisabled={!continueInput.trim() || isGenerating}
+            modelOptions={agentOptions}
+            selProvider={selected?.provider || ''}
+            selModel={selected?.id || ''}
+            onPickModel={(_prov, id) => setContinueAgentId(id)}
           />
         );
       })()}
