@@ -65,6 +65,29 @@ export interface Persona {
 
   /** MCP servers this persona can access (undefined = all servers) */
   allowedServerIds?: string[];
+
+  /** Subagents this persona may fan work out to (provider-agnostic). See SubagentSpec. */
+  subagents?: SubagentSpec[];
+}
+
+/**
+ * A subagent: a focused, one-shot helper a persona delegates to. Each runs on ANY
+ * provider/model (routed through llm-router like a persona), so a worker can fan out
+ * sub-tasks to different models and synthesize the results. See docs/SUBAGENTS.md.
+ */
+export interface SubagentSpec {
+  id: string;
+  name: string;
+  /** Any provider id (incl. 'router'). */
+  provider: string;
+  /** Any model id (incl. 'route:<profile>'). */
+  model: string;
+  /** Optional role framing for this subagent. */
+  systemPrompt?: string;
+  /** What this subagent should produce; may use {{directive}} for the parent's directive. */
+  task: string;
+  /** Default true. */
+  enabled?: boolean;
 }
 
 export interface PresetPersona {

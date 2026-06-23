@@ -1395,6 +1395,69 @@ export class DeliberationOrchestrator {
   /**
    * Worker executes directive
    */
+  /**
+   * Subagent fan-out (docs/SUBAGENTS.md). Runs a persona's configured subagents in
+   * parallel — each on its OWN provider/model via the same router as personas — and
+   * returns the directive augmented with their findings (or the directive unchanged
+   * if there are none). Each subagent is recorded in the ledger; failures are
+   * non-fatal. Provider-agnostic by construction: a synthetic persona carrying the
+   * subagent's provider/model is passed to invokeAgent, so dispatch goes wherever
+   * the subagent's model lives (Claude, GPT, Gemini, DeepSeek, a routed profile, …).
+   */
+  private async runSubagents(council: Council, persona: Persona, directive: string): Promise<string> {
+    const subs = (persona.subagents || []).filter((s) => s.enabled !== false && s.task?.trim()).slice(0, 4);
+    if (subs.length === 0) return directive;
+    console.log(`[Orchestrator] Fan-out: ${subs.length} subagent(s) for ${persona.name}`);
+
+    const results = await Promise.all(
+      subs.map(async (sub) => {
+        const task = sub.task.replace(/\{\{directive\}\}/g, directive);
+        const subPersona: Persona = {
+          ...persona,
+          name: sub.name,
+          provider: sub.provider,
+          model: sub.model,
+          preferredDeliberationRole: 'worker',
+        };
+        const systemPrompt = sub.systemPrompt
+          || `You are ${sub.name}, a focused subagent assisting a worker. Do exactly what the task asks — concise, complete, no preamble or meta-commentary.`;
+        try {
+          const resp = await this.invokeAgentSafe(
+            {
+              personaId: persona.id,
+              systemPrompt,
+              userMessage: `TASK:\n${task}`,
+              skipTools: true,
+              conversationId: `council-${crypto.randomUUID()}`,
+            },
+            subPersona,
+            'subagent'
+          );
+          const content = (resp.content || '').trim();
+          this.createEntry(
+            council.id, 'worker', persona.id, 'analysis', 'executing',
+            `[Subagent: ${sub.name} · ${sub.provider}/${sub.model}]\n${content || '(no output)'}`,
+            resp.tokensUsed || 0, resp.latencyMs || 0
+          );
+          return content ? `### ${sub.name} (${sub.provider}/${sub.model})\n${content}` : '';
+        } catch (err) {
+          const msg = (err as Error).message || String(err);
+          console.warn(`[Orchestrator] Subagent ${sub.name} failed:`, msg);
+          this.createEntry(
+            council.id, 'worker', persona.id, 'error', 'executing',
+            `Subagent ${sub.name} (${sub.provider}/${sub.model}) failed: ${msg}`, 0, 0
+          );
+          return '';
+        }
+      })
+    );
+
+    const findings = results.filter(Boolean).join('\n\n');
+    return findings
+      ? `${directive}\n\n---\nSUBAGENT FINDINGS (incorporate these; you synthesize the final deliverable yourself):\n${findings}`
+      : directive;
+  }
+
   async executeWork(council: Council): Promise<LedgerEntry> {
     this.validatePhase(council, 'executing');
     const worker = this.getWorker(council);
@@ -1423,7 +1486,11 @@ export class DeliberationOrchestrator {
       ? getMinimalWorkerSystemPrompt(workerPermissions, stepType)
       : worker.predisposition.systemPrompt;
 
-    const userMessage = buildWorkerExecutionPrompt(directive.content, workerPermissions, stepType);
+    // Subagent fan-out (provider-agnostic): if the worker has subagents, run them
+    // first and fold their findings into the directive before the worker synthesizes.
+    const effectiveDirective = await this.runSubagents(council, worker, directive.content);
+
+    const userMessage = buildWorkerExecutionPrompt(effectiveDirective, workerPermissions, stepType);
 
     let response = await this.invokeAgentSafe(
       { personaId: worker.id, systemPrompt, userMessage },
