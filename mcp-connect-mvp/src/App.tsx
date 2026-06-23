@@ -6,6 +6,7 @@ import { requestPipelineCreate } from './components/pipeline/pipelineCreateSigna
 import { COUNCIL_RUN_EVENT } from './components/council/councilCreateSignal';
 import ErrorBoundary from './components/ErrorBoundary';
 import ProjectView from './components/ProjectView';
+import { createDefaultCouncil } from './council/createDefaultCouncil';
 import { useActiveSetupSection } from './components/council/setupDetailStore';
 import { CouncilLibrary, CouncilView } from './components/council';
 import NewChatDialog from './components/NewChatDialog';
@@ -121,6 +122,16 @@ function App() {
             chats={chats.sidebarChats.map((c) => ({ id: c.id, title: c.title }))}
             onOpenCouncil={(id) => { council.setCurrentCouncilId(id); setCurrentView('council'); }}
             onOpenChat={(id) => { chats.setCurrentChatId(id); setCurrentView('chat'); }}
+            onNewChat={() => chats.createNewChat('')}
+            onNewCouncil={() => {
+              const c = createDefaultCouncil({
+                configuredProviders: providerConfig.configuredProviders,
+                workingDirectory: providerConfig.globalWorkingDirectory,
+              });
+              council.setCurrentCouncilId(c.id);
+              setCurrentView('council');
+              return c.id;
+            }}
           />
         ) : currentView === 'pipelines' ? (
           pipeline.pipelineMode === 'execution' && pipeline.currentPipelineId ? (

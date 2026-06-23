@@ -26,9 +26,13 @@ interface ProjectViewProps {
   chats: ChatLite[];
   onOpenCouncil: (id: string) => void;
   onOpenChat: (id: string) => void;
+  /** Create a NEW chat — returns its id so it can be added to this project. */
+  onNewChat?: () => string | null;
+  /** Create a NEW council — returns its id so it can be added to this project. */
+  onNewCouncil?: () => string | null;
 }
 
-const ProjectView: FC<ProjectViewProps> = ({ projectId, chats, onOpenCouncil, onOpenChat }) => {
+const ProjectView: FC<ProjectViewProps> = ({ projectId, chats, onOpenCouncil, onOpenChat, onNewChat, onNewCouncil }) => {
   useProjects(); // re-render on project changes
   const [, force] = useState(0);
   useEffect(() => councilStore.subscribe(() => force((n) => n + 1)), []);
@@ -76,7 +80,12 @@ const ProjectView: FC<ProjectViewProps> = ({ projectId, chats, onOpenCouncil, on
       <div className="pv-section">
         <div className="pv-section-head">
           <h3>Councils</h3>
-          <button className="pv-add-btn" onClick={() => setAddingCouncil((v) => !v)}>+ Add council</button>
+          <div className="pv-head-actions">
+            {onNewCouncil && (
+              <button className="pv-add-btn" onClick={() => { const id = onNewCouncil(); if (id) addCouncilToProject(project.id, id); }}>+ New council</button>
+            )}
+            <button className="pv-add-btn" onClick={() => setAddingCouncil((v) => !v)}>+ Add existing</button>
+          </div>
         </div>
         {addingCouncil && (
           <div className="pv-picker">
@@ -122,7 +131,12 @@ const ProjectView: FC<ProjectViewProps> = ({ projectId, chats, onOpenCouncil, on
       <div className="pv-section">
         <div className="pv-section-head">
           <h3>Chats</h3>
-          <button className="pv-add-btn" onClick={() => setAddingChat((v) => !v)}>+ Add chat</button>
+          <div className="pv-head-actions">
+            {onNewChat && (
+              <button className="pv-add-btn" onClick={() => { const id = onNewChat(); if (id) addChatToProject(project.id, id); }}>+ New chat</button>
+            )}
+            <button className="pv-add-btn" onClick={() => setAddingChat((v) => !v)}>+ Add existing</button>
+          </div>
         </div>
         {addingChat && (
           <div className="pv-picker">

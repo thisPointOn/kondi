@@ -282,7 +282,7 @@ export function useChats({
     setShowNewChatDialog(true);
   };
 
-  const createNewChat = (workingDir: string) => {
+  const createNewChat = (workingDir: string): string => {
     const id = crypto.randomUUID();
     setChats((prev) => ({ ...prev, [id]: [] }));
     if (workingDir) {
@@ -291,6 +291,7 @@ export function useChats({
     setCurrentChatId(id);
     setShowNewChatDialog(false);
     setCurrentView('chat');
+    return id;
   };
 
   const cancelNewChat = () => {

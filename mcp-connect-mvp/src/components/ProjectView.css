@@ -123,3 +123,5 @@
   max-height: 80px;
   overflow: hidden;
 }
+
+.pv-head-actions { display: flex; gap: 0.4rem; }

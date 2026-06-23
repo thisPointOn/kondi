@@ -5,11 +5,10 @@
 import { useState, useEffect } from 'react';
 import { ask } from '@tauri-apps/plugin-dialog';
 import type { Council } from '../../council/types';
-import { councilStore, suggestedCombinations, getTemplateByName, createPersonaFromTemplate, duplicateCouncil } from '../../council';
-import { createCouncilFromSetup } from '../../council/factory';
+import { councilStore, suggestedCombinations, duplicateCouncil } from '../../council';
+import { createDefaultCouncil } from '../../council/createDefaultCouncil';
 import { requestCouncilSetup } from './councilSetupSignal';
 import CouncilImportModal from './CouncilImportModal';
-import { resolveDefaultModel } from '../../config/models';
 import type { ConfiguredProviders } from '../../hooks/useProviderConfig';
 import './CouncilLibrary.css';
 
@@ -60,71 +59,11 @@ export default function CouncilLibrary({
     });
 
   const handleCreate = (rawName?: string) => {
-    // Name is collected on the next screen (the setup dialog), so a fresh
-    // council just gets a placeholder name here.
-    const name = (rawName ?? 'New Council').trim() || 'New Council';
-
-    // Resolve models from REAL availability. Never assume the Claude/Codex CLIs
-    // are installed (unlikely on a fresh machine) — fall back to whatever the
-    // user actually configured.
-    const avail = configuredProviders || { 'anthropic-cli': false, 'anthropic-api': false, 'openai-cli': false, 'openai-api': false, deepseek: false };
-    const managerModel = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-    const workerModel = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
-
-    // Get optimist template for consultant
-    const optimistTemplate = getTemplateByName('Optimist');
-    const optimistFromTemplate = optimistTemplate ? createPersonaFromTemplate(optimistTemplate) : null;
-
-    const council = createCouncilFromSetup({
-      name,
-      topic: name,  // Topic auto-set from name; updated when task is defined
-      personas: [
-        {
-          name: 'Manager',
-          role: 'manager',
-          provider: managerModel.provider,
-          model: managerModel.model,
-          avatar: '👔',
-          systemPrompt: 'You are the manager overseeing this deliberation.',
-          traits: ['decisive', 'analytical', 'organized'],
-          interactionStyle: 'synthesize',
-          suppressPersona: true,
-          allowedServerIds: [],
-        },
-        {
-          name: 'Worker',
-          role: 'worker',
-          provider: workerModel.provider,
-          model: workerModel.model,
-          avatar: '🔧',
-          systemPrompt: 'You are the worker who executes directives.',
-          traits: ['precise', 'thorough', 'methodical'],
-          temperature: 0.5,
-          verbosity: 'thorough',
-          suppressPersona: true,
-          allowedServerIds: [],
-        },
-        {
-          name: optimistFromTemplate?.name || 'Optimist',
-          role: 'consultant',
-          provider: optimistFromTemplate?.provider || 'openai-api',
-          model: optimistFromTemplate?.model || 'gpt-4o',
-          avatar: optimistFromTemplate?.avatar || '🌟',
-          color: optimistFromTemplate?.color || '#16A34A',
-          systemPrompt: optimistFromTemplate?.predisposition.systemPrompt || 'You see possibility where others see obstacles.',
-          stance: (optimistFromTemplate?.predisposition.stance as any) || 'advocate',
-          traits: optimistFromTemplate?.predisposition.traits || ['enthusiastic', 'creative', 'action-oriented'],
-          interactionStyle: optimistFromTemplate?.predisposition.interactionStyle || 'build',
-          startingStance: 'optimistic',
-          allowedServerIds: [],
-        },
-      ],
-      // Standalone council defaults (lower budgets than pipeline)
-      contextTokenBudget: 40000,
-      summarizeAfterRound: 1,
-      workingDirectory: defaultWorkingDirectory || undefined,
+    const council = createDefaultCouncil({
+      name: rawName,
+      configuredProviders,
+      workingDirectory: defaultWorkingDirectory,
     });
-
     setShowCreateModal(false);
     setNewCouncilName('');
     onCouncilCreate(council);
