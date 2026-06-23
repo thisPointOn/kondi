@@ -8,6 +8,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { MCPClient } from './mcpClient';
 import { kondiPathSync } from './kondiPaths';
+import { getSearchUrl, searchNeedsDocker } from './searchConfig';
 import type { MCPServer } from '../types/mcp';
 
 // Constants
@@ -36,24 +37,22 @@ export async function getSearchServiceStatus(mcpClient: MCPClient): Promise<Sear
   };
 
   try {
-    // Check Docker availability
-    console.log('[SearchService] Checking Docker availability...');
-    status.dockerAvailable = await invoke<boolean>('is_docker_available');
-    console.log('[SearchService] Docker available:', status.dockerAvailable);
-
-    if (!status.dockerAvailable) {
-      console.log('[SearchService] Docker not available, returning early');
-      return status;
+    if (searchNeedsDocker()) {
+      // Check Docker availability
+      status.dockerAvailable = await invoke<boolean>('is_docker_available');
+      if (!status.dockerAvailable) {
+        return status; // local backend needs Docker; nothing more to report
+      }
+      // Check SearXNG container status
+      const containerStatus = await invoke<string>('docker_container_status', {
+        containerName: SEARXNG_CONTAINER,
+      });
+      status.searxngStatus = containerStatus as SearchServiceStatus['searxngStatus'];
+    } else {
+      // Remote backend: no Docker needed; the URL is the engine.
+      status.dockerAvailable = true;
+      status.searxngStatus = 'running';
     }
-
-    // Check SearXNG container status
-    console.log('[SearchService] Checking container status...');
-    const containerStatus = await invoke<string>('docker_container_status', {
-      containerName: SEARXNG_CONTAINER,
-    });
-    console.log('[SearchService] Container status:', containerStatus);
-
-    status.searxngStatus = containerStatus as SearchServiceStatus['searxngStatus'];
 
     // Check MCP server connection
     const servers = mcpClient.getAllServers();
@@ -98,6 +97,7 @@ export async function initializeSearchService(
   console.log('[SearchService] initializeSearchService called');
 
   try {
+    if (searchNeedsDocker()) {
     // Step 1: Check Docker availability
     notify('Checking Docker...');
     const dockerAvailable = await invoke<boolean>('is_docker_available');
@@ -145,6 +145,11 @@ export async function initializeSearchService(
       notify('Search engine failed to start');
       console.error('[SearchService] SearXNG failed to become healthy');
       return false;
+    }
+    } else {
+      // Remote SearXNG (no Docker) — nothing to start locally; the MCP server
+      // queries the configured URL directly.
+      notify('Using remote SearXNG (no Docker)…');
     }
 
     // Step 6: Start the MCP server
@@ -309,20 +314,22 @@ export function getSearchServerConfig(): MCPServer {
       serverPath,
       managed: true,
       autoStart: true,
-      requiresDocker: true,
+      requiresDocker: searchNeedsDocker(),
       dockerService: SEARXNG_CONTAINER,
       // The manifest is required by mcpClient.connectServer for stdio servers
       manifest: {
         name: 'kondi-search-mcp',
         version: '1.0.0',
-        description: 'Web search via local SearXNG metasearch engine',
+        description: 'Web search via a SearXNG metasearch engine (local Docker or remote URL)',
         runtime: 'node',
         entrypoint: 'dist/index.js',
         run: {
           command: 'node',
           args: ['dist/index.js'],
           env: {
-            KONDI_SEARCH_SEARXNG_URL: SEARXNG_URL,
+            // Points at the local Docker container OR a remote SearXNG URL per the
+            // user's search-backend setting (searchConfig.ts).
+            KONDI_SEARCH_SEARXNG_URL: getSearchUrl(),
           },
         },
       },

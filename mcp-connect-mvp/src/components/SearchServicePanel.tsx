@@ -34,6 +34,7 @@ import {
   getSearxngLogs,
   type SearchServiceStatus,
 } from '../services/searchService';
+import { getSearchConfig, setSearchConfig, SEARCH_DEFAULT_REMOTE, type SearchConfig } from '../services/searchConfig';
 import { MCPClient } from '../services/mcpClient';
 import './SearchServicePanel.css';
 
@@ -74,6 +75,12 @@ export const SearchServicePanel: FC<SearchServicePanelProps> = ({
   });
   const [loading, setLoading] = useState(false);
   const [actionStatus, setActionStatus] = useState<string>('');
+  const [searchCfg, setSearchCfgState] = useState(() => getSearchConfig());
+  const applySearchCfg = (next: Partial<SearchConfig>) => {
+    const merged = { ...searchCfg, ...next };
+    setSearchCfgState(merged);
+    setSearchConfig(merged);
+  };
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<string>('');
   const [isSetup, setIsSetup] = useState(false);
@@ -251,8 +258,36 @@ export const SearchServicePanel: FC<SearchServicePanelProps> = ({
         </button>
       </div>
 
-      {/* Docker not available warning */}
-      {!status.dockerAvailable && (
+      {/* Search backend selector */}
+      <div className="search-service-backend">
+        <div className="ssb-label">Search backend</div>
+        <div className="ssb-options">
+          <label className={`ssb-option ${searchCfg.backend === 'remote' ? 'active' : ''}`}>
+            <input type="radio" name="search-backend" checked={searchCfg.backend === 'remote'}
+              onChange={() => applySearchCfg({ backend: 'remote' })} />
+            <span><strong>Remote SearXNG</strong> — no Docker, free. Use a public or self-hosted instance.</span>
+          </label>
+          {searchCfg.backend === 'remote' && (
+            <div className="ssb-url-row">
+              <input type="text" className="ssb-url" value={searchCfg.remoteUrl}
+                placeholder={SEARCH_DEFAULT_REMOTE}
+                onChange={(e) => applySearchCfg({ remoteUrl: e.target.value.trim() })} />
+              <button className="icon-button" title="Apply (restart search to take effect)" onClick={handleRestart} disabled={loading}>
+                <RefreshCw size={14} className={loading ? 'spinning' : ''} />
+              </button>
+            </div>
+          )}
+          <label className={`ssb-option ${searchCfg.backend === 'local' ? 'active' : ''}`}>
+            <input type="radio" name="search-backend" checked={searchCfg.backend === 'local'}
+              onChange={() => applySearchCfg({ backend: 'local' })} />
+            <span><strong>Local SearXNG (Docker)</strong> — reliable, runs the bundled container. Requires Docker.</span>
+          </label>
+        </div>
+        <p className="ssb-hint">Changing the backend takes effect on the next start/restart. Public instances vary in reliability and some disable the JSON API — switch the URL or use Local if search returns nothing.</p>
+      </div>
+
+      {/* Docker not available warning (only relevant for the local backend) */}
+      {searchCfg.backend === 'local' && !status.dockerAvailable && (
         <div className="search-service-alert error">
           <AlertCircle size={16} />
           <div className="alert-content">
