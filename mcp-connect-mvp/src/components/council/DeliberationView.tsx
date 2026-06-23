@@ -1828,8 +1828,10 @@ export default function DeliberationView({
         );
       })()}
 
-      {/* Staged Comment Input — visible while agents are generating (never on setup) */}
-      {activePanel !== 'setup' && !isPaused && thinkingPersonas.length > 0 && (
+      {/* Staged Comment Input — visible only during ACTIVE deliberation while agents
+          generate. Excludes the terminal state so it never stacks on the "continue"
+          footer (which owns the post-completion follow-up, including its own response). */}
+      {activePanel !== 'setup' && !isPaused && !isTerminal && thinkingPersonas.length > 0 && (
         <ComposerFooter
           {...composerModelProps()}
           value={stagedCommentInput}
