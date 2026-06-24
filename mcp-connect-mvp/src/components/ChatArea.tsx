@@ -629,6 +629,22 @@ const ChatArea: FC<ChatAreaProps> = ({
   const [inputValue, setInputValue] = useState('');
   // True while an assistant reply is streaming in (suppresses the typing dots).
   const [streamingActive, setStreamingActive] = useState(false);
+  // Timestamp of the last streamed token. Models that pause mid-stream (e.g. GLM
+  // during long reasoning / tool-examination phases emit no visible tokens for a
+  // while) would otherwise look "stopped" — we re-show the working indicator when
+  // the stream has gone quiet for a beat, until the request actually completes.
+  const lastChunkRef = useRef(0);
+  const [streamTick, setStreamTick] = useState(0);
+  useEffect(() => {
+    if (!sending) return;
+    const id = setInterval(() => setStreamTick((t) => (t + 1) % 1000), 500);
+    return () => clearInterval(id);
+  }, [sending]);
+  const STREAM_GAP_MS = 1200;
+  // Show the "working" dots while a request is in flight AND either nothing has
+  // streamed yet, or the stream has been silent for > STREAM_GAP_MS (a pause).
+  const showWorking = sending && (!streamingActive || (Date.now() - lastChunkRef.current > STREAM_GAP_MS));
+  void streamTick; // referenced only to drive the re-render that re-evaluates showWorking
   const [showToolAutocomplete, setShowToolAutocomplete] = useState(false);
   const [sendingLocal, setSendingLocal] = useState(false);
   const [activeProviderLocal, setActiveProviderLocal] = useState<string | null>(null);
@@ -1255,6 +1271,7 @@ const ChatArea: FC<ChatAreaProps> = ({
         effectiveProviderId, currentMessages, undefined, 0,
         (text: string) => {
           setStreamingActive(true);
+          lastChunkRef.current = Date.now();
           updateTarget([...currentMessages, {
             id: streamId,
             role: 'assistant',
@@ -1541,7 +1558,7 @@ const ChatArea: FC<ChatAreaProps> = ({
           <MessageRow key={message.id} message={message} servers={servers} onRetry={handleRetry} />
         ))}
 
-        {sending && !streamingActive && (
+        {showWorking && (
           <div className={`message typing ${activeProvider || ''}`}>
             <div className={`avatar assistant ${activeProvider || ''}`}>
               {PROVIDER_META.find(p => p.id === activeProvider)?.shortLabel || 'AI'}
