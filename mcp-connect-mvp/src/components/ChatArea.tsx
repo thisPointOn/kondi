@@ -629,22 +629,10 @@ const ChatArea: FC<ChatAreaProps> = ({
   const [inputValue, setInputValue] = useState('');
   // True while an assistant reply is streaming in (suppresses the typing dots).
   const [streamingActive, setStreamingActive] = useState(false);
-  // Timestamp of the last streamed token. Models that pause mid-stream (e.g. GLM
-  // during long reasoning / tool-examination phases emit no visible tokens for a
-  // while) would otherwise look "stopped" — we re-show the working indicator when
-  // the stream has gone quiet for a beat, until the request actually completes.
+  // Timestamp of the last streamed token (drives the gap-aware working indicator
+  // defined below, once `sending` is in scope).
   const lastChunkRef = useRef(0);
   const [streamTick, setStreamTick] = useState(0);
-  useEffect(() => {
-    if (!sending) return;
-    const id = setInterval(() => setStreamTick((t) => (t + 1) % 1000), 500);
-    return () => clearInterval(id);
-  }, [sending]);
-  const STREAM_GAP_MS = 1200;
-  // Show the "working" dots while a request is in flight AND either nothing has
-  // streamed yet, or the stream has been silent for > STREAM_GAP_MS (a pause).
-  const showWorking = sending && (!streamingActive || (Date.now() - lastChunkRef.current > STREAM_GAP_MS));
-  void streamTick; // referenced only to drive the re-render that re-evaluates showWorking
   const [showToolAutocomplete, setShowToolAutocomplete] = useState(false);
   const [sendingLocal, setSendingLocal] = useState(false);
   const [activeProviderLocal, setActiveProviderLocal] = useState<string | null>(null);
@@ -652,6 +640,18 @@ const ChatArea: FC<ChatAreaProps> = ({
   // Use lifted state if provided, otherwise fall back to local state
   const sending = sendingProp ?? sendingLocal;
   const setSending = (v: boolean) => { setSendingLocal(v); onSendingChange?.(v); };
+
+  // Gap-aware "working" indicator: while a request is in flight, re-show the dots
+  // when nothing has streamed yet OR the stream has been silent for > STREAM_GAP_MS.
+  // Models like GLM pause mid-stream during reasoning / tool use and look "stopped".
+  const STREAM_GAP_MS = 1200;
+  useEffect(() => {
+    if (!sending) return;
+    const id = setInterval(() => setStreamTick((t) => (t + 1) % 1000), 500);
+    return () => clearInterval(id);
+  }, [sending]);
+  void streamTick; // referenced to drive the re-render that re-evaluates showWorking
+  const showWorking = sending && (!streamingActive || (Date.now() - lastChunkRef.current > STREAM_GAP_MS));
   const activeProvider = activeProviderOverride ?? activeProviderLocal;
   const setActiveProvider = (v: string | null) => { setActiveProviderLocal(v); onActiveProviderChange?.(v); };
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
