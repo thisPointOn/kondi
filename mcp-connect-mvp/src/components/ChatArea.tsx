@@ -1941,13 +1941,13 @@ const MessageRow: FC<{ message: Message; servers: MCPServer[]; onRetry?: (m: Mes
           <button className="msg-model" onClick={() => setShowModelDetails(v => !v)} title="Model details">
             {modelLabel}
           </button>
+          <CopyBtn text={message.content} className="msg-action" label="Copy" />
           {(inTok > 0 || outTok > 0) && (
             <span className="msg-tokens">
               <span className="msg-in">{formatTokens(inTok)} in</span>
               <span className="msg-out">{formatTokens(outTok)} out</span>
             </span>
           )}
-          <CopyBtn text={message.content} className="msg-action" label="Copy" />
           {onRetry && (
             <button className="msg-action" onClick={() => onRetry(message)} title="Regenerate this response">↻ Try again</button>
           )}
