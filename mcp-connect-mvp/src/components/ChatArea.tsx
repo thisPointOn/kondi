@@ -1057,7 +1057,15 @@ const ChatArea: FC<ChatAreaProps> = ({
     // no tokens, no completion, no error — so the promise never settles and the UI
     // spins forever. If nothing arrives for IDLE_TIMEOUT_MS (reset on every token),
     // reject with a clear error so the catch in the caller surfaces it to the user.
-    const IDLE_TIMEOUT_MS = 90_000;
+    // CLI providers (anthropic-cli / openai-cli) don't stream tokens incrementally —
+    // the binary runs as an agent (thinks, reads files, uses tools) and returns its
+    // full reply only at the END, so onToken never fires and there is no per-token
+    // "idle" signal to reset. A 90s idle timer would false-fire on every normal
+    // multi-minute agentic run (this is why Claude CLI "timed out"). The Rust backend
+    // already caps these at 600s, so use a backstop just beyond that. Streaming HTTP
+    // providers keep the tight 90s idle-between-tokens cutoff (catches GLM stalls).
+    const isCliProvider = provId === 'anthropic-cli' || provId === 'openai-cli';
+    const IDLE_TIMEOUT_MS = isCliProvider ? 660_000 : 90_000;
     let lastActivity = Date.now();
     let timedOut = false;
     let stopWatchdog: () => void = () => {};
@@ -1087,8 +1095,11 @@ const ChatArea: FC<ChatAreaProps> = ({
           stopWatchdog();
           timedOut = true;
           reject(new Error(
-            `No response from ${provId} for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s — the request appears to have hung. ` +
-            `Some streaming endpoints (e.g. GLM) stall intermittently; try again, or switch the model for this chat.`
+            isCliProvider
+              ? `No response from ${provId} for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s — the CLI agent appears to have hung. ` +
+                `Try again, or switch the model for this chat.`
+              : `No response from ${provId} for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s — the request appears to have hung. ` +
+                `Some streaming endpoints (e.g. GLM) stall intermittently; try again, or switch the model for this chat.`
           ));
         }
       }, 5000);
