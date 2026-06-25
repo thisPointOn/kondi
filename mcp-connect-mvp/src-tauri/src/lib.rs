@@ -108,6 +108,9 @@ pub fn run() {
             commands::ensure_searxng_files,
         ])
         .setup(|app| {
+            // Clean up any orphaned background processes from prior runs (e.g. crashes)
+            commands::cleanup_orphaned_processes();
+
             // Set window icon for Linux
             if let Some(window) = app.get_webview_window("main") {
                 // Load icon from bytes embedded at compile time
