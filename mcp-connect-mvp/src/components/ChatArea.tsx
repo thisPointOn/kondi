@@ -1061,6 +1061,26 @@ const ChatArea: FC<ChatAreaProps> = ({
     let lastActivity = Date.now();
     let timedOut = false;
     let stopWatchdog: () => void = () => {};
+    // Render throttle. The naive path calls onStreamText on EVERY token, and each
+    // call rebuilds the whole message list + re-renders the app — O(messages) per
+    // token. One stream is fine; two concurrent streams in a big chat saturate the
+    // single JS main thread so neither makes progress and both trip the idle
+    // watchdog. Coalesce UI updates to ~12fps (final text always flushed) so the
+    // main thread stays responsive enough for multiple streams to coexist.
+    const EMIT_MS = 80;
+    let lastEmit = 0;
+    let emitTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushEmit = () => {
+      if (emitTimer) { clearTimeout(emitTimer); emitTimer = null; }
+      lastEmit = Date.now();
+      if (onStreamText) onStreamText(streamAcc);
+    };
+    const scheduleEmit = () => {
+      if (!onStreamText || emitTimer) return;
+      const wait = Math.max(0, EMIT_MS - (Date.now() - lastEmit));
+      if (wait === 0) { flushEmit(); return; }
+      emitTimer = setTimeout(flushEmit, wait);
+    };
     const watchdog = new Promise<never>((_, reject) => {
       const check = setInterval(() => {
         if (Date.now() - lastActivity > IDLE_TIMEOUT_MS) {
@@ -1084,9 +1104,9 @@ const ChatArea: FC<ChatAreaProps> = ({
       serverSummary,
       chatId: chatId || undefined,
       onToken: onStreamText
-        ? (delta: string) => { if (timedOut) return; lastActivity = Date.now(); streamAcc += delta; onStreamText(streamAcc); }
+        ? (delta: string) => { if (timedOut) return; lastActivity = Date.now(); streamAcc += delta; scheduleEmit(); }
         : undefined,
-    }).finally(() => stopWatchdog());
+    }).finally(() => { stopWatchdog(); flushEmit(); });
     const result = await Promise.race([call, watchdog]);
     message = result.message;
     toolCalls = result.toolCalls;
