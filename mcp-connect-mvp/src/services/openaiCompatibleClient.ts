@@ -103,8 +103,13 @@ export class OpenAICompatibleClient {
         apiKey: key,
         baseURL: this.config.baseURL,
         dangerouslyAllowBrowser: true,
-        maxRetries: 5,
-        timeout: 120_000,
+        // Bound how long a hang can last: the SDK retries timeouts, so 5 retries ×
+        // 120s turned one stalled GLM request into ~10 minutes of "hanging". Fewer
+        // retries + a tighter per-attempt timeout surfaces the failure fast. The
+        // streaming path additionally idle-aborts (streamOnce) so it can't wait the
+        // full timeout for a mid-stream stall.
+        maxRetries: 2,
+        timeout: 90_000,
       });
       this.clientKey = key;
     }
@@ -207,24 +212,49 @@ export class OpenAICompatibleClient {
     params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
     onToken: (delta: string) => void,
   ): Promise<{ content: string | null; tool_calls?: any[] }> {
-    const stream = await this.client!.chat.completions.create({ ...params, stream: true });
-    let content = '';
-    const toolCallsAcc: any[] = [];
-    for await (const chunk of stream as any) {
-      const delta = chunk.choices?.[0]?.delta;
-      if (!delta) continue;
-      if (delta.content) { content += delta.content; onToken(delta.content); }
-      if (delta.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          const idx = tc.index ?? 0;
-          if (!toolCallsAcc[idx]) toolCallsAcc[idx] = { id: '', type: 'function', function: { name: '', arguments: '' } };
-          if (tc.id) toolCallsAcc[idx].id = tc.id;
-          if (tc.function?.name) toolCallsAcc[idx].function.name += tc.function.name;
-          if (tc.function?.arguments) toolCallsAcc[idx].function.arguments += tc.function.arguments;
+    // Idle-abort watchdog: GLM/z.ai (and other OpenAI-compatible streams) sometimes
+    // stall mid-stream — no further tokens, no error — and `for await` waits forever
+    // (the SDK's default timeout is 10 min). If no chunk arrives for IDLE_TIMEOUT_MS
+    // (reset on every chunk), abort the request so it throws instead of hanging.
+    const IDLE_TIMEOUT_MS = 90_000;
+    const ac = new AbortController();
+    let lastChunk = Date.now();
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastChunk > IDLE_TIMEOUT_MS) {
+        clearInterval(watchdog);
+        ac.abort();
+      }
+    }, 5000);
+    try {
+      const stream = await this.client!.chat.completions.create({ ...params, stream: true }, { signal: ac.signal });
+      let content = '';
+      const toolCallsAcc: any[] = [];
+      for await (const chunk of stream as any) {
+        lastChunk = Date.now();
+        const delta = chunk.choices?.[0]?.delta;
+        if (!delta) continue;
+        if (delta.content) { content += delta.content; onToken(delta.content); }
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            if (!toolCallsAcc[idx]) toolCallsAcc[idx] = { id: '', type: 'function', function: { name: '', arguments: '' } };
+            if (tc.id) toolCallsAcc[idx].id = tc.id;
+            if (tc.function?.name) toolCallsAcc[idx].function.name += tc.function.name;
+            if (tc.function?.arguments) toolCallsAcc[idx].function.arguments += tc.function.arguments;
+          }
         }
       }
+      return { content: content || null, tool_calls: toolCallsAcc.length ? toolCallsAcc : undefined };
+    } catch (err: any) {
+      if (ac.signal.aborted) {
+        throw new Error(
+          `${this.config.providerName} stream stalled — no data for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s (the request hung). Try again, or switch the model for this chat.`
+        );
+      }
+      throw err;
+    } finally {
+      clearInterval(watchdog);
     }
-    return { content: content || null, tool_calls: toolCallsAcc.length ? toolCallsAcc : undefined };
   }
 
   async chat(
