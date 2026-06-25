@@ -655,20 +655,20 @@ const ChatArea: FC<ChatAreaProps> = ({
   const activeProvider = activeProviderOverride ?? activeProviderLocal;
   const setActiveProvider = (v: string | null) => { setActiveProviderLocal(v); onActiveProviderChange?.(v); };
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
-  const [stagedComment, setStagedComment] = useState<string | null>(null);
-  const stagedCommentRef = useRef<string | null>(null);
-  // Wrapper that keeps the ref in sync immediately (not waiting for re-render)
+  // Staged comments are PER-CHAT — staging in one chat must stay with that chat
+  // when you switch away and back (and never leak into another chat). Keyed by
+  // chatId, with a ref mirror for immediate (pre-re-render) reads in async sends.
+  const [stagedComments, setStagedComments] = useState<Record<string, string | null>>({});
+  const stagedCommentsRef = useRef<Record<string, string | null>>({});
+  const stagedComment = chatId ? (stagedComments[chatId] ?? null) : null;
+  const setStagedCommentFor = (cid: string, value: string | null) => {
+    stagedCommentsRef.current = { ...stagedCommentsRef.current, [cid]: value };
+    setStagedComments((prev) => ({ ...prev, [cid]: value }));
+  };
   const updateStagedComment = (updater: string | null | ((prev: string | null) => string | null)) => {
-    if (typeof updater === 'function') {
-      setStagedComment((prev) => {
-        const next = updater(prev);
-        stagedCommentRef.current = next;
-        return next;
-      });
-    } else {
-      stagedCommentRef.current = updater;
-      setStagedComment(updater);
-    }
+    if (!chatId) return;
+    const cur = stagedCommentsRef.current[chatId] ?? null;
+    setStagedCommentFor(chatId, typeof updater === 'function' ? updater(cur) : updater);
   };
   // Chat input history (like bash shell — up/down arrow to cycle through previous entries)
   const inputHistoryRef = useRef<string[]>(
@@ -729,6 +729,9 @@ const ChatArea: FC<ChatAreaProps> = ({
   const effectiveModelId = chatModelPin?.modelId || currentModel;
   const pinnedProviderMeta = chatModelPin ? effectiveProviderMeta.find((p) => p.id === chatModelPin.providerId) : null;
   const pinnedModelDef = pinnedProviderMeta?.models.find((m) => m.id === chatModelPin?.modelId);
+  // What the model bar SHOWS = the effective (per-chat pin, else global) selection.
+  const shownProviderMeta = effectiveProviderMeta.find((p) => p.id === effectiveProviderId) || activeProviderMeta;
+  const shownModelDef = shownProviderMeta?.models.find((m) => m.id === effectiveModelId) || activeModelDef;
 
   // Available (configured) providers. Smart Routing is always selectable —
   // it dispatches to whichever concrete provider its profile resolves to.
@@ -1292,8 +1295,8 @@ const ChatArea: FC<ChatAreaProps> = ({
         message.id,
       );
 
-      // If there's a staged comment, append it and send a follow-up LLM call
-      const pending = stagedCommentRef.current;
+      // If there's a staged comment FOR THIS CHAT, append it and send a follow-up.
+      const pending = stagedCommentsRef.current[targetChatId] ?? null;
       if (pending) {
         const followUp: Message = {
           id: crypto.randomUUID(),
@@ -1302,7 +1305,7 @@ const ChatArea: FC<ChatAreaProps> = ({
           timestamp: new Date(),
         };
         updatedMessages.push(followUp);
-        updateStagedComment(null);
+        setStagedCommentFor(targetChatId, null);
         updateTarget(updatedMessages);
 
         // Chain a second LLM call with the staged comment included
@@ -1395,9 +1398,10 @@ const ChatArea: FC<ChatAreaProps> = ({
   // Handle provider/model switch
   const handleSelectModel = (providerMeta: ProviderMeta, modelId: string) => {
     setShowModelDropdown(false);
-    if (onProviderModelChange) {
-      onProviderModelChange(providerMeta.id, modelId);
-    }
+    // Pin the model to THIS chat (per-chat persistence) instead of changing the
+    // global default — so switching models in one chat never leaks to others.
+    // A new chat keeps following the global default until it's explicitly changed.
+    onChatModelPinChange?.({ providerId: providerMeta.id, modelId });
   };
 
   // "Try again" — regenerate an assistant message from the conversation up to it.
@@ -1698,13 +1702,13 @@ const ChatArea: FC<ChatAreaProps> = ({
           >
             <span
               className="provider-color-dot"
-              style={{ backgroundColor: activeProviderMeta?.color || '#888' }}
+              style={{ backgroundColor: shownProviderMeta?.color || '#888' }}
             />
             <span className="active-model-name">
-              {activeModelDef?.name || currentModel}
+              {shownModelDef?.name || effectiveModelId}
             </span>
             <span className="active-provider-name">
-              {activeProviderMeta?.shortLabel || selectedProviderId}
+              {shownProviderMeta?.shortLabel || effectiveProviderId}
             </span>
             <ChevronDown size={14} className={`model-chevron ${showModelDropdown ? 'open' : ''}`} />
           </button>
@@ -1712,7 +1716,7 @@ const ChatArea: FC<ChatAreaProps> = ({
           {showModelDropdown && (
             <div className="provider-model-dropdown">
               {availableProviders.map((pm) => {
-                const isActiveProvider = pm.id === selectedProviderId;
+                const isActiveProvider = pm.id === effectiveProviderId;
                 return (
                   <div
                     key={pm.id}
@@ -1727,7 +1731,7 @@ const ChatArea: FC<ChatAreaProps> = ({
                     </div>
                     <div className="provider-tile-models">
                       {pm.models.map((model) => {
-                        const isCurrentModel = isActiveProvider && model.id === currentModel;
+                        const isCurrentModel = isActiveProvider && model.id === effectiveModelId;
                         return (
                           <button
                             key={model.id}
