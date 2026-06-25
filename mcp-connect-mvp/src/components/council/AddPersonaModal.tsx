@@ -192,7 +192,6 @@ export default function AddPersonaModal({
         preferredDeliberationRole: selectedRole,
         allowedServerIds,
         subagents: subagents.length ? subagents : undefined,
-      dynamicSubagents: dynamicSubagents || undefined,
         dynamicSubagents: dynamicSubagents || undefined,
         predisposition: {
           ...editingPersona.predisposition,
