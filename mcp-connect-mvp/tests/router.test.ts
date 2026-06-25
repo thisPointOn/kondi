@@ -82,13 +82,14 @@ describe('Router — capability profiles (intent + rules)', () => {
     let sawPrompt = false;
     const classify: ClassifierComplete = async (req) => {
       sawPrompt = req.userMessage.includes('Phase: execute');
-      return JSON.stringify({ route: 'deepseek-chat' });
+      return JSON.stringify({ route: 'deepseek-v4-pro' });
     };
     const router = makeRouter('balanced', classify);
     const d = await router.select('execute', 'implement a feature');
     expect(sawPrompt).toBe(true);
     expect(d.tier).toBe('intent');
-    expect(d.model.id).toBe('deepseek-chat');
+    expect(d.model.id).toBe('deepseek-v4-pro');
+
   });
 
   it('balanced falls back to the rule tier when the classifier returns junk', async () => {

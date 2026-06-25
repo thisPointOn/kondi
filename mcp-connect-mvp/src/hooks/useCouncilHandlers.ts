@@ -177,16 +177,11 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
     verifyRequiredTools(availableTools, promptText, council.name);
 
     // Pre-flight: validate every persona's model against the live catalog +
-    // probe status. Swaps stale/rejected models (e.g. a Codex SKU the account
-    // no longer accepts) for a working one so the council runs instead of
-    // crashing mid-deliberation. Throws only if nothing is configured at all.
-    const subs = validateCouncilModels(council, configuredProviders);
-    if (subs.length) {
-      // Persist the swaps so the setup panel reflects the working models the
-      // user will actually run with (and so the next launch is already clean).
-      updateCouncil(council.id, { personas: council.personas });
-      console.warn('[useCouncilHandlers] Substituted unavailable models:', subs);
-    }
+    // probe status. Throws an error listing any invalid, broken, or unconfigured
+    // models so the user is warned and can correct their setup instead of running
+    // with silent substitutions (which could lead to unexpected billing costs).
+    validateCouncilModels(council, configuredProviders);
+
 
     try {
       if (stepType === 'coding') {
