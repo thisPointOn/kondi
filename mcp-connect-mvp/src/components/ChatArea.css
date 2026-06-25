@@ -170,11 +170,17 @@
 }
 .msg-action:hover { color: #c7c7d1; }
 .msg-footer .chat-copy-btn.msg-action {
+  /* The base .chat-copy-btn is an absolutely-positioned, opacity:0 overlay for
+     code blocks (shown on hover). In the footer it must be a normal inline button
+     that is always visible — reset position + opacity, not just colors/size. */
+  position: static;
+  opacity: 1;
   width: auto;
   height: auto;
   min-width: 0;
   background: transparent;
   border: none;
+  border-radius: 0;
   font-size: 11px;
   color: #7d7d8a;
   padding: 0;
