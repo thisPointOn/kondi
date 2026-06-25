@@ -1210,10 +1210,16 @@ const ChatArea: FC<ChatAreaProps> = ({
     };
     const setSendingTarget = (v: boolean) => {
       if (onChatSendingChange) {
+        // Per-chat sending state (correct under concurrent sends). The displayed
+        // `sending` derives from chatsSending[currentChatId], so this updates the
+        // right chat. Do NOT also call setSending(v) — that routes to the CURRENTLY
+        // VIEWED chat, so finishing a send in chat A while viewing B would clear B's
+        // spinner and strand A's.
         onChatSendingChange(targetChatId, v);
+      } else {
+        // No lifted per-chat state — fall back to local component state.
+        setSending(v);
       }
-      // Also update local/lifted state for the currently displayed chat
-      setSending(v);
     };
     const setActiveProviderTarget = (v: string | null) => {
       if (onChatActiveProviderChange) {
@@ -1436,8 +1442,11 @@ const ChatArea: FC<ChatAreaProps> = ({
     const targetChatId = chatId;
     const updateTarget = (msgs: Message[]) =>
       onChatUpdate ? onChatUpdate(targetChatId, msgs) : onMessagesChange(msgs);
+    // Per-chat sending (concurrency-safe) — don't clobber whatever chat is on screen.
+    const setRetrySending = (v: boolean) =>
+      onChatSendingChange ? onChatSendingChange(targetChatId, v) : setSending(v);
     updateTarget(base);
-    setSending(true);
+    setRetrySending(true);
     try {
       const asst = await callProvider(effectiveProviderId, base);
       updateTarget([...base, asst]);
@@ -1448,7 +1457,7 @@ const ChatArea: FC<ChatAreaProps> = ({
         timestamp: new Date(), provider: effectiveProviderId,
       } as Message]);
     } finally {
-      setSending(false);
+      setRetrySending(false);
     }
   };
 
