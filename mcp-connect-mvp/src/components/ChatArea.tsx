@@ -1053,7 +1053,28 @@ const ChatArea: FC<ChatAreaProps> = ({
     });
 
     let streamAcc = '';
-    const result = await chatCompletion({
+    // Idle watchdog. Some streaming endpoints (notably GLM/z.ai) occasionally HANG —
+    // no tokens, no completion, no error — so the promise never settles and the UI
+    // spins forever. If nothing arrives for IDLE_TIMEOUT_MS (reset on every token),
+    // reject with a clear error so the catch in the caller surfaces it to the user.
+    const IDLE_TIMEOUT_MS = 90_000;
+    let lastActivity = Date.now();
+    let timedOut = false;
+    let stopWatchdog: () => void = () => {};
+    const watchdog = new Promise<never>((_, reject) => {
+      const check = setInterval(() => {
+        if (Date.now() - lastActivity > IDLE_TIMEOUT_MS) {
+          stopWatchdog();
+          timedOut = true;
+          reject(new Error(
+            `No response from ${provId} for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s — the request appears to have hung. ` +
+            `Some streaming endpoints (e.g. GLM) stall intermittently; try again, or switch the model for this chat.`
+          ));
+        }
+      }, 5000);
+      stopWatchdog = () => clearInterval(check);
+    });
+    const call = chatCompletion({
       provider: provId,
       model: modelForCall,
       messages: sendMessages,
@@ -1063,9 +1084,10 @@ const ChatArea: FC<ChatAreaProps> = ({
       serverSummary,
       chatId: chatId || undefined,
       onToken: onStreamText
-        ? (delta: string) => { streamAcc += delta; onStreamText(streamAcc); }
+        ? (delta: string) => { if (timedOut) return; lastActivity = Date.now(); streamAcc += delta; onStreamText(streamAcc); }
         : undefined,
-    });
+    }).finally(() => stopWatchdog());
+    const result = await Promise.race([call, watchdog]);
     message = result.message;
     toolCalls = result.toolCalls;
     message.provider = provId;
