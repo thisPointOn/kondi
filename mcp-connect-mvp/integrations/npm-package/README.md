@@ -70,7 +70,7 @@ The current codebase has CLI and GUI code interleaved. For a clean npm package y
   "name": "kondi-council",
   "version": "0.1.0",
   "description": "Multi-LLM council deliberation CLI — structured debates between AI personas",
-  "license": "AGPL-3.0-only",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "kondi-council": "../../cli/kondi.ts"

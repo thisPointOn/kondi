@@ -323,4 +323,4 @@ Session exports are automatically written to `~/.local/share/kondi/sessions/`. T
 
 ## License
 
-AGPL-3.0-only
+MIT

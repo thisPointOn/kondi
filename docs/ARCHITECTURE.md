@@ -71,7 +71,7 @@ Kondi is a Tauri 2.9 desktop application. The frontend is React 19 + TypeScript 
 
 The app ships as cross-platform Tauri installers built by `.github/workflows/release.yml` (matrix: macOS arm64/x64 `.dmg`, Linux `.AppImage`/`.deb`/`.rpm` from `ubuntu-22.04`, Windows `.exe`/`.msi`). The `kondi-guard` containment sidecar is a Cargo workspace crate under `src-tauri/kondi-guard`.
 
-License split (see `LICENSING.md`): the Rust/Tauri backend (`src-tauri/`, including `kondi-guard`) is **MIT**; the frontend and the project as a whole are **AGPL-3.0-only**.
+License (see `LICENSING.md`): the entire project — the Rust/Tauri backend (`src-tauri/`, including `kondi-guard`) and the frontend and everything else — is **MIT**.
 
 ---
 

@@ -2,7 +2,7 @@
   "name": "kondi-council",
   "version": "0.1.0",
   "description": "Multi-LLM council deliberation CLI — structured debates between AI personas across providers",
-  "license": "AGPL-3.0-only",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "kondi-council": "./dist/kondi.mjs"

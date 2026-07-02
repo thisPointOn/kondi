@@ -2,7 +2,7 @@
   "name": "kondi-council-openai",
   "version": "0.1.0",
   "description": "Kondi council deliberation tool for OpenAI Agents SDK",
-  "license": "AGPL-3.0-only",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.mjs",
   "files": ["dist/"],

@@ -27,5 +27,5 @@
   "peerDependencies": {
     "express": "^4.x"
   },
-  "license": "AGPL-3.0-only"
+  "license": "MIT"
 }

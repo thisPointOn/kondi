@@ -1,6 +1,6 @@
 # Kondi
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Multi-agent deliberation and coding platform with MCP tool access.**
 
@@ -456,9 +456,7 @@ kondi/
 
 ## License
 
-Split-licensed by component:
-
-- **Backend** (Rust/Tauri, `mcp-connect-mvp/src-tauri/`) — **MIT** ([LICENSE](mcp-connect-mvp/src-tauri/LICENSE))
-- **Frontend** and everything else — **AGPL-3.0-only** ([LICENSE](LICENSE))
+Kondi is released under the **MIT License** in its entirety — backend, frontend,
+bundled MCP servers, CLI, and integrations. See [LICENSE](LICENSE) and [LICENSING.md](LICENSING.md).
 
 See [LICENSING.md](LICENSING.md) for details.

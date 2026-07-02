@@ -477,7 +477,7 @@ The npm `tauri` script is plain `tauri` (the `WEBKIT_DISABLE_DMABUF_RENDERER=1` 
 - **`kondi-guard` is a standalone workspace crate** (`src-tauri/kondi-guard/`, serde_json + std only, `license = MIT`) — split out of the Tauri app crate so building it doesn't run `tauri-build`/GTK or hit the `externalBin` chicken-and-egg. Built via `cargo build -p kondi-guard`.
 - **Workflows** live at the repo root `.github/workflows/`: `ci.yml` (typecheck + `vite build` + verify `kondi-guard` compiles) and `release.yml` (multi-platform Tauri bundle on tag). The macOS Intel leg (`macos-13`) is `continue-on-error` (scarce free runners queue for hours).
 - **Signing is intentionally OFF** in `release.yml` (the macOS/Tauri `APPLE_*` / `TAURI_SIGNING_*` env vars are COMMENTED OUT). A defined-but-empty `APPLE_CERTIFICATE` makes Tauri's bundler try to import an empty cert and fail the whole macOS build. To enable: add the repo secrets FIRST, then uncomment. `docs/RELEASING.md` documents the signing setup.
-- **License split:** the backend `src-tauri/` (Rust/Tauri, including `kondi-guard`) is **MIT** (`Cargo.toml` `license = MIT`, `src-tauri/LICENSE`); the frontend + the project as a whole are **AGPL-3.0-only** (`package.json`, root `LICENSE`). See `LICENSING.md`.
+- **License:** the entire project is **MIT** — the backend `src-tauri/` (Rust/Tauri, including `kondi-guard`; `Cargo.toml` `license = MIT`, `src-tauri/LICENSE`) and the frontend + everything else (`package.json` `"license": "MIT"`, root `LICENSE`). See `LICENSING.md`. (Previously the frontend was AGPL-3.0-only and the backend MIT; the whole repo was relicensed to MIT.)
 
 ### CLI Pipeline
 ```bash

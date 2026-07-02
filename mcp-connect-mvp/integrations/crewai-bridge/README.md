@@ -143,7 +143,7 @@ build-backend = "hatchling.build"
 name = "kondi-council-crewai"
 version = "0.1.0"
 description = "Kondi multi-LLM council deliberation tool for CrewAI"
-license = "AGPL-3.0-only"
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = ["crewai>=0.50.0"]
 
