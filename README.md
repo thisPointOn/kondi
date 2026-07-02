@@ -457,6 +457,4 @@ kondi/
 ## License
 
 Kondi is released under the **MIT License** in its entirety — backend, frontend,
-bundled MCP servers, CLI, and integrations. See [LICENSE](LICENSE) and [LICENSING.md](LICENSING.md).
-
-See [LICENSING.md](LICENSING.md) for details.
+bundled MCP servers, CLI, and integrations. See [LICENSE](LICENSE) and [LICENSING.md](LICENSING.md) for details.
