@@ -497,8 +497,15 @@ export function useServers({ hasLoadedKeys, validationReport }: UseServersParams
         const tools = mcpClient.getTools('kondi-search');
         const serverWithTools = { ...searchServer, name: 'Web Search (Built-in)', tools };
         setServers(prev => {
-          const exists = prev.some(s => s.id === 'kondi-search');
-          if (exists) {
+          const existing = prev.find(s => s.id === 'kondi-search');
+          // Bail out when nothing changed — the Services panel reports status
+          // on mount and every 10s, and returning a fresh array each time
+          // re-renders the whole app for a no-op.
+          if (existing && existing.status === searchServer.status
+              && (existing.tools?.length || 0) === tools.length) {
+            return prev;
+          }
+          if (existing) {
             return prev.map(s => s.id === 'kondi-search' ? serverWithTools : s);
           } else {
             return [...prev, serverWithTools];
@@ -506,9 +513,13 @@ export function useServers({ hasLoadedKeys, validationReport }: UseServersParams
         });
       }
     } else if (status.mcpServerStatus === 'disconnected') {
-      setServers(prev => prev.map(s =>
-        s.id === 'kondi-search' ? { ...s, status: 'disconnected', tools: [] } : s
-      ));
+      setServers(prev => {
+        const existing = prev.find(s => s.id === 'kondi-search');
+        if (!existing || existing.status === 'disconnected') return prev;
+        return prev.map(s =>
+          s.id === 'kondi-search' ? { ...s, status: 'disconnected', tools: [] } : s
+        );
+      });
     }
   };
 

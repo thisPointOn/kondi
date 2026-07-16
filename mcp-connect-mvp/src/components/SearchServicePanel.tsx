@@ -5,7 +5,7 @@
  * Displays status, controls for start/stop/restart, and configuration options.
  */
 
-import { useState, useEffect, useCallback, type FC } from 'react';
+import { useState, useEffect, useCallback, useRef, type FC } from 'react';
 import {
   Search,
   RefreshCw,
@@ -138,19 +138,27 @@ export const SearchServicePanel: FC<SearchServicePanelProps> = ({
     });
   };
 
+  // Keep the latest onStatusChange in a ref so refreshStatus (and the mount
+  // effect below) never depend on its identity. The parent handler is not
+  // memoized — every App render creates a new function, and depending on it
+  // caused an infinite mount-effect → setServers → re-render loop that froze
+  // the app (each cycle also spawning docker subprocesses).
+  const onStatusChangeRef = useRef(onStatusChange);
+  onStatusChangeRef.current = onStatusChange;
+
   // Refresh status
   const refreshStatus = useCallback(async () => {
     try {
       const newStatus = await getSearchServiceStatus(mcpClient);
       setStatus(newStatus);
-      onStatusChange?.(newStatus);
+      onStatusChangeRef.current?.(newStatus);
 
       // Check if setup is needed
       setIsSetup(newStatus.searxngStatus !== 'not_found' && newStatus.searxngStatus !== 'unknown');
     } catch (error) {
       console.error('Failed to refresh status:', error);
     }
-  }, [mcpClient, onStatusChange]);
+  }, [mcpClient]);
 
   // Initial load and periodic refresh
   useEffect(() => {
