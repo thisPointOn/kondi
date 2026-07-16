@@ -270,7 +270,7 @@ MCPClient ----HTTP----> kondi-mcp-proxy (localhost:PORT)
 
 ### Launch-Time Model Validation (`model-validation.ts`)
 
-Before a council runs, `validateCouncilModels()` (called in `useCouncilHandlers.onFrameProblem`) checks every persona's model against the catalog (`ALL_MODELS`), the probe status (`isModelBroken`), and the set of configured providers. Any model that is unknown (catalog-removed), proven-broken, or points at an unconfigured provider is swapped in place for a working configured model — the persona's own provider first, then a cheap-first fallback order. Routed pseudo-models (`route:*`) are left for `llm-router` to resolve. This stops a council from crashing mid-run because a (often template-seeded) persona pointed at a model the user's account/plan can't use; the substitutions are surfaced in the setup panel. It throws only if no working configured model exists at all.
+Before a council runs, `validateCouncilModels()` (called in `useCouncilHandlers.onFrameProblem`) checks every persona's model against the catalog (`ALL_MODELS`), the probe status (`isModelBroken`), and the set of configured providers. Any model that is unknown (catalog-removed), proven-broken, or points at an unconfigured provider makes the launch **throw a detailed error** (each offending persona's name, model, provider, and reason) so the user fixes their setup deliberately. Routed pseudo-models (`route:*`) are left for `llm-router` to resolve. An earlier version silently substituted a working fallback model and persisted the swap; that was deliberately removed — substitution can route a council to a different (and differently-priced) model than the user picked (see CLAUDE.md rule #18).
 
 ### Deliberation Orchestrator (`deliberation-orchestrator.ts`)
 

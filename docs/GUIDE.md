@@ -405,7 +405,7 @@ A council is a group of AI personas that collaborate on a task following a speci
 4. Add personas (see [Personas](#7-personas)).
 5. Click **Start**.
 
-> **Automatic model fix-up**: When you start a council, Kondi validates every persona's model first. If a persona points at a model that's unknown, proven-broken, or belongs to a provider you haven't configured (common with template personas), Kondi swaps it for a working model you do have set up — preferring the persona's own provider, then a cheaper fallback — and shows the swap in the setup panel. This means a council won't crash mid-run because of a stale or unconfigured model. (You only get an error if you have no working provider at all — open Settings → Providers and add a key.)
+> **Launch-time model validation**: When you start a council, Kondi validates every persona's model first. If a persona points at a model that's unknown, proven-broken, or belongs to a provider you haven't configured (common with template personas), the launch is **blocked with a detailed error** listing each offending persona, its model, and why it's unusable — fix the persona or add the provider key in Settings → Providers, then start again. Kondi deliberately does NOT swap in a substitute model: a silent swap could route your council to a different (and differently-priced) model than you picked. Routed personas (`route:<profile>`) are exempt — they resolve at call time.
 
 ### Council Modes
 
