@@ -6,6 +6,7 @@
  */
 
 import OpenAI from 'openai';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 import { LOCAL_SERVER_ID, localToolsService } from './localTools';
@@ -25,7 +26,90 @@ interface OpenAICompatibleConfig {
   authProvider: AuthProvider;
   defaultModel: string;
   requiresAuth?: boolean; // default true; false for Ollama
+  /**
+   * Route requests through the Rust backend (`http_relay_stream` Tauri
+   * command) instead of the webview's fetch. Required for providers whose
+   * APIs send no CORS headers (e.g. NVIDIA NIM) — the webview blocks their
+   * responses, so a direct call surfaces as "Connection error". Response
+   * bytes are forwarded over an IPC channel as they arrive, so SSE token
+   * streaming stays live.
+   */
+  relayViaBackend?: boolean;
 }
+
+type RelayStreamEvent =
+  | { type: 'status'; status: number; headers: Record<string, string> }
+  | { type: 'chunk'; data: string }
+  | { type: 'end' }
+  | { type: 'error'; message: string };
+
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * fetch-compatible shim over the `http_relay_stream` Tauri command. reqwest on
+ * the Rust side is not subject to CORS, and response bytes are forwarded over
+ * an IPC channel AS THEY ARRIVE — so SSE token deltas stream live (a buffered
+ * relay trips the chat's 90s no-first-byte watchdog on long generations).
+ * AbortSignal rejects/errors the webview side; the backend request then just
+ * runs out on its own.
+ */
+const relayFetch: typeof fetch = (input, init) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  const headers: Record<string, string> = {};
+  new Headers(init?.headers).forEach((v, k) => { headers[k] = v; });
+  const signal = init?.signal;
+
+  return new Promise<Response>((resolve, reject) => {
+    let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+    let settled = false; // response resolved/rejected
+    let done = false;    // stream closed/errored
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) { controller = c; },
+    });
+
+    const fail = (err: Error) => {
+      if (!settled) { settled = true; reject(err); }
+      else if (!done) { done = true; try { controller?.error(err); } catch { /* already closed */ } }
+    };
+
+    if (signal) {
+      const onAbort = () => fail(new DOMException('The operation was aborted.', 'AbortError'));
+      if (signal.aborted) { onAbort(); return; }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const channel = new Channel<RelayStreamEvent>();
+    channel.onmessage = (msg) => {
+      if (msg.type === 'status') {
+        if (settled) return;
+        settled = true;
+        // Response() throws if a body is passed with these status codes.
+        const bodyless = msg.status === 204 || msg.status === 205 || msg.status === 304;
+        resolve(new Response(bodyless ? null : stream, { status: msg.status, headers: msg.headers }));
+      } else if (msg.type === 'chunk') {
+        if (!done) { try { controller?.enqueue(base64ToBytes(msg.data)); } catch { /* consumer gone */ } }
+      } else if (msg.type === 'end') {
+        if (!done) { done = true; try { controller?.close(); } catch { /* already closed */ } }
+      } else if (msg.type === 'error') {
+        fail(new Error(msg.message));
+      }
+    };
+
+    invoke('http_relay_stream', {
+      url,
+      method: (init?.method || 'GET').toUpperCase(),
+      headers,
+      body: init?.body != null ? String(init.body) : null,
+      channel,
+    }).catch((err) => fail(err instanceof Error ? err : new Error(String(err))));
+  });
+};
 
 const BASE_SYSTEM_PROMPT = `You are a helpful general-purpose AI assistant. You can discuss any topic, answer questions, help with analysis, writing, coding, and much more.
 
@@ -102,6 +186,7 @@ export class OpenAICompatibleClient {
       this.client = new OpenAI({
         apiKey: key,
         baseURL: this.config.baseURL,
+        ...(this.config.relayViaBackend ? { fetch: relayFetch } : {}),
         dangerouslyAllowBrowser: true,
         // Bound how long a hang can last: the SDK retries timeouts, so 5 retries ×
         // 120s turned one stalled GLM request into ~10 minutes of "hanging". Fewer
@@ -144,6 +229,7 @@ export class OpenAICompatibleClient {
       const client = new OpenAI({
         apiKey: key,
         baseURL: this.config.baseURL,
+        ...(this.config.relayViaBackend ? { fetch: relayFetch } : {}),
         dangerouslyAllowBrowser: true,
       });
       await client.chat.completions.create({
@@ -462,12 +548,20 @@ export const zaiClient = new OpenAICompatibleClient({
 });
 
 /**
- * NVIDIA NIM / local router — OpenAI-compatible. Base URL is overridable via
- * the VITE_NVIDIA_ROUTER_URL build env (falls back to the local router port).
+ * NVIDIA NIM — OpenAI-compatible, hosted at integrate.api.nvidia.com (nvapi-*
+ * key). Base URL is overridable via the VITE_NVIDIA_ROUTER_URL build env for
+ * a local NIM/router deployment.
  */
+const NVIDIA_BASE_URL: string =
+  (import.meta as any).env?.VITE_NVIDIA_ROUTER_URL || 'https://integrate.api.nvidia.com/v1';
 export const nvidiaRouterClient = new OpenAICompatibleClient({
-  baseURL: (import.meta as any).env?.VITE_NVIDIA_ROUTER_URL || 'http://localhost:8001/v1',
-  providerName: 'NVIDIA Router',
+  baseURL: NVIDIA_BASE_URL,
+  providerName: 'NVIDIA NIM',
   authProvider: 'nvidia-router',
-  defaultModel: 'nvidia/llama-3.3-nemotron-super-49b',
+  defaultModel: 'nvidia/nemotron-3-super-120b-a12b',
+  // NIM's hosted API sends no CORS headers, so the webview cannot call it
+  // directly (every request dies as "Connection error"). Relay through the
+  // Rust backend. A local (http://) router override talks to localhost
+  // directly and skips the relay — http_relay is https-only anyway.
+  relayViaBackend: NVIDIA_BASE_URL.startsWith('https://'),
 });

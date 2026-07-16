@@ -172,10 +172,35 @@ export const BUILTIN_PROFILES: Record<string, BudgetProfile> = {
       state_update: 'glm-4.5-flash',
     },
   },
+  nvidia: {
+    name: 'nvidia',
+    description: 'NVIDIA NIM — Nemotron Ultra plans, GLM 5.2 codes, DeepSeek reviews, Nano compresses',
+    planningPreference: ['planning', 'reasoning', 'architecture', 'analysis'],
+    executionPreference: ['coding', 'fast-coding', 'general'],
+    reviewPreference: ['code-review', 'analysis', 'reasoning'],
+    contextBudget: 30_000,
+    maxIterations: 20,
+    loopCostCap: 3.0,
+    loopIterationCap: 20,
+    promotionThreshold: 2,
+    includeReflection: true,
+    includeVerification: true,
+    preferLocal: false,
+    maxOutputTokens: 8_192,
+    allowedProviders: ['nvidia-router'],
+    rolePinning: {
+      discuss: 'nvidia/nemotron-3-super-120b-a12b',
+      dispatch: 'nvidia/nemotron-3-ultra-550b-a55b',
+      execute: 'z-ai/glm-5.2',
+      reflect: 'deepseek-ai/deepseek-v4-pro',
+      compress: 'nvidia/nemotron-3-nano-30b-a3b',
+      state_update: 'nvidia/nemotron-3-nano-30b-a3b',
+    },
+  },
 };
 
 /** Stable display order for the dropdown. */
-export const PROFILE_ORDER: string[] = ['balanced', 'quality', 'cheap', 'orchestra', 'best-value', 'zai'];
+export const PROFILE_ORDER: string[] = ['balanced', 'quality', 'cheap', 'orchestra', 'best-value', 'zai', 'nvidia'];
 
 export function getProfile(name: ProfileName): BudgetProfile {
   return BUILTIN_PROFILES[name] || BUILTIN_PROFILES.balanced;

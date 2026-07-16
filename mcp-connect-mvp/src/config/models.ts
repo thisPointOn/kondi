@@ -16,7 +16,7 @@ export type ModelProvider =
   | 'google'
   | 'xai'
   | 'zai'              // Z.AI (GLM family, OpenAI-compatible Coding Plan endpoint)
-  | 'nvidia-router'    // NVIDIA NIM / local router (OpenAI-compatible)
+  | 'nvidia-router'    // NVIDIA NIM hosted API or local router (OpenAI-compatible)
   | 'ollama';
 
 /** Legacy provider names for backwards compatibility */
@@ -454,20 +454,103 @@ export const ZAI_MODELS: ModelDefinition[] = [
 ];
 
 // ============================================================================
-// NVIDIA NIM / Router (OpenAI-compatible; base URL via NVIDIA_ROUTER_URL)
+// NVIDIA NIM (hosted at integrate.api.nvidia.com; override via NVIDIA_ROUTER_URL
+// for a local NIM/router). Curated "best of" subset of the live /models list —
+// IDs verified against the live endpoint 2026-07. Costs are credit-based (no
+// per-token USD), hence 0 rates + 'NIM' display.
 // ============================================================================
 export const NVIDIA_MODELS: ModelDefinition[] = [
+  // First entry is the provider's default model in Settings/chat fallback.
   {
-    id: 'nvidia/llama-3.3-nemotron-super-49b',
-    name: 'Nemotron Super 49B',
+    id: 'nvidia/nemotron-3-super-120b-a12b',
+    name: 'Nemotron 3 Super 120B',
     provider: 'nvidia-router',
     contextWindow: 128000,
     capabilities: ['text', 'code', 'reasoning'],
     inputCostPer1K: 0,
     outputCostPer1K: 0,
-    costDisplay: 'Router',
+    costDisplay: 'NIM',
+    featured: true,
+    tier: 2,
+    routingCapabilities: ['coding', 'general', 'reasoning'],
+  },
+  {
+    id: 'nvidia/nemotron-3-ultra-550b-a55b',
+    name: 'Nemotron 3 Ultra 550B',
+    provider: 'nvidia-router',
+    contextWindow: 128000,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0,
+    outputCostPer1K: 0,
+    costDisplay: 'NIM',
+    featured: true,
+    tier: 1,
+    routingCapabilities: ['planning', 'reasoning', 'architecture', 'analysis'],
+  },
+  {
+    id: 'deepseek-ai/deepseek-v4-pro',
+    name: 'DeepSeek V4 Pro (NIM)',
+    provider: 'nvidia-router',
+    contextWindow: 128000,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0,
+    outputCostPer1K: 0,
+    costDisplay: 'NIM',
+    tier: 1,
+    routingCapabilities: ['reasoning', 'coding', 'code-review', 'analysis'],
+  },
+  // NOTE: several models in the live /models list are deliberately excluded as
+  // NOT usable (verified 2026-07): moonshotai/kimi-k2.6 (404 "Function not
+  // found"), meta/llama-4-maverick (request hangs), qwen/qwen3.5-397b-a17b
+  // (hangs on any real completion, streaming or not), minimaxai/minimax-m3
+  // (streaming = instant "Internal server error"; chat always streams).
+  {
+    id: 'z-ai/glm-5.2',
+    name: 'GLM 5.2 (NIM)',
+    provider: 'nvidia-router',
+    contextWindow: 200000,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0,
+    outputCostPer1K: 0,
+    costDisplay: 'NIM',
+    tier: 1,
+    routingCapabilities: ['coding', 'code-review', 'general'],
+  },
+  {
+    id: 'nvidia/llama-3.3-nemotron-super-49b-v1.5',
+    name: 'Nemotron Super 49B v1.5',
+    provider: 'nvidia-router',
+    contextWindow: 128000,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0,
+    outputCostPer1K: 0,
+    costDisplay: 'NIM',
     tier: 2,
     routingCapabilities: ['reasoning', 'general', 'coding'],
+  },
+  {
+    id: 'openai/gpt-oss-120b',
+    name: 'GPT-OSS 120B (NIM)',
+    provider: 'nvidia-router',
+    contextWindow: 128000,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0,
+    outputCostPer1K: 0,
+    costDisplay: 'NIM',
+    tier: 3,
+    routingCapabilities: ['fast-coding', 'reasoning', 'summarization', 'general'],
+  },
+  {
+    id: 'nvidia/nemotron-3-nano-30b-a3b',
+    name: 'Nemotron 3 Nano 30B',
+    provider: 'nvidia-router',
+    contextWindow: 128000,
+    capabilities: ['text', 'code'],
+    inputCostPer1K: 0,
+    outputCostPer1K: 0,
+    costDisplay: 'NIM',
+    tier: 3,
+    routingCapabilities: ['fast-coding', 'summarization', 'general'],
   },
 ];
 

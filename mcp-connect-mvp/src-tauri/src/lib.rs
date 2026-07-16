@@ -58,6 +58,9 @@ pub fn run() {
             commands::start_gemini_oauth,
             commands::refresh_gemini_token,
             commands::gemini_request,
+            // Generic HTTPS relay (CORS bypass for providers like NVIDIA NIM)
+            commands::http_relay,
+            commands::http_relay_stream,
             // Claude Code CLI Wrapper
             commands::run_claude_command,
             commands::run_claude_streaming,

@@ -61,12 +61,14 @@ If you have Claude Code, Codex, or Gemini CLI installed and authenticated:
 
 ### API Providers (Key-Based)
 
-For Anthropic API, OpenAI API, DeepSeek, xAI, or Google Gemini:
+For Anthropic API, OpenAI API, DeepSeek, xAI, Z.AI, NVIDIA NIM, or Google Gemini:
 
 1. Click the provider card.
 2. Enter your API key in the field.
 3. Click **Test** to validate connectivity.
 4. A green checkmark confirms the key works.
+
+NVIDIA NIM works out of the box with just an `nvapi-*` key — it talks to NVIDIA's hosted API (`integrate.api.nvidia.com`) by default, no local router needed.
 
 ### Ollama (Local)
 

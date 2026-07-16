@@ -137,7 +137,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   'xai': 'xAI (Grok)',
   'zai': 'Z.AI (GLM)',
   'google': 'Google Gemini',
-  'nvidia-router': 'NVIDIA Router',
+  'nvidia-router': 'NVIDIA NIM',
   'ollama': 'Ollama (Local)',
 };
 

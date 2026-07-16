@@ -53,7 +53,7 @@ const DEFAULT_MODELS: Record<string, string> = {
   'google': 'models/gemini-2.5-flash',
   'xai': 'grok-3',
   'zai': 'glm-4.6',
-  'nvidia-router': 'nvidia/llama-3.3-nemotron-super-49b',
+  'nvidia-router': 'nvidia/nemotron-3-super-120b-a12b',
   'ollama': 'llama3.1',
 };
 
@@ -305,7 +305,7 @@ export async function callLLM(opts: CallLLMOpts): Promise<CallerResult> {
     return callOpenAICompatible('https://api.z.ai/api/coding/paas/v4', apiKey, model, opts.systemPrompt, opts.userMessage);
   }
   if (provider === 'nvidia-router') {
-    return callOpenAICompatible(process.env.NVIDIA_ROUTER_URL || 'http://localhost:8001/v1', apiKey, model, opts.systemPrompt, opts.userMessage);
+    return callOpenAICompatible(process.env.NVIDIA_ROUTER_URL || 'https://integrate.api.nvidia.com/v1', apiKey, model, opts.systemPrompt, opts.userMessage);
   }
   if (provider === 'google') {
     return callGeminiAPI(apiKey, model, opts.systemPrompt, opts.userMessage);

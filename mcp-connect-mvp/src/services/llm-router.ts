@@ -101,7 +101,7 @@ export const DEFAULT_MODELS: Record<string, string> = {
   'deepseek': 'deepseek-v4-pro',
   'xai': 'grok-3',
   'zai': 'glm-4.6',
-  'nvidia-router': 'nvidia/llama-3.3-nemotron-super-49b',
+  'nvidia-router': 'nvidia/nemotron-3-super-120b-a12b',
   'ollama': 'llama3.1',
 };
 

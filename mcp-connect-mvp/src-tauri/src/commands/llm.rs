@@ -915,3 +915,183 @@ pub async fn remove_codex_mcp_server(server_name: String) -> Result<serde_json::
     Ok(serde_json::json!({ "success": true }))
 }
 
+
+// ============================================================================
+// Generic HTTPS relay (CORS bypass)
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpRelayResponse {
+    pub status: u16,
+    pub headers: HashMap<String, String>,
+    pub body: String,
+}
+
+/// Relay an HTTPS request through the backend for LLM providers whose APIs
+/// send no CORS headers (e.g. NVIDIA NIM) — the webview cannot call those
+/// directly; reqwest is not subject to CORS. Mirrors `gemini_request` but is
+/// provider-agnostic. HTTPS-only so this can't be used to probe localhost.
+#[tauri::command]
+pub async fn http_relay(
+    url: String,
+    method: String,
+    headers: HashMap<String, String>,
+    body: Option<String>,
+) -> Result<HttpRelayResponse, String> {
+    if !url.starts_with("https://") {
+        return Err("http_relay only allows https:// URLs".to_string());
+    }
+    // Log host+path only (query strings could carry secrets).
+    println!(
+        "[Relay] {} {}",
+        method.to_uppercase(),
+        url.split('?').next().unwrap_or(&url)
+    );
+
+    // Long timeout: non-streaming council calls on large models can take minutes.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut request = match method.to_uppercase().as_str() {
+        "GET" => client.get(&url),
+        "POST" => client.post(&url),
+        "PUT" => client.put(&url),
+        "DELETE" => client.delete(&url),
+        m => return Err(format!("Unsupported method: {}", m)),
+    };
+
+    for (k, v) in &headers {
+        request = request.header(k, v);
+    }
+    if let Some(body) = body {
+        request = request.body(body);
+    }
+
+    let resp = request.send().await.map_err(|e| {
+        let msg = format!("Relay request failed: {}", e);
+        println!("[Relay] ERROR {}", msg);
+        msg
+    })?;
+    let status = resp.status().as_u16();
+    let mut resp_headers = HashMap::new();
+    for (k, v) in resp.headers() {
+        if let Ok(vs) = v.to_str() {
+            resp_headers.insert(k.to_string(), vs.to_string());
+        }
+    }
+    let body = resp.text().await.map_err(|e| {
+        let msg = format!("Relay body read failed: {}", e);
+        println!("[Relay] ERROR {}", msg);
+        msg
+    })?;
+    println!("[Relay] -> HTTP {} ({} bytes)", status, body.len());
+
+    Ok(HttpRelayResponse { status, headers: resp_headers, body })
+}
+
+/// Events emitted by `http_relay_stream` over its IPC channel.
+#[derive(Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum RelayStreamEvent {
+    #[serde(rename = "status")]
+    Status {
+        status: u16,
+        headers: HashMap<String, String>,
+    },
+    /// Base64-encoded raw bytes (base64 keeps multi-byte UTF-8 sequences that
+    /// may be split across chunk boundaries intact).
+    #[serde(rename = "chunk")]
+    Chunk { data: String },
+    #[serde(rename = "end")]
+    End,
+    #[serde(rename = "error")]
+    Error { message: String },
+}
+
+/// Streaming variant of `http_relay`: forwards response bytes over a Tauri
+/// channel AS THEY ARRIVE, so the webview sees a live stream (SSE deltas reach
+/// the chat immediately instead of after the full body buffers — a buffered
+/// relay trips the chat's 90s no-first-byte watchdog on long generations).
+#[tauri::command]
+pub async fn http_relay_stream(
+    url: String,
+    method: String,
+    headers: HashMap<String, String>,
+    body: Option<String>,
+    channel: tauri::ipc::Channel<RelayStreamEvent>,
+) -> Result<(), String> {
+    use base64::engine::general_purpose::STANDARD as B64;
+    use futures_util::StreamExt;
+
+    if !url.starts_with("https://") {
+        return Err("http_relay_stream only allows https:// URLs".to_string());
+    }
+    println!(
+        "[Relay] {} {} (stream)",
+        method.to_uppercase(),
+        url.split('?').next().unwrap_or(&url)
+    );
+
+    // No total timeout: a live stream can legitimately run for minutes. The
+    // webview side idle-aborts stalled streams (streamOnce watchdog).
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut request = match method.to_uppercase().as_str() {
+        "GET" => client.get(&url),
+        "POST" => client.post(&url),
+        "PUT" => client.put(&url),
+        "DELETE" => client.delete(&url),
+        m => return Err(format!("Unsupported method: {}", m)),
+    };
+    for (k, v) in &headers {
+        request = request.header(k, v);
+    }
+    if let Some(body) = body {
+        request = request.body(body);
+    }
+
+    let resp = match request.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = format!("Relay request failed: {}", e);
+            println!("[Relay] ERROR {}", msg);
+            let _ = channel.send(RelayStreamEvent::Error { message: msg.clone() });
+            return Err(msg);
+        }
+    };
+
+    let status = resp.status().as_u16();
+    let mut resp_headers = HashMap::new();
+    for (k, v) in resp.headers() {
+        if let Ok(vs) = v.to_str() {
+            resp_headers.insert(k.to_string(), vs.to_string());
+        }
+    }
+    let _ = channel.send(RelayStreamEvent::Status { status, headers: resp_headers });
+
+    let mut total: usize = 0;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => {
+                total += bytes.len();
+                let _ = channel.send(RelayStreamEvent::Chunk { data: B64.encode(&bytes) });
+            }
+            Err(e) => {
+                let msg = format!("Relay stream failed after {} bytes: {}", total, e);
+                println!("[Relay] ERROR {}", msg);
+                let _ = channel.send(RelayStreamEvent::Error { message: msg });
+                return Ok(()); // error delivered in-band; webview surfaces it
+            }
+        }
+    }
+    let _ = channel.send(RelayStreamEvent::End);
+    println!("[Relay] -> HTTP {} (streamed {} bytes)", status, total);
+    Ok(())
+}

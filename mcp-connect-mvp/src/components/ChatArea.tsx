@@ -194,7 +194,7 @@ const PROVIDER_META: ProviderMeta[] = [
   },
   {
     id: 'nvidia-router',
-    label: 'NVIDIA Router',
+    label: 'NVIDIA NIM',
     shortLabel: 'NVIDIA',
     color: '#76b900',
     models: NVIDIA_MODELS,

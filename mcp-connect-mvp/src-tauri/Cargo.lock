@@ -1745,6 +1745,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "flate2",
+ "futures-util",
  "rand 0.8.5",
  "reqwest",
  "serde",

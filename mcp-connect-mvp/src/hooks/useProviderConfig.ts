@@ -807,8 +807,8 @@ export function useProviderConfig() {
     },
     {
       id: 'nvidia-router',
-      name: 'NVIDIA Router',
-      description: 'NVIDIA NIM / local router (OpenAI-compatible)',
+      name: 'NVIDIA NIM',
+      description: 'NVIDIA NIM hosted API (integrate.api.nvidia.com) — Nemotron, Kimi, DeepSeek, Qwen and more',
       status: nvidiaKey ? 'active' as const : 'inactive' as const,
       activeAuthMethod: nvidiaKey ? 'api_key' : undefined,
       config: { apiKey: nvidiaKey },
