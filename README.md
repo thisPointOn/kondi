@@ -8,13 +8,15 @@ Kondi assembles councils of AI agents — each with distinct roles, personalitie
 
 Built on Tauri (Rust + React). Runs locally. Keys never leave your machine.
 
+> **💡 Try it for $0** — Kondi has first-class support for [NVIDIA NIM](https://build.nvidia.com), which currently gives away free developer credits for frontier open models (DeepSeek V4 Pro, GLM 5.2, Nemotron 3 Ultra 550B). One free API key — no credit card — runs an entire council: Nemotron plans, GLM codes, DeepSeek reviews. See [Run a council for free](#run-a-council-for-free-nvidia-nim).
+
 ---
 
 ## Why Kondi
 
 Most AI tools give you a single model behind a chat box. Kondi gives you a **boardroom**.
 
-- **Multi-model councils** — Put Claude, GPT, Gemini, DeepSeek, and Grok in the same deliberation. Each persona uses whatever model fits its role. A security-focused consultant on Claude Opus, a cost-optimized worker on Haiku, a creative wildcard on GPT-5.2 — all in the same workflow.
+- **Multi-model councils** — Put Claude, GPT, Gemini, DeepSeek, GLM, Nemotron, and Grok in the same deliberation. Each persona uses whatever model fits its role. A security-focused consultant on Claude Opus, a cost-optimized worker on Haiku, a creative wildcard on GPT-5.5 — all in the same workflow.
 
 - **Structured deliberation, not just chat** — Seven council modes (deliberation, debate, build, review, synthesis, socratic, freeform) with deterministic orchestration. The deliberation mode runs a full state machine: problem framing, independent analysis, interactive rounds, decision, directive, execution, and review. Every step is auditable.
 
@@ -30,7 +32,7 @@ Most AI tools give you a single model behind a chat box. Kondi gives you a **boa
 
 | Feature | What It Does |
 |---------|-------------|
-| [Multi-Provider LLM Support](#multi-provider-llm-support) | 8 providers, 30+ models, CLI and API paths |
+| [Multi-Provider LLM Support](#multi-provider-llm-support) | 9 providers, 40+ models, CLI and API paths |
 | [Chat](#chat) | Multi-chat with file attachments, tool calling, per-chat working directories |
 | [MCP Server Integration](#mcp-server-integration) | Connect any MCP server — remote, local, or from the built-in library |
 | [Built-in Platform Servers](#built-in-platform-servers) | 9 servers with 120+ tools for social media, Git, and more |
@@ -46,18 +48,31 @@ Most AI tools give you a single model behind a chat box. Kondi gives you a **boa
 
 ## Multi-Provider LLM Support
 
-Each persona in a council can use a different provider and model. Eight providers with two access paths:
+Each persona in a council can use a different provider and model. Nine providers with two access paths:
 
 | Provider | CLI (Subscription) | API (Key) |
 |----------|-------------------|-----------|
 | **Anthropic** | Opus 4.6, Sonnet 4.5, Haiku 4.5, Opus 4.5, Sonnet 4 | Sonnet 4.5, Haiku 4.5, Sonnet 4 |
-| **OpenAI** | GPT-5.3 Codex, GPT-5.2 Codex, GPT-5.1 Codex Max/Mini | GPT-4o, GPT-4o Mini, GPT-4 Turbo, o1 Preview/Mini |
-| **DeepSeek** | -- | R1 (reasoning), Chat |
-| **Google** | Gemini CLI | Gemini 2.0 Flash, Gemini 1.5 Pro/Flash |
-| **xAI** | -- | Grok-2, Grok-2 Mini |
+| **OpenAI** | GPT-5.5, GPT-5.5 Pro, GPT-5.4 / Mini / Nano, GPT-5.3 Codex, GPT-5.2 Codex | GPT-5.4 / Mini / Nano, GPT-4o, o1 |
+| **DeepSeek** | -- | V4 Pro (reasoning), V4 Flash |
+| **Google** | Gemini CLI | Gemini 2.5 Pro/Flash, 2.0 Flash |
+| **xAI** | -- | Grok 3, Grok 3 Fast, Grok 3 Mini |
+| **Z.AI** | -- | GLM 5.1, GLM 4.6, GLM 4.5 Flash/Air |
+| **NVIDIA NIM** | -- | Nemotron 3 Ultra 550B / Super 120B / Nano 30B, DeepSeek V4 Pro, GLM 5.2, GPT-OSS 120B — **free developer credits** |
 | **Ollama** | -- | Any locally-running model (auto-discovered) |
 
 CLI providers spawn the locally installed binary (`claude --print`, `codex exec`) as a subprocess and use your existing subscription — no API key needed. OAuth tokens from CLI tools only work through their own binaries (server-side client attestation), so the app proxies through them rather than calling the API directly. Multi-turn chat sessions use `--resume` (Claude) / `resume --last` (Codex) to maintain conversation state without resending history. The app auto-detects installed CLIs at startup and validates connectivity. Ollama models are discovered automatically when the Ollama server is running.
+
+### Run a council for free (NVIDIA NIM)
+
+NVIDIA's [build.nvidia.com](https://build.nvidia.com) gives developers **free API credits** for hosted frontier open models — no credit card, key in about two minutes. Kondi ships a curated NIM catalog (every model verified with real streaming completions, because NIM's `/models` list advertises some that don't work) and a built-in `nvidia` routing profile that runs a full multi-model council on that single free key:
+
+- **Nemotron 3 Ultra 550B** plans and makes decisions
+- **GLM 5.2** writes the code
+- **DeepSeek V4 Pro** reviews it
+- **Nemotron 3 Nano 30B** handles compression and housekeeping
+
+Paste your `nvapi-*` key in Settings → Providers → NVIDIA NIM, then pick **Smart Routing: nvidia** (`route:nvidia`) anywhere a model can be selected. NIM's API doesn't allow browser calls (no CORS), so Kondi relays requests through its Rust backend with live token streaming intact.
 
 ## Chat
 
