@@ -739,9 +739,39 @@ const ChatArea: FC<ChatAreaProps> = ({
     (p) => p.id === 'router' || configuredProviders[p.id as keyof typeof configuredProviders]
   );
 
+  // Stick-to-bottom autoscroll: only follow new content while the user is
+  // already at (near) the bottom. Scrolling up detaches; scrolling back down
+  // (or sending a message, or switching chats) re-attaches — so streaming
+  // output never yanks the view away from something the user is reading.
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+  const prevMsgCountRef = useRef(0);
+
+  const handleMessagesScroll = () => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Sending your own message always re-attaches and jumps down.
+    const last = messages[messages.length - 1];
+    if (messages.length > prevMsgCountRef.current && last?.role === 'user') {
+      stickToBottomRef.current = true;
+    }
+    prevMsgCountRef.current = messages.length;
+
+    if (stickToBottomRef.current) {
+      // 'auto' during streaming — repeated smooth scrolls fight each other.
+      bottomRef.current?.scrollIntoView({ behavior: sending ? 'auto' : 'smooth' });
+    }
   }, [messages, sending]);
+
+  // Switching chats starts at the bottom of the new chat.
+  useEffect(() => {
+    stickToBottomRef.current = true;
+    bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+  }, [chatId]);
 
   // Scroll the chat to a specific message (fired when a completed task is clicked).
   useEffect(() => {
@@ -1619,7 +1649,7 @@ const ChatArea: FC<ChatAreaProps> = ({
         } : undefined}
       />}
 
-      <div className="messages-container">
+      <div className="messages-container" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
         {messages.map((message) => (
           <MessageRow key={message.id} message={message} servers={servers} onRetry={handleRetry} />
         ))}
