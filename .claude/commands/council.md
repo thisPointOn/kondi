@@ -10,8 +10,8 @@ You have access to the Kondi multi-LLM council system. It runs structured multi-
 
 ## Absolute Paths
 
-- **CLI:** `/home/erik/Documents/MCP_Connector_App/mcp-connect-mvp/cli/run-council.ts`
-- **Configs:** `/home/erik/Documents/MCP_Connector_App/mcp-connect-mvp/configs/councils/`
+- **CLI:** `mcp-connect-mvp/cli/run-council.ts`
+- **Configs:** `mcp-connect-mvp/configs/councils/`
 
 ## Available Configs
 
@@ -36,8 +36,8 @@ If unclear, default to **analysis.json** for review tasks or **debate.json** for
 **IMPORTANT:** Always use absolute paths. The working directory should be the project the user wants analyzed, NOT the Kondi repo.
 
 ```bash
-npx tsx /home/erik/Documents/MCP_Connector_App/mcp-connect-mvp/cli/run-council.ts \
-  --config /home/erik/Documents/MCP_Connector_App/mcp-connect-mvp/configs/councils/<config>.json \
+npx tsx mcp-connect-mvp/cli/run-council.ts \
+  --config mcp-connect-mvp/configs/councils/<config>.json \
   --task "The task description" \
   --working-dir <absolute-path-to-target-project> \
   --output full

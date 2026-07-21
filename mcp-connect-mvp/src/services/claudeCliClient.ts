@@ -99,7 +99,7 @@ export function clearCliSession(chatId: string): void {
  * which get loaded as context in subsequent sessions. For councils, this
  * causes cross-contamination between independent deliberations.
  *
- * Path key format: /home/erik/Documents/foo → -home-erik-Documents-foo
+ * Path key format: /home/user/Documents/foo → -home-erik-Documents-foo
  */
 async function clearProjectSessions(workingDirectory: string): Promise<void> {
   try {
