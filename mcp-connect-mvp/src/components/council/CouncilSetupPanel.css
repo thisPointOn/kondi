@@ -79,6 +79,54 @@
 
 .cs-empty { font-size: 13px; color: #6b7280; padding: 8px 2px; }
 
+/* Pipeline steps section (shown when this council belongs to a pipeline) */
+.cs-steps { display: flex; flex-direction: column; gap: 4px; }
+.cs-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  background: var(--bg-tertiary, #1e1e2a);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  min-width: 0;
+}
+.cs-step.current {
+  border-color: rgba(99, 102, 241, 0.5);
+  background: rgba(99, 102, 241, 0.08);
+}
+.cs-step-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: #6b7280; }
+.cs-step-dot.running { background: #f59e0b; }
+.cs-step-dot.completed { background: #16a34a; }
+.cs-step-dot.failed { background: #ef4444; }
+.cs-step-dot.waiting_approval { background: #8b5cf6; }
+.cs-step-dot.skipped { background: #4b5563; }
+.cs-step-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-primary, #e4e4e7);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cs-step-this {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.18);
+  color: #a5b4fc;
+}
+.cs-step-personas { flex-shrink: 0; font-size: 11px; color: #94a3b8; }
+.cs-step-status { flex-shrink: 0; font-size: 11px; color: #6b7280; text-transform: capitalize; }
+
+.light-theme .cs-step { background: #f8fafc; border-color: #e2e8f0; }
+.light-theme .cs-step.current { background: rgba(99, 102, 241, 0.08); border-color: rgba(99, 102, 241, 0.5); }
+.light-theme .cs-step-name { color: #1e293b; }
+
 .light-theme .council-setup-panel { background: #ffffff; border-left-color: #e2e8f0; }
 .light-theme .cs-header, .light-theme .cs-name, .light-theme .cs-persona-name { color: #1e293b; }
 .light-theme .cs-persona { background: #f8fafc; border-color: #e2e8f0; }
