@@ -294,6 +294,17 @@ Legacy `LlmStepConfig` (flat `model/provider/systemPrompt`) is auto-migrated to 
 
 Input template variables: `{{input}}` (all previous artifacts), `{{input[N]}}` (specific artifact by index), `{{file}}` (all output file paths), `{{file[N]}}` (specific file path).
 
+### 5c. Builder UI: List vs. Graph View
+
+`PipelineBuilder.tsx` has a **List | Graph** toggle in its header (`builder-view-toggle`); the choice persists to `kondi-pipeline-builder-view` (`'list'` default, or `'graph'`). List is the structural editor (add/remove stages and steps). Graph (`components/pipeline/PipelineGraphView.tsx` + `.css`) is a **read-only** node-graph projection of the same pipeline, rendered alongside it:
+
+- Stages render as vertical layers; steps render as clickable nodes (click opens the existing `StepConfigPanel`, same as List).
+- Edges: an initial-input pseudo-node feeds stage 1; stage-to-stage flow edges connect every step in a stage to the next stage's entry step(s); a sibling "chain" arrow links steps within a sequential stage in execution order.
+- Condition-step actions (§5a-4) are drawn as real edges, not just labels: `loop_to_stage` is an amber dashed back-edge on a left lane, labeled with the loop budget (e.g. `T · loop ≤3`); `skip_next_stage` is a dotted bypass edge on a right lane; `stop` (and a `loop_to_stage`/`skip_next_stage` with no valid target) render as a red badge under the node instead of an edge.
+- Node left-border color reflects the step's `status`.
+
+Graph reuses `getStepIcon()`/`getStepSummary()`, exported from `StageRow.tsx` (previously module-private) for node labels. Both views are exported from `components/pipeline/index.ts`. No pipeline types, executor, or store changes — purely an additive UI projection.
+
 ---
 
 ## 6. MCP Integration
@@ -413,6 +424,7 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 | `kondi-catalog-sync` | services/modelCatalogSync.ts | Last live `/models` reconciliation per API provider (advisory drift report) |
 | `kondi-council-store-dir` | council/storage-cleanup.ts | User override for the on-disk council store directory (empty = `<dataDir>/council-store`) |
 | `kondi-codex-no-sandbox` | services/codexCliClient.ts | Opt-in: run Codex with `--dangerously-bypass-approvals-and-sandbox` instead of `--sandbox workspace-write` |
+| `kondi-pipeline-builder-view` | components/pipeline/PipelineBuilder.tsx | PipelineBuilder List/Graph view toggle (`'list'` \| `'graph'`; default `'list'`) |
 | `context-{councilId}` | council/context-store.ts | Current ContextArtifact |
 | `context-history-{councilId}` | council/context-store.ts | ContextArtifact[] (all versions) |
 | `context-patches-{councilId}` | council/context-store.ts | ContextPatch[] |

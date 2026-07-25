@@ -8,8 +8,12 @@ import type { Pipeline, PipelineStep, StepConfig, PipelineSchedule } from '../..
 import { pipelineStore } from '../../pipeline/store';
 import { buildScheduledOutputDir } from '../../pipeline/scheduler';
 import StageRow from './StageRow';
+import PipelineGraphView from './PipelineGraphView';
 import StepConfigPanel, { getDefaultConfigForType } from './StepConfigPanel';
 import './PipelineBuilder.css';
+
+type BuilderViewMode = 'list' | 'graph';
+const VIEW_MODE_KEY = 'kondi-pipeline-builder-view';
 
 export interface ConnectedServerInfo {
   id: string;
@@ -37,6 +41,18 @@ export default function PipelineBuilder({
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [confirmingReset, setConfirmingReset] = useState(false);
+  const [viewMode, setViewMode] = useState<BuilderViewMode>(() =>
+    localStorage.getItem(VIEW_MODE_KEY) === 'graph' ? 'graph' : 'list'
+  );
+
+  const changeViewMode = (mode: BuilderViewMode) => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, mode);
+    } catch {
+      // best-effort persistence
+    }
+  };
 
   useEffect(() => {
     const load = () => setPipeline(pipelineStore.get(pipelineId));
@@ -115,7 +131,7 @@ export default function PipelineBuilder({
   };
 
   const handleAddStep = (stageId: string) => {
-    const defaultConfig = getDefaultConfigForType('execution', configuredProviders);
+    const defaultConfig = getDefaultConfigForType('agent', configuredProviders);
     pipelineStore.addStep(pipelineId, stageId, defaultConfig, 'New Step');
   };
 
@@ -165,6 +181,22 @@ export default function PipelineBuilder({
             />
           </div>
           <div className="builder-header-actions">
+            <div className="builder-view-toggle" role="group" aria-label="Builder view">
+              <button
+                className={`view-toggle-btn ${viewMode === 'list' ? 'active' : ''}`}
+                onClick={() => changeViewMode('list')}
+                title="Edit stages and steps as a list"
+              >
+                List
+              </button>
+              <button
+                className={`view-toggle-btn ${viewMode === 'graph' ? 'active' : ''}`}
+                onClick={() => changeViewMode('graph')}
+                title="View the pipeline as a node graph"
+              >
+                Graph
+              </button>
+            </div>
             {isRunning && (
               <button
                 className="builder-running-btn"
@@ -289,29 +321,37 @@ export default function PipelineBuilder({
         </div>
 
         {/* Stages */}
-        <div className="pipeline-stages">
-          {pipeline.stages.map((stage, idx) => (
-            <div key={stage.id}>
-              {idx > 0 && <div className="stage-connector">&darr;</div>}
-              <StageRow
-                stage={stage}
-                stageIndex={idx}
-                selectedStepId={selectedStepId}
-                onStepSelect={setSelectedStepId}
-                onStageName={(name) => handleStageName(stage.id, name)}
-                onAddStep={() => handleAddStep(stage.id)}
-                onRemoveStage={() => handleRemoveStage(stage.id)}
-                onExecutionModeChange={(mode) =>
-                  pipelineStore.updateStage(pipelineId, stage.id, { executionMode: mode })
-                }
-              />
-            </div>
-          ))}
+        {viewMode === 'graph' ? (
+          <PipelineGraphView
+            pipeline={pipeline}
+            selectedStepId={selectedStepId}
+            onStepSelect={setSelectedStepId}
+          />
+        ) : (
+          <div className="pipeline-stages">
+            {pipeline.stages.map((stage, idx) => (
+              <div key={stage.id}>
+                {idx > 0 && <div className="stage-connector">&darr;</div>}
+                <StageRow
+                  stage={stage}
+                  stageIndex={idx}
+                  selectedStepId={selectedStepId}
+                  onStepSelect={setSelectedStepId}
+                  onStageName={(name) => handleStageName(stage.id, name)}
+                  onAddStep={() => handleAddStep(stage.id)}
+                  onRemoveStage={() => handleRemoveStage(stage.id)}
+                  onExecutionModeChange={(mode) =>
+                    pipelineStore.updateStage(pipelineId, stage.id, { executionMode: mode })
+                  }
+                />
+              </div>
+            ))}
 
-          <button className="add-stage-btn" onClick={handleAddStage}>
-            + Add Stage
-          </button>
-        </div>
+            <button className="add-stage-btn" onClick={handleAddStage}>
+              + Add Stage
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Config Panel */}

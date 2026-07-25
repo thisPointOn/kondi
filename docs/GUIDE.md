@@ -684,6 +684,10 @@ For file/code-writing tasks, give the worker a **tool-capable provider** (`anthr
 7. **Set output types** — string, file, directory, or json.
 8. **Save** the pipeline.
 
+#### List vs. Graph View
+
+The builder header has a **List | Graph** toggle (your choice is remembered). **List** is where you add, remove, and reorder stages/steps. **Graph** shows the same pipeline as a node diagram — stages as columns of nodes, arrows showing how output flows from stage to stage, and (for condition steps) the branch a `loop_to_stage` or `skip_next_stage` action takes. Click any node in Graph view to open its step config, same as clicking a step in List view. Graph is view-only — you still add/remove stages and steps in List view.
+
 ### Artifact Flow
 
 Steps produce **artifacts** — the output of each step. Artifacts flow to downstream steps via **template variables**:

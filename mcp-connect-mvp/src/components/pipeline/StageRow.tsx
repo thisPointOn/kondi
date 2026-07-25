@@ -17,7 +17,7 @@ interface StageRowProps {
   readOnly?: boolean;
 }
 
-function getStepIcon(type: StepConfig['type']): string {
+export function getStepIcon(type: StepConfig['type']): string {
   switch (type) {
     case 'council': return '\uD83C\uDFDB\uFE0F';
     case 'code_planning': return '\uD83D\uDCCB';
@@ -33,7 +33,7 @@ function getStepIcon(type: StepConfig['type']): string {
   }
 }
 
-function getStepSummary(step: PipelineStep): string {
+export function getStepSummary(step: PipelineStep): string {
   if (isCouncilType(step.config.type)) {
     // All non-gate types now use CouncilStepConfig with councilSetup
     const c = step.config as { councilSetup?: { personas: unknown[] } };

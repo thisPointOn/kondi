@@ -139,6 +139,26 @@ function migrateV4toV5(data: StorageData): StorageData {
   return data;
 }
 
+/**
+ * Drop steps persisted with no config. A former bug in "+ Add Step" requested
+ * defaults for the retired 'execution' type, storing `config: undefined` —
+ * such steps crash the builder on render and carry no user-authored content.
+ */
+function repairBrokenSteps(data: StorageData): StorageData {
+  let dropped = 0;
+  for (const pipeline of data.pipelines) {
+    for (const stage of pipeline.stages) {
+      const before = stage.steps.length;
+      stage.steps = stage.steps.filter((step) => step.config && (step.config as { type?: string }).type);
+      dropped += before - stage.steps.length;
+    }
+  }
+  if (dropped > 0) {
+    console.warn(`[PipelineStore] Dropped ${dropped} step(s) with missing config (add-step bug artifact)`);
+  }
+  return data;
+}
+
 function loadFromStorage(): StorageData {
   try {
     const raw = councilDataStore.getItem(STORAGE_KEY);
@@ -146,6 +166,7 @@ function loadFromStorage(): StorageData {
       return { version: 5, pipelines: [], lastUpdated: new Date().toISOString() };
     }
     let data = JSON.parse(raw) as StorageData;
+    data = repairBrokenSteps(data);
     data = migrateV1toV2(data);
     data = migrateV2toV3(data);
     data = migrateV3toV4(data);
