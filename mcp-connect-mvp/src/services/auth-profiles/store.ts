@@ -11,11 +11,11 @@ function createEmptyStore(): AuthProfileStoreData {
     version: 1,
     profiles: {},
     order: {
-      anthropic: [], openai: [], deepseek: [], xai: [], zai: [],
+      anthropic: [], openai: [], deepseek: [], xai: [], zai: [], moonshot: [],
       'nvidia-router': [], google: [], ollama: [],
     },
     lastGood: {
-      anthropic: null, openai: null, deepseek: null, xai: null, zai: null,
+      anthropic: null, openai: null, deepseek: null, xai: null, zai: null, moonshot: null,
       'nvidia-router': null, google: null, ollama: null,
     },
     usageStats: {},

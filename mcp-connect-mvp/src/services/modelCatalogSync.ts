@@ -23,7 +23,7 @@ import type { ModelProvider } from '../config/models';
 import { ALL_MODELS } from '../config/models';
 import { anthropicClient } from './anthropicClient';
 import { openaiClient } from './openaiClient';
-import { deepseekClient, xaiClient, zaiClient, nvidiaRouterClient, ollamaClient } from './openaiCompatibleClient';
+import { deepseekClient, xaiClient, zaiClient, moonshotClient, nvidiaRouterClient, ollamaClient } from './openaiCompatibleClient';
 import { resolveApiKey, PROFILE_IDS } from './auth-profiles';
 
 export interface CatalogDiff {
@@ -53,6 +53,7 @@ export const DISCOVERY_PROVIDERS: ModelProvider[] = [
   'deepseek',
   'xai',
   'zai',
+  'moonshot',
   'nvidia-router',
   'ollama',
 ];
@@ -80,6 +81,8 @@ async function fetchLiveModels(provider: ModelProvider): Promise<string[]> {
       return deepseekClient.listModels();
     case 'xai':
       return xaiClient.listModels();
+    case 'moonshot':
+      return moonshotClient.listModels();
     case 'zai':
       return zaiClient.listModels();
     case 'nvidia-router':

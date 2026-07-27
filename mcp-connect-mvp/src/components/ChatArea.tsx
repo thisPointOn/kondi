@@ -22,6 +22,7 @@ import {
   GOOGLE_MODELS,
   XAI_MODELS,
   ZAI_MODELS,
+  MOONSHOT_MODELS,
   NVIDIA_MODELS,
   OLLAMA_MODELS,
   getModelById,
@@ -191,6 +192,13 @@ const PROVIDER_META: ProviderMeta[] = [
     shortLabel: 'GLM',
     color: '#0ea5e9',
     models: ZAI_MODELS,
+  },
+  {
+    id: 'moonshot',
+    label: 'Moonshot (Kimi)',
+    shortLabel: 'Kimi',
+    color: '#e0457b',
+    models: MOONSHOT_MODELS,
   },
   {
     id: 'nvidia-router',
@@ -1176,7 +1184,7 @@ const ChatArea: FC<ChatAreaProps> = ({
   // ── Task runner: run queued tasks sequentially as chat turns ──
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
-  const runTaskRef = useRef<(text: string, base: Message[]) => Promise<Message[]>>();
+  const runTaskRef = useRef<((text: string, base: Message[]) => Promise<Message[]>) | undefined>(undefined);
   runTaskRef.current = async (text: string, base: Message[]): Promise<Message[]> => {
     const targetChatId = chatId;
     const wd = chatWorkingDir || localToolsService.getWorkingDirectory() || globalWorkingDirectory || undefined;

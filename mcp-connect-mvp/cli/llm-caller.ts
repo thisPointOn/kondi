@@ -38,6 +38,7 @@ function getApiKey(provider: string): string | undefined {
     case 'deepseek': return process.env.DEEPSEEK_API_KEY;
     case 'xai': return process.env.XAI_API_KEY;
     case 'zai': return process.env.ZAI_API_KEY;
+    case 'moonshot': return process.env.MOONSHOT_API_KEY;
     case 'nvidia-router': return process.env.NVIDIA_API_KEY;
     case 'google': return process.env.GOOGLE_API_KEY;
     default: return undefined;
@@ -53,6 +54,7 @@ const DEFAULT_MODELS: Record<string, string> = {
   'google': 'models/gemini-2.5-flash',
   'xai': 'grok-3',
   'zai': 'glm-4.6',
+  'moonshot': 'kimi-k2.6',
   'nvidia-router': 'nvidia/nemotron-3-super-120b-a12b',
   'ollama': 'llama3.1',
 };
@@ -65,6 +67,7 @@ function cliConfiguredProviders(): Set<ModelProvider> {
   if (process.env.DEEPSEEK_API_KEY) s.add('deepseek');
   if (process.env.XAI_API_KEY) s.add('xai');
   if (process.env.ZAI_API_KEY) s.add('zai');
+  if (process.env.MOONSHOT_API_KEY) s.add('moonshot');
   if (process.env.GOOGLE_API_KEY) s.add('google');
   if (process.env.NVIDIA_API_KEY) s.add('nvidia-router');
   return s;
@@ -303,6 +306,9 @@ export async function callLLM(opts: CallLLMOpts): Promise<CallerResult> {
   }
   if (provider === 'zai') {
     return callOpenAICompatible('https://api.z.ai/api/coding/paas/v4', apiKey, model, opts.systemPrompt, opts.userMessage);
+  }
+  if (provider === 'moonshot') {
+    return callOpenAICompatible('https://api.moonshot.ai/v1', apiKey, model, opts.systemPrompt, opts.userMessage);
   }
   if (provider === 'nvidia-router') {
     return callOpenAICompatible(process.env.NVIDIA_ROUTER_URL || 'https://integrate.api.nvidia.com/v1', apiKey, model, opts.systemPrompt, opts.userMessage);

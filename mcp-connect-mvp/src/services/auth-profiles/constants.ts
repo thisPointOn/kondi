@@ -45,6 +45,7 @@ export const PROFILE_IDS = {
   deepseekApiKey: 'deepseek:api-key',
   xaiApiKey: 'xai:api-key',
   zaiApiKey: 'zai:api-key',
+  moonshotApiKey: 'moonshot:api-key',
   nvidiaApiKey: 'nvidia-router:api-key',
   googleOAuth: 'google:oauth',
   googleApiKey: 'google:api-key',

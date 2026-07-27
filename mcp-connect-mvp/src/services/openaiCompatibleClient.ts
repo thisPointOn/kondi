@@ -157,6 +157,7 @@ export class OpenAICompatibleClient {
       'deepseek': PROFILE_IDS.deepseekApiKey,
       'xai': PROFILE_IDS.xaiApiKey,
       'zai': PROFILE_IDS.zaiApiKey,
+      'moonshot': PROFILE_IDS.moonshotApiKey,
       'nvidia-router': PROFILE_IDS.nvidiaApiKey,
       'google-api': PROFILE_IDS.googleApiKey,
     };
@@ -545,6 +546,14 @@ export const zaiClient = new OpenAICompatibleClient({
   providerName: 'Z.AI',
   authProvider: 'zai',
   defaultModel: 'glm-4.6',
+});
+
+/** Moonshot AI (Kimi) — OpenAI-compatible; full CORS support, no relay needed */
+export const moonshotClient = new OpenAICompatibleClient({
+  baseURL: 'https://api.moonshot.ai/v1',
+  providerName: 'Moonshot (Kimi)',
+  authProvider: 'moonshot',
+  defaultModel: 'kimi-k2.6',
 });
 
 /**

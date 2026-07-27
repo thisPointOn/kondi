@@ -43,6 +43,7 @@ function getConfiguredProviders(): Set<ModelProvider> | undefined {
     if (has('deepseek')) s.add('deepseek');
     if (has('xai')) s.add('xai');
     if (has('zai')) s.add('zai');
+    if (has('moonshot')) s.add('moonshot');
     if (has('google')) s.add('google');
     if (has('nvidia-router')) s.add('nvidia-router');
     return s.size > 1 ? s : undefined;

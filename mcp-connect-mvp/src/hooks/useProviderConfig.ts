@@ -29,6 +29,7 @@ export type ConfiguredProviders = {
   deepseek: boolean;
   xai: boolean;
   zai: boolean;
+  moonshot: boolean;
   'nvidia-router': boolean;
   google: boolean;
   ollama: boolean;
@@ -66,6 +67,7 @@ export function useProviderConfig() {
   const [deepseekKey, setDeepseekKey] = useState('');
   const [xaiKey, setXaiKey] = useState('');
   const [zaiKey, setZaiKey] = useState('');
+  const [moonshotKey, setMoonshotKey] = useState('');
   const [nvidiaKey, setNvidiaKey] = useState('');
   const [ollamaAvailable, setOllamaAvailable] = useState(false);
 
@@ -153,6 +155,10 @@ export function useProviderConfig() {
     const zaiApiProfile = listProfiles('zai').find(p => p.credential.type === 'api_key');
     if (zaiApiProfile?.credential.type === 'api_key' && !zaiKey) {
       setZaiKey(zaiApiProfile.credential.key);
+    }
+    const moonshotApiProfile = listProfiles('moonshot').find(p => p.credential.type === 'api_key');
+    if (moonshotApiProfile?.credential.type === 'api_key' && !moonshotKey) {
+      setMoonshotKey(moonshotApiProfile.credential.key);
     }
     const nvidiaApiProfile = listProfiles('nvidia-router').find(p => p.credential.type === 'api_key');
     if (nvidiaApiProfile?.credential.type === 'api_key' && !nvidiaKey) {
@@ -275,7 +281,7 @@ export function useProviderConfig() {
     if (localStorage.getItem('kondi-provider-id')) return; // explicit user choice — respect it
     const avail: Array<[string, boolean]> = [
       ['google', googleHasOAuth], ['deepseek', !!deepseekKey], ['anthropic-api', !!anthropicKey],
-      ['openai-api', !!openaiKey], ['xai', !!xaiKey], ['zai', !!zaiKey], ['nvidia-router', !!nvidiaKey],
+      ['openai-api', !!openaiKey], ['xai', !!xaiKey], ['zai', !!zaiKey], ['moonshot', !!moonshotKey], ['nvidia-router', !!nvidiaKey],
       ['anthropic-cli', anthropicHasOAuth], ['openai-cli', openaiHasOAuth],
     ];
     const currentOk = avail.find(([id]) => id === selectedProviderId)?.[1];
@@ -319,6 +325,13 @@ export function useProviderConfig() {
       upsertProfile(PROFILE_IDS.zaiApiKey, 'zai', { type: 'api_key', key: zaiKey }, 'API Key');
     }
   }, [zaiKey, hasLoadedKeys]);
+
+  useEffect(() => {
+    if (!hasLoadedKeys) return;
+    if (moonshotKey) {
+      upsertProfile(PROFILE_IDS.moonshotApiKey, 'moonshot', { type: 'api_key', key: moonshotKey }, 'API Key');
+    }
+  }, [moonshotKey, hasLoadedKeys]);
 
   useEffect(() => {
     if (!hasLoadedKeys) return;
@@ -393,6 +406,8 @@ export function useProviderConfig() {
       setXaiKey(config.apiKey || '');
     } else if (providerId === 'zai' && config.apiKey !== undefined) {
       setZaiKey(config.apiKey || '');
+    } else if (providerId === 'moonshot' && config.apiKey !== undefined) {
+      setMoonshotKey(config.apiKey || '');
     } else if (providerId === 'nvidia-router' && config.apiKey !== undefined) {
       setNvidiaKey(config.apiKey || '');
     }
@@ -806,6 +821,15 @@ export function useProviderConfig() {
       models: getModelsForProviderSettings('zai'),
     },
     {
+      id: 'moonshot',
+      name: 'Moonshot (Kimi)',
+      description: 'Kimi K3, K2.7 Code, and K2.6 via api.moonshot.ai',
+      status: moonshotKey ? 'active' as const : 'inactive' as const,
+      activeAuthMethod: moonshotKey ? 'api_key' : undefined,
+      config: { apiKey: moonshotKey },
+      models: getModelsForProviderSettings('moonshot'),
+    },
+    {
       id: 'nvidia-router',
       name: 'NVIDIA NIM',
       description: 'NVIDIA NIM hosted API (integrate.api.nvidia.com) — Nemotron, Kimi, DeepSeek, Qwen and more',
@@ -871,6 +895,7 @@ export function useProviderConfig() {
     deepseek: !!deepseekKey,
     xai: !!xaiKey,
     zai: !!zaiKey,
+    moonshot: !!moonshotKey,
     'nvidia-router': !!nvidiaKey,
     google: googleHasOAuth,
     ollama: !!validationReport?.llmProviders.find(r => r.provider === 'Ollama' && (r.status === 'ok' || r.status === 'warning')),

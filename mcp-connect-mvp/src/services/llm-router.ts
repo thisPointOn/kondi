@@ -22,7 +22,8 @@ import { claudeCliChat } from './claudeCliClient';
 import { openaiClient } from './openaiClient';
 import { codexClient } from './codexClient';
 import { codexCliChat } from './codexCliClient';
-import { deepseekClient, xaiClient, ollamaClient, zaiClient, nvidiaRouterClient } from './openaiCompatibleClient';
+import { deepseekClient, xaiClient, ollamaClient, zaiClient,
+  moonshotClient, nvidiaRouterClient } from './openaiCompatibleClient';
 import { geminiClient } from './geminiClient';
 import { mcpClient } from './mcpClient';
 import { isRoutedModel, routeProfileName } from '../router/profile-options';
@@ -101,6 +102,7 @@ export const DEFAULT_MODELS: Record<string, string> = {
   'deepseek': 'deepseek-v4-pro',
   'xai': 'grok-3',
   'zai': 'glm-4.6',
+  'moonshot': 'kimi-k2.6',
   'nvidia-router': 'nvidia/nemotron-3-super-120b-a12b',
   'ollama': 'llama3.1',
 };
@@ -221,6 +223,10 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
 
   if (prov === 'zai') {
     return zaiClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
+  }
+
+  if (prov === 'moonshot') {
+    return moonshotClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
   }
 
   if (prov === 'nvidia-router') {

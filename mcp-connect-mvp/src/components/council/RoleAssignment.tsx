@@ -21,6 +21,7 @@ import {
   DEEPSEEK_MODELS,
   XAI_MODELS,
   ZAI_MODELS,
+  MOONSHOT_MODELS,
   GOOGLE_MODELS,
   NVIDIA_MODELS,
   OLLAMA_MODELS,
@@ -49,6 +50,7 @@ interface RoleAssignmentProps {
     deepseek: boolean;
     xai?: boolean;
     zai?: boolean;
+    moonshot?: boolean;
     'nvidia-router'?: boolean;
     google?: boolean;
     ollama?: boolean;
@@ -122,6 +124,7 @@ const ALL_MODELS: ModelOption[] = [
   ...DEEPSEEK_MODELS.map(toModelOption),
   ...XAI_MODELS.map(toModelOption),
   ...ZAI_MODELS.map(toModelOption),
+  ...MOONSHOT_MODELS.map(toModelOption),
   ...GOOGLE_MODELS.map(toModelOption),
   ...NVIDIA_MODELS.map(toModelOption),
   ...OLLAMA_MODELS.map(toModelOption),
@@ -137,6 +140,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   'xai': 'xAI (Grok)',
   'zai': 'Z.AI (GLM)',
   'google': 'Google Gemini',
+  'moonshot': 'Moonshot (Kimi)',
   'nvidia-router': 'NVIDIA NIM',
   'ollama': 'Ollama (Local)',
 };
@@ -152,12 +156,13 @@ const PROVIDER_SHORT_LABELS: Record<string, string> = {
   'xai': 'Grok',
   'zai': 'GLM',
   'google': 'Gemini',
+  'moonshot': 'Kimi',
   'nvidia-router': 'NVIDIA',
   'ollama': 'Ollama',
 };
 
 // Order for provider groups in dropdown
-const PROVIDER_ORDER = ['router', 'anthropic-cli', 'anthropic-api', 'openai-cli', 'openai-api', 'deepseek', 'xai', 'zai', 'google', 'nvidia-router', 'ollama'];
+const PROVIDER_ORDER = ['router', 'anthropic-cli', 'anthropic-api', 'openai-cli', 'openai-api', 'deepseek', 'xai', 'zai', 'moonshot', 'google', 'nvidia-router', 'ollama'];
 
 export default function RoleAssignment({
   council,

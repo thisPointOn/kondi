@@ -68,6 +68,7 @@ function getProviderDisplayName(provider: string): string {
     case 'xai': return 'xAI (Grok)';
     case 'zai': return 'Z.AI (GLM)';
     case 'google': return 'Google';
+    case 'moonshot': return 'Kimi';
     case 'nvidia-router': return 'NVIDIA';
     case 'ollama': return 'Ollama';
     default: return provider;

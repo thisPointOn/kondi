@@ -16,6 +16,7 @@ export type ModelProvider =
   | 'google'
   | 'xai'
   | 'zai'              // Z.AI (GLM family, OpenAI-compatible Coding Plan endpoint)
+  | 'moonshot'         // Moonshot AI (Kimi family, OpenAI-compatible api.moonshot.ai)
   | 'nvidia-router'    // NVIDIA NIM hosted API or local router (OpenAI-compatible)
   | 'ollama';
 
@@ -454,6 +455,51 @@ export const ZAI_MODELS: ModelDefinition[] = [
 ];
 
 // ============================================================================
+// Moonshot AI (Kimi) — OpenAI-compatible, https://api.moonshot.ai/v1
+// IDs per platform.kimi.ai docs 2026-07: kimi-k3 (1M ctx flagship),
+// kimi-k2.7-code (+highspeed), kimi-k2.6 (vision). moonshot-v1 sunsets 2026-08-31.
+// ============================================================================
+export const MOONSHOT_MODELS: ModelDefinition[] = [
+  {
+    id: 'kimi-k2.6',
+    name: 'Kimi K2.6',
+    provider: 'moonshot',
+    contextWindow: 262144,
+    capabilities: ['text', 'vision', 'code', 'reasoning'],
+    inputCostPer1K: 0.00095,
+    outputCostPer1K: 0.004,
+    costDisplay: '~$0.002/msg',
+    featured: true,
+    tier: 2,
+    routingCapabilities: ['coding', 'general', 'analysis'],
+  },
+  {
+    id: 'kimi-k2.7-code',
+    name: 'Kimi K2.7 Code',
+    provider: 'moonshot',
+    contextWindow: 262144,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0.00095,
+    outputCostPer1K: 0.004,
+    costDisplay: '~$0.002/msg',
+    tier: 2,
+    routingCapabilities: ['coding', 'fast-coding', 'code-review'],
+  },
+  {
+    id: 'kimi-k3',
+    name: 'Kimi K3',
+    provider: 'moonshot',
+    contextWindow: 1048576,
+    capabilities: ['text', 'code', 'reasoning'],
+    inputCostPer1K: 0.003,
+    outputCostPer1K: 0.015,
+    costDisplay: '~$0.008/msg',
+    tier: 1,
+    routingCapabilities: ['planning', 'reasoning', 'architecture', 'analysis'],
+  },
+];
+
+// ============================================================================
 // NVIDIA NIM (hosted at integrate.api.nvidia.com; override via NVIDIA_ROUTER_URL
 // for a local NIM/router). Curated "best of" subset of the live /models list —
 // IDs verified against the live endpoint 2026-07. Costs are credit-based (no
@@ -704,6 +750,7 @@ export const ALL_MODELS: ModelDefinition[] = [
   ...GOOGLE_MODELS,
   ...XAI_MODELS,
   ...ZAI_MODELS,
+  ...MOONSHOT_MODELS,
   ...NVIDIA_MODELS,
   ...OLLAMA_MODELS,
 ];
@@ -752,8 +799,9 @@ export function getModelsForPersonaSelector(): Array<{
     'google': 5,
     'xai': 6,
     'zai': 7,
-    'nvidia-router': 8,
-    'ollama': 9,
+    'moonshot': 8,
+    'nvidia-router': 9,
+    'ollama': 10,
   };
 
   // NOTE: copy before sort — Array.sort mutates in place, and ALL_MODELS is the
