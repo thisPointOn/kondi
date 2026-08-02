@@ -61,7 +61,7 @@ If you have Claude Code, Codex, or Gemini CLI installed and authenticated:
 
 ### API Providers (Key-Based)
 
-For Anthropic API, OpenAI API, DeepSeek, xAI, Z.AI, NVIDIA NIM, or Google Gemini:
+For Anthropic API, OpenAI API, DeepSeek, xAI, Z.AI, Moonshot (Kimi), NVIDIA NIM, or Google Gemini:
 
 1. Click the provider card.
 2. Enter your API key in the field.

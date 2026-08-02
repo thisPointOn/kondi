@@ -32,7 +32,7 @@ Most AI tools give you a single model behind a chat box. Kondi gives you a **boa
 
 | Feature | What It Does |
 |---------|-------------|
-| [Multi-Provider LLM Support](#multi-provider-llm-support) | 9 providers, 40+ models, CLI and API paths |
+| [Multi-Provider LLM Support](#multi-provider-llm-support) | 10 providers, 40+ models, CLI and API paths |
 | [Chat](#chat) | Multi-chat with file attachments, tool calling, per-chat working directories |
 | [MCP Server Integration](#mcp-server-integration) | Connect any MCP server — remote, local, or from the built-in library |
 | [Built-in Platform Servers](#built-in-platform-servers) | 9 servers with 120+ tools for social media, Git, and more |
@@ -48,7 +48,7 @@ Most AI tools give you a single model behind a chat box. Kondi gives you a **boa
 
 ## Multi-Provider LLM Support
 
-Each persona in a council can use a different provider and model. Nine providers with two access paths:
+Each persona in a council can use a different provider and model. Ten providers with two access paths:
 
 | Provider | CLI (Subscription) | API (Key) |
 |----------|-------------------|-----------|
@@ -58,6 +58,7 @@ Each persona in a council can use a different provider and model. Nine providers
 | **Google** | Gemini CLI | Gemini 2.5 Pro/Flash, 2.0 Flash |
 | **xAI** | -- | Grok 3, Grok 3 Fast, Grok 3 Mini |
 | **Z.AI** | -- | GLM 5.1, GLM 4.6, GLM 4.5 Flash/Air |
+| **Moonshot (Kimi)** | -- | Kimi K2.6 (vision), Kimi K2.7 Code, Kimi K3 (1M context) |
 | **NVIDIA NIM** | -- | Nemotron 3 Ultra 550B / Super 120B / Nano 30B, DeepSeek V4 Pro, GLM 5.2, GPT-OSS 120B — **free developer credits** |
 | **Ollama** | -- | Any locally-running model (auto-discovered) |
 
@@ -406,6 +407,7 @@ Connect from the Services panel in the app.
 | **DeepSeek** | API key from [platform.deepseek.com](https://platform.deepseek.com/) |
 | **Google** | [Gemini CLI](https://ai.google.dev/gemini-api/docs/cli-tool) installed, or API key |
 | **xAI** | API key from [console.x.ai](https://console.x.ai/) |
+| **Moonshot (Kimi)** | API key from [platform.moonshot.ai](https://platform.moonshot.ai/) |
 | **Ollama** | [Ollama](https://ollama.com/) running locally on port 11434 |
 
 API keys are stored locally and only sent to the provider's own endpoint. CLI providers use the tool's existing authenticated session.

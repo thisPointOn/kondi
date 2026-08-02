@@ -84,17 +84,20 @@ docs/
 | `google` | API key | — | gemini-2.5-pro, gemini-2.5-flash |
 | `xai` | API key | — | grok-3, grok-3-mini |
 | `zai` | API key | — | glm-5.1, glm-4.6, glm-4.5-flash (Z.AI Coding Plan, OpenAI-compatible) |
+| `moonshot` | API key | — | Moonshot AI (Kimi) — `https://api.moonshot.ai/v1`; kimi-k2.6 (default, featured, vision), kimi-k2.7-code, kimi-k3 (1M ctx flagship) (OpenAI-compatible; full CORS, no relay needed) |
 | `nvidia-router` | API key | — | NVIDIA NIM — hosted at `https://integrate.api.nvidia.com/v1` by default; `nvidia/nemotron-3-super-120b-a12b` (default), `nvidia/nemotron-3-ultra-550b-a55b`, `deepseek-ai/deepseek-v4-pro`, `z-ai/glm-5.2`, `nvidia/llama-3.3-nemotron-super-49b-v1.5`, `openai/gpt-oss-120b`, `nvidia/nemotron-3-nano-30b-a3b` (OpenAI-compatible; base URL overridable via `VITE_NVIDIA_ROUTER_URL` / `NVIDIA_ROUTER_URL` for a local NIM/router deployment) |
 | `ollama` | Local | — | llama3.1, qwen2.5-coder, mistral |
 | `router` (pseudo) | — | — | Smart Routing profiles: model id `route:<profile>` (see §3a) |
 
-Legacy provider names (`anthropic`, `openai`) are resolved via `resolveProvider()` in `config/models.ts`. `zai`/`nvidia-router` dispatch through the shared `OpenAICompatibleClient` (`openaiCompatibleClient.ts`), like deepseek/xai/ollama.
+Legacy provider names (`anthropic`, `openai`) are resolved via `resolveProvider()` in `config/models.ts`. `zai`/`moonshot`/`nvidia-router` dispatch through the shared `OpenAICompatibleClient` (`openaiCompatibleClient.ts`), like deepseek/xai/ollama.
 
-Type: `ModelProvider = 'anthropic-api' | 'anthropic-cli' | 'openai-api' | 'openai-cli' | 'deepseek' | 'google' | 'xai' | 'zai' | 'nvidia-router' | 'ollama'`
+Type: `ModelProvider = 'anthropic-api' | 'anthropic-cli' | 'openai-api' | 'openai-cli' | 'deepseek' | 'google' | 'xai' | 'zai' | 'moonshot' | 'nvidia-router' | 'ollama'`
 
 `ModelDefinition` gained an optional `routingCapabilities?: string[]` field — richer capability tags (`planning`, `coding`, `fast-coding`, `code-review`, `summarization`, …) consumed by the Smart Router; the registry derives them from `capabilities` + `tier` when absent.
 
 `openai-cli` / `CODEX_MODELS` model IDs are kept current against the installed Codex binary (verified v0.139.0). `codex update` may bump the set; refresh `OPENAI_CLI_MODELS` (`config/models.ts`) and `CODEX_MODELS` (`codexClient.ts`) when it does. The stale `gpt-5.1`, `gpt-5.1-codex-max`, and `gpt-5.1-codex-mini` SKUs were removed from the catalog, the Codex client list, and the CLI→API fallback map; all council/pipeline defaults that pointed at `gpt-5.1-codex-max` (CouncilLibrary, StepConfigPanel, templates) now point at `gpt-5.5`.
+
+`MOONSHOT_MODELS` (`config/models.ts`) holds 3 models per the platform.kimi.ai docs (2026-07): `kimi-k2.6` (default, featured, vision), `kimi-k2.7-code` (+ highspeed coding), `kimi-k3` (1M-token-context flagship). The legacy `moonshot-v1` SKUs are not in the catalog and sunset 2026-08-31 per Moonshot's own deprecation notice. `moonshotClient` (`openaiCompatibleClient.ts`) hits `https://api.moonshot.ai/v1` directly — it has full CORS support, so unlike NVIDIA NIM it needs no `http_relay_stream` detour.
 
 `NVIDIA_MODELS` (`config/models.ts`) holds 7 curated models, verified live against `GET https://integrate.api.nvidia.com/v1/models` and tested through the app's real request shape (streaming, with and without tools): `nvidia/nemotron-3-super-120b-a12b` (default, featured), `nvidia/nemotron-3-ultra-550b-a55b` (featured), `deepseek-ai/deepseek-v4-pro`, `z-ai/glm-5.2`, `nvidia/llama-3.3-nemotron-super-49b-v1.5`, `openai/gpt-oss-120b`, `nvidia/nemotron-3-nano-30b-a3b`. All carry 0 cost rates + `costDisplay: 'NIM'` (NVIDIA API keys are credit-based, not per-token USD). Deliberately excluded despite appearing in the live `/models` list (verified broken 2026-07): `moonshotai/kimi-k2.6` (404 "Function not found"), `meta/llama-4-maverick-17b-128e-instruct` (request hangs), `qwen/qwen3.5-397b-a17b` (hangs on any real completion, streaming or non-streaming — tiny probes pass), `minimaxai/minimax-m3` (non-streaming works but streaming returns an instant "Internal server error", and chat always streams). Listed-but-broken is common on NIM: test STREAMING with real token counts before adding a model. The `nvidiaRouterClient` (`services/openaiCompatibleClient.ts`) and the CLI `nvidia-router` path (`cli/llm-caller.ts`) default to the hosted `https://integrate.api.nvidia.com/v1` (was a local `http://localhost:8001/v1` router); `VITE_NVIDIA_ROUTER_URL` (webview) / `NVIDIA_ROUTER_URL` (CLI) still override for a local NIM/router deployment. Provider display label is "NVIDIA NIM" (was "NVIDIA Router") in `useProviderConfig.ts`, `RoleAssignment.tsx`, and `ChatArea.tsx`; the short label "NVIDIA" is unchanged. NIM's API sends no CORS headers (Z.AI/DeepSeek do), so the webview cannot call it directly — webview NIM requests route through the `http_relay_stream` Tauri command (Rust reqwest, HTTPS-only), which streams response bytes over an IPC channel as they arrive; `relayFetch` in `openaiCompatibleClient.ts` adapts the channel to a fetch `Response` for the OpenAI SDK (`relayViaBackend` client flag, set only for the hosted NIM URL). A buffered variant (`http_relay`) exists for one-shot use but must NOT be used for chat: buffering the full body trips the 90s no-first-byte watchdog on long generations. The CLI path calls NIM directly (Node has no CORS). Default model for `nvidia-router` (`DEFAULT_MODELS` in `llm-router.ts` and `cli/llm-caller.ts`) is `nvidia/nemotron-3-super-120b-a12b`.
 
@@ -111,7 +114,7 @@ Per-model availability tracking so dropdowns never offer a model the account/pla
 
 The API-side equivalent of reading the Codex binary's model list: for API providers, the authoritative model set is the provider's own `GET /models`. The "Refresh models" button runs this alongside the probe — `syncAllCatalogs(providers)` fetches each discoverable provider's live list (via the clients' existing `listModels()` / Ollama `discoverModels()`) and reconciles vs the catalog into `CatalogDiff { confirmed, staleInCatalog, missingFromCatalog }`, persisted to `kondi-catalog-sync`.
 
-- **Discoverable providers:** `anthropic-api`, `openai-api`, `deepseek`, `xai`, `zai`, `nvidia-router`, `ollama`. Google (cloudcode-pa OAuth) and CLI providers are excluded (no clean public list; verified via binary + probe instead).
+- **Discoverable providers:** `anthropic-api`, `openai-api`, `deepseek`, `xai`, `zai`, `moonshot`, `nvidia-router`, `ollama`. Google (cloudcode-pa OAuth) and CLI providers are excluded (no clean public list; verified via binary + probe instead).
 - **Advisory only.** It surfaces drift (catalog IDs the API no longer lists; chat-capable IDs the API offers that we don't carry — filtered against a `NON_CHAT` regex to cut embeddings/tts/image/etc. noise) but never hides a model itself. `/models` lists can be incomplete (restricted key scopes, partial catalogs), so the live probe remains the sole authority for hiding. Anthropic/OpenAI keys resolve via `resolveApiKey(provider, PROFILE_IDS.*ApiKey)`; OpenAI-compatible clients use their own configured key.
 
 ### 3d. Launch-Time Model Validation (`src/council/model-validation.ts`)
@@ -377,6 +380,7 @@ Pipeline ───→ simpleCompletion() → chatCompletion() ──┘
 | `google` | `geminiClient.ts` | Gemini API | Stateless |
 | `xai` | `openaiCompatibleClient.ts` | OpenAI-compatible HTTP | Stateless |
 | `zai` | `openaiCompatibleClient.ts` | OpenAI-compatible HTTP (z.ai Coding Plan) | Stateless |
+| `moonshot` | `openaiCompatibleClient.ts` | OpenAI-compatible HTTP (api.moonshot.ai) | Stateless |
 | `nvidia-router` | `openaiCompatibleClient.ts` | OpenAI-compatible HTTP (NIM/local) | Stateless |
 | `ollama` | `openaiCompatibleClient.ts` | Local HTTP | Stateless |
 
