@@ -1,29 +1,24 @@
 /**
- * Workflow runner — sequential execution of a multi-step council workflow.
+ * Workflow bridge — a multi-step council workflow IS a pipeline.
  *
  * A workflow is a series of councils sharing a workflowId (see store.ts
- * appendCouncilToWorkflow). Running step K runs K, K+1, … N in order; each
- * step's problem is composed from its own saved Task plus the PREVIOUS step's
- * output, rendered through the step's inputTemplate contract ({{input}},
- * {{input[N]}}, {{input.field}}). Every step in the range is cleared before it
- * runs, so editing a step and rerunning invalidates everything forward of it.
- *
- * The runner owns sequencing only — the actual deliberation happens through the
- * injected frameProblem callback (useCouncilHandlers.onFrameProblem), so model
- * validation, tool preflight, and orchestrator choice stay in one place.
+ * appendCouncilToWorkflow). Sequencing is owned by the PipelineExecutor:
+ * `syncWorkflowPipeline` projects the council chain into a hidden shadow
+ * pipeline (source 'council-workflow', one sequential stage per step, each
+ * step BOUND to its persistent council via boundCouncilId), regenerated from
+ * the chain on every run so it can never drift. Running step K marks the
+ * steps before it completed (the executor's resume skips those) and the rest
+ * pending — so a run always reruns K..N in order, each step's input composed
+ * from the sibling councils' outputs (composeStepProblem, called by the
+ * executor's bound-council path).
  */
 import type { Council } from './types';
 import { councilStore } from './store';
 import { ledgerStore } from './ledger-store';
 import { getLatestOutput, deleteAllArtifacts } from './context-store';
 import { renderCoreTemplate } from '../pipeline/input-template';
-
-export interface WorkflowRunCallbacks {
-  /** Runs one council's full deliberation (blocking until done). */
-  frameProblem: (council: Council, rawProblem: string) => Promise<void>;
-  /** Fired before each step starts — use to follow the run in the UI. */
-  onStepStart?: (council: Council, index: number, total: number) => void;
-}
+import { pipelineStore } from '../pipeline/store';
+import type { CouncilStepConfig, PipelineStage } from '../pipeline/types';
 
 /** Reset a step's results so it can run fresh (ledger, artifacts, state). */
 export function clearStepResults(councilId: string): void {
@@ -78,29 +73,57 @@ export function composeStepProblem(step: Council, priorSteps: Council[]): string
 }
 
 /**
- * Run the workflow from the given step FORWARD through the last step.
- * Steps before it keep their existing results (their outputs feed the run);
- * the step itself and everything after are cleared, then run in order.
- * Stops at the first failing step (its error propagates).
+ * Project the council chain containing `startCouncilId` into its shadow
+ * pipeline and prime it to run from that step FORWARD: steps before it are
+ * marked completed (the executor's resume skips them; their existing outputs
+ * feed the run), the rest pending. Returns the shadow pipeline's id, or null
+ * if the council isn't part of a multi-step workflow.
  */
-export async function runWorkflowFrom(
-  startCouncilId: string,
-  callbacks: WorkflowRunCallbacks,
-): Promise<void> {
-  const steps = councilStore.getWorkflow(startCouncilId);
-  const startIdx = Math.max(0, steps.findIndex((s) => s.id === startCouncilId));
-  const toRun = steps.slice(startIdx);
+export function syncWorkflowPipeline(startCouncilId: string): string | null {
+  const chain = councilStore.getWorkflow(startCouncilId);
+  const workflowId = chain[0]?.workflowId;
+  if (chain.length < 2 || !workflowId) return null;
 
-  // Invalidate forward: everything from the start step on runs fresh.
-  for (const step of toRun) clearStepResults(step.id);
+  const startIdx = Math.max(0, chain.findIndex((c) => c.id === startCouncilId));
+  const pipelineId = `council-wf-${workflowId}`;
+  const name = councilStore.getWorkflowName(startCouncilId) || chain[0].name;
 
-  for (let i = 0; i < toRun.length; i++) {
-    // Re-read: earlier iterations (and clearStepResults) mutate the store.
-    const step = councilStore.get(toRun[i].id);
-    if (!step) continue;
-    const priorSteps = steps.slice(0, startIdx + i);
-    const problem = composeStepProblem(step, priorSteps);
-    callbacks.onStepStart?.(step, startIdx + i, steps.length);
-    await callbacks.frameProblem(step, problem);
+  const stages: PipelineStage[] = chain.map((c, i) => ({
+    id: `wfstage-${c.id}`,
+    name: c.name,
+    executionMode: 'sequential',
+    steps: [
+      {
+        id: `wfstep-${c.id}`,
+        name: c.name,
+        config: {
+          type: c.deliberation?.stepType === 'coding' ? 'coding' : 'council',
+          boundCouncilId: c.id,
+          councilSetup: { name: c.name, personas: [] },
+          inputTemplate: '{{input}}',
+        } as CouncilStepConfig,
+        status: i < startIdx ? 'completed' : 'pending',
+      },
+    ],
+  }));
+
+  if (!pipelineStore.get(pipelineId)) {
+    pipelineStore.create({ id: pipelineId, name, source: 'council-workflow' });
   }
+  pipelineStore.update(pipelineId, {
+    name,
+    stages,
+    status: 'ready',
+    currentStageIndex: 0,
+    source: 'council-workflow',
+    settings: {
+      workingDirectory: chain[0].deliberation?.workingDirectory,
+      // Bound steps resolve their working dir from their own council record.
+      directoryConstrained: false,
+      failurePolicy: 'stop',
+      // No per-run output dirs for workflows — councils own their file output.
+      outputConfig: { enabled: false, stepOutput: 'artifact_only' },
+    },
+  });
+  return pipelineId;
 }

@@ -27,7 +27,8 @@ export default function PipelineLibrary({
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    const load = () => setPipelines(pipelineStore.getAll());
+    // Shadow pipelines (auto-generated from council workflows) stay hidden.
+    const load = () => setPipelines(pipelineStore.getAll().filter((p) => p.source !== 'council-workflow'));
     load();
     const unsubscribe = pipelineStore.subscribe(load);
     return unsubscribe;

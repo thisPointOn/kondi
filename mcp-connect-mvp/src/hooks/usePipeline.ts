@@ -1,5 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { PipelineExecutor, type PlatformAdapter } from '../pipeline';
+import type { PipelineExecutorCallbacks } from '../pipeline/executor';
+import { syncWorkflowPipeline } from '../council/workflow-runner';
+import { validateCouncilModels } from '../council/model-validation';
+import { councilStore } from '../council/store';
+import type { Council } from '../council/types';
 import { callLLM } from '../pipeline/gui-caller';
 import { roleToPhase } from '../router/profile-options';
 import { filterToolsByServerIds } from '../utils/filterTools';
@@ -13,9 +18,11 @@ import { invoke } from '@tauri-apps/api/core';
 interface UsePipelineParams {
   availableTools: Map<string, { serverId: string; tools: MCPTool[] }>;
   setThinkingPersonas: React.Dispatch<React.SetStateAction<Persona[]>>;
+  /** Which providers are configured — drives launch-time model validation for workflow runs. */
+  configuredProviders?: Record<string, boolean>;
 }
 
-export function usePipeline({ availableTools, setThinkingPersonas }: UsePipelineParams) {
+export function usePipeline({ availableTools, setThinkingPersonas, configuredProviders }: UsePipelineParams) {
   const [currentPipelineId, setCurrentPipelineId] = useState<string | null>(null);
   const [pipelineMode, setPipelineMode] = useState<'library' | 'builder' | 'execution'>('library');
   const [gateResolvers, setGateResolvers] = useState<Map<string, (approved: boolean) => void>>(new Map());
@@ -65,7 +72,10 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
    * @param background - If true, uses no-op UI callbacks so the run doesn't
    *                     interfere with the foreground pipeline's state.
    */
-  const createExecutor = (background = false): { executor: PipelineExecutor; platform: PlatformAdapter } => {
+  const createExecutor = (
+    background = false,
+    overrides?: Partial<PipelineExecutorCallbacks>,
+  ): { executor: PipelineExecutor; platform: PlatformAdapter } => {
     if (!background) {
       const resolverMap = new Map<string, (approved: boolean) => void>();
       setGateResolvers(resolverMap);
@@ -137,6 +147,7 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
         : (persona) => {
             setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
           },
+      ...overrides,
     }, tauriPlatform);
 
     return { executor, platform: tauriPlatform };
@@ -160,6 +171,42 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
   const handlePipelineRun = (id: string) => {
     const { executor } = createExecutor();
     runExecutor(executor, id);
+  };
+
+  /**
+   * Run a multi-step council workflow through the pipeline executor: sync the
+   * shadow pipeline (bound-council steps, primed to run from startCouncilId
+   * forward) and execute it. Stays in the council view — no pipeline-UI mode
+   * switch; live thinking indicators still flow. onStepStart fires as each
+   * step's council starts, so the rail can follow the run.
+   */
+  const runCouncilWorkflow = async (
+    startCouncilId: string,
+    onStepStart?: (council: Council) => void,
+  ): Promise<void> => {
+    const pipelineId = syncWorkflowPipeline(startCouncilId);
+    if (!pipelineId) throw new Error('This council is not part of a multi-step workflow');
+
+    // Launch-time model validation for EVERY step that will run (rule 18:
+    // throw, never substitute) — the executor path doesn't go through
+    // onFrameProblem, which validates only single-council launches.
+    const chain = councilStore.getWorkflow(startCouncilId);
+    const startIdx = Math.max(0, chain.findIndex((c) => c.id === startCouncilId));
+    for (const c of chain.slice(startIdx)) {
+      validateCouncilModels(c, configuredProviders);
+    }
+
+    const { executor } = createExecutor(false, {
+      onCouncilCreated: (_stepId, councilId) => {
+        const c = councilStore.get(councilId);
+        if (c) onStepStart?.(c);
+      },
+    });
+    try {
+      await executor.run(pipelineId);
+    } finally {
+      setThinkingPersonas([]);
+    }
   };
 
   /**
@@ -267,5 +314,6 @@ export function usePipeline({ availableTools, setThinkingPersonas }: UsePipeline
     handleExecutionAbort,
     handlePipelineRun,
     handleRetryStep,
+    runCouncilWorkflow,
   } as const;
 }

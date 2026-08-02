@@ -240,11 +240,14 @@ export function createPipeline(params: {
   description?: string;
   initialInput?: string;
   settings?: Partial<Pipeline['settings']>;
+  /** Deterministic id (e.g. the council-workflow bridge derives one from the workflowId). */
+  id?: string;
+  source?: Pipeline['source'];
 }): Pipeline {
   const now = new Date().toISOString();
 
   const pipeline: Pipeline = {
-    id: crypto.randomUUID(),
+    id: params.id || crypto.randomUUID(),
     name: params.name,
     description: params.description,
     initialInput: params.initialInput || '',
@@ -258,6 +261,7 @@ export function createPipeline(params: {
     currentStageIndex: 0,
     createdAt: now,
     updatedAt: now,
+    source: params.source,
   };
 
   const data = loadFromStorage();

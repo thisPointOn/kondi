@@ -23,7 +23,8 @@ import { migrateLlmConfig } from './types';
 import { renderCoreTemplate, extractJsonBlock } from './input-template';
 
 import { pipelineStore } from './store';
-import { councilStore } from '../council/store';
+import { councilStore, getWorkflowCouncils } from '../council/store';
+import { composeStepProblem, clearStepResults } from '../council/workflow-runner';
 import { createCouncilFromSetup } from '../council/factory';
 import { DeliberationOrchestrator } from '../council/deliberation-orchestrator';
 import { CodingOrchestrator } from '../council/coding-orchestrator';
@@ -633,42 +634,73 @@ export class PipelineExecutor {
   ): Promise<StepArtifact> {
     const config = step.config as CouncilStepConfig;
 
-    // Build the problem: task (instructions) + pipeline input (optional) + input (context from previous steps)
-    const inputContext = renderInputTemplate(config.inputTemplate, previousArtifacts, this.memoryCtx);
-    const pipelineInput = config.includePipelineInput
-      ? pipelineStore.get(pipelineId)?.initialInput || ''
-      : '';
-    const parts = [config.task, pipelineInput, inputContext].filter(Boolean);
-    const rawProblem = parts.join('\n\n---\n\n');
+    let council: ReturnType<typeof councilStore.get>;
+    let rawProblem: string;
+    let effectiveDir: string | undefined;
 
-    // Pre-flight: verify MCP tools referenced in step prompts are actually available
-    if (this.callbacks.getAvailableTools) {
-      const promptText = [
-        config.task || '',
-        ...config.councilSetup.personas.map(p => p.systemPrompt || ''),
-      ].join('\n');
-      verifyRequiredTools(this.callbacks.getAvailableTools(), promptText, step.name);
+    if (config.boundCouncilId) {
+      // Bound-council step: rerun the persistent council in place. The council
+      // record is the source of truth (personas, roles, task, input contract);
+      // its input is composed from the sibling workflow councils' outputs, not
+      // from pipeline artifacts.
+      const bound = councilStore.get(config.boundCouncilId);
+      if (!bound) {
+        throw new Error(`Bound council not found for step "${step.name}" (${config.boundCouncilId})`);
+      }
+      const chain = getWorkflowCouncils(bound.id);
+      const idx = chain.findIndex((c) => c.id === bound.id);
+      rawProblem = composeStepProblem(bound, chain.slice(0, Math.max(idx, 0)));
+
+      if (this.callbacks.getAvailableTools) {
+        const promptText = [
+          bound.deliberation?.savedProblem || '',
+          ...bound.personas.map((p) => p.predisposition?.systemPrompt || ''),
+        ].join('\n');
+        verifyRequiredTools(this.callbacks.getAvailableTools(), promptText, step.name);
+      }
+
+      clearStepResults(bound.id);
+      council = councilStore.get(bound.id);
+      if (!council) throw new Error(`Bound council disappeared: ${config.boundCouncilId}`);
+      effectiveDir = council.deliberation?.workingDirectory;
+    } else {
+      // Build the problem: task (instructions) + pipeline input (optional) + input (context from previous steps)
+      const inputContext = renderInputTemplate(config.inputTemplate, previousArtifacts, this.memoryCtx);
+      const pipelineInput = config.includePipelineInput
+        ? pipelineStore.get(pipelineId)?.initialInput || ''
+        : '';
+      const parts = [config.task, pipelineInput, inputContext].filter(Boolean);
+      rawProblem = parts.join('\n\n---\n\n');
+
+      // Pre-flight: verify MCP tools referenced in step prompts are actually available
+      if (this.callbacks.getAvailableTools) {
+        const promptText = [
+          config.task || '',
+          ...config.councilSetup.personas.map(p => p.systemPrompt || ''),
+        ].join('\n');
+        verifyRequiredTools(this.callbacks.getAvailableTools(), promptText, step.name);
+      }
+
+      // Resolve effective working directory with inheritance (default: constrained)
+      const isConstrained = pipelineSettings.directoryConstrained !== false;
+      effectiveDir = isConstrained
+        ? pipelineSettings.workingDirectory
+        : config.councilSetup.workingDirectory || pipelineSettings.workingDirectory;
+
+      // Create council via factory
+      council = createCouncilFromSetup({
+        ...config.councilSetup,
+        task: config.task,
+        topic: rawProblem.slice(0, 200),
+        workingDirectory: effectiveDir,
+        directoryConstrained: isConstrained,
+        saveDeliberation: true,
+        saveDeliberationMode: 'full',
+        stepType: config.type,
+        pipelinePrefix: '[Pipeline]',
+        pipelineId: pipelineId,
+      });
     }
-
-    // Resolve effective working directory with inheritance (default: constrained)
-    const isConstrained = pipelineSettings.directoryConstrained !== false;
-    const effectiveDir = isConstrained
-      ? pipelineSettings.workingDirectory
-      : config.councilSetup.workingDirectory || pipelineSettings.workingDirectory;
-
-    // Create council via factory
-    const council = createCouncilFromSetup({
-      ...config.councilSetup,
-      task: config.task,
-      topic: rawProblem.slice(0, 200),
-      workingDirectory: effectiveDir,
-      directoryConstrained: isConstrained,
-      saveDeliberation: true,
-      saveDeliberationMode: 'full',
-      stepType: config.type,
-      pipelinePrefix: '[Pipeline]',
-      pipelineId: pipelineId,
-    });
 
     stepCtx.councilId = council.id;
     this.callbacks.onCouncilCreated?.(step.id, council.id);
@@ -716,8 +748,11 @@ export class PipelineExecutor {
         }
 
         // Save worker output to run directory root (if output isolation active)
-        // Falls back to working directory if no run directory
-        const workerPersona = config.councilSetup.personas.find((p) => p.role === 'worker');
+        // Falls back to working directory if no run directory. Bound councils
+        // skip this — their own save-deliberation settings own file output.
+        const workerPersona = config.boundCouncilId
+          ? undefined
+          : config.councilSetup.personas.find((p) => p.role === 'worker');
         if (workerPersona && workerPersona.saveOutput !== false) {
           const workerOutput = getLatestOutput(council.id);
           if (workerOutput?.content) {
@@ -744,7 +779,8 @@ export class PipelineExecutor {
     const metadata: StepArtifact['metadata'] = {
       councilId: council.id,
       outputPath: workerOutputPath,
-      outputType: config.outputType || 'string',
+      // Bound councils declare their output type on the council record.
+      outputType: (config.boundCouncilId ? council.deliberation?.outputType : config.outputType) || 'string',
       stepName: step.name,
       stepType: config.type,
     };
@@ -775,14 +811,15 @@ export class PipelineExecutor {
       content = extractJsonBlock(content);
     }
 
-    // Strip the localStorage copy of this council's metadata to keep
-    // the mcp-councils key small.  The authoritative council data
-    // (ledger, context, decision, etc.) remains in the in-memory
-    // CouncilDataStore, so it stays accessible for the rest of this session.
-    try {
-      stripCompletedCouncil(council.id);
-    } catch (err) {
-      console.warn('[Pipeline] Non-fatal: failed to strip council localStorage copy:', err);
+    // Strip the localStorage copy of this council's metadata to keep the
+    // mcp-councils key small. Never for bound councils — those are the user's
+    // persistent workflow steps, not per-run throwaways.
+    if (!config.boundCouncilId) {
+      try {
+        stripCompletedCouncil(council.id);
+      } catch (err) {
+        console.warn('[Pipeline] Non-fatal: failed to strip council localStorage copy:', err);
+      }
     }
 
     return {

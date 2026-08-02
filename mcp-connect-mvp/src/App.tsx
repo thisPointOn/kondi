@@ -65,6 +65,7 @@ function App() {
   const pipeline = usePipeline({
     availableTools: serverHook.availableTools,
     setThinkingPersonas: council.setThinkingPersonas,
+    configuredProviders: providerConfig.configuredProviders,
   });
 
   const activeApiKey = providerConfig.provider === 'chatgpt' ? providerConfig.openaiKey : providerConfig.anthropicKey;
@@ -179,7 +180,7 @@ function App() {
               onGenerateSynthesis={council.onGenerateSynthesis}
               onResolve={council.onResolve}
               onFrameProblem={council.onFrameProblem}
-              onRunWorkflow={council.onRunWorkflow}
+              onRunWorkflow={pipeline.runCouncilWorkflow}
               onPauseDeliberation={council.onPauseDeliberation}
               onResumeDeliberation={council.onResumeDeliberation}
               onForceDecision={council.onForceDecision}

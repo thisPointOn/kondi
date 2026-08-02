@@ -166,6 +166,11 @@ export interface PipelinePersona {
 
 export interface CouncilStepConfig {
   type: CouncilStepType;
+  /** Bound-council step: run THIS persistent council in place (clear + rerun)
+   *  instead of spawning a fresh one from councilSetup. The council record is
+   *  the source of truth for personas/roles/task/input contract; councilSetup
+   *  is ignored. Used by the council-workflow → pipeline bridge. */
+  boundCouncilId?: string;
   councilSetup: {
     name: string;
     personas: PipelinePersona[];
@@ -374,8 +379,10 @@ export interface Pipeline {
   currentStageIndex: number;
   createdAt: string;
   updatedAt: string;
-  /** Where this pipeline was executed — 'cli' for CLI-imported sessions */
-  source?: 'cli' | 'gui';
+  /** Where this pipeline was executed — 'cli' for CLI-imported sessions.
+   *  'council-workflow' marks the hidden shadow pipeline auto-generated from a
+   *  multi-step council workflow (excluded from the library/sidebar). */
+  source?: 'cli' | 'gui' | 'council-workflow';
 }
 
 // ============================================================================

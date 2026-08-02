@@ -108,7 +108,8 @@ const Sidebar: FC<SidebarProps> = ({
   const [pipelinesExpanded, setPipelinesExpanded] = useState(false);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   useEffect(() => {
-    const load = () => setPipelines(pipelineStore.getAll());
+    // Shadow pipelines (auto-generated from council workflows) stay hidden.
+    const load = () => setPipelines(pipelineStore.getAll().filter((p) => p.source !== 'council-workflow'));
     load();
     return pipelineStore.subscribe(load);
   }, []);
