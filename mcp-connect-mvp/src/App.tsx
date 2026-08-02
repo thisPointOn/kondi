@@ -179,6 +179,7 @@ function App() {
               onGenerateSynthesis={council.onGenerateSynthesis}
               onResolve={council.onResolve}
               onFrameProblem={council.onFrameProblem}
+              onRunWorkflow={council.onRunWorkflow}
               onPauseDeliberation={council.onPauseDeliberation}
               onResumeDeliberation={council.onResumeDeliberation}
               onForceDecision={council.onForceDecision}

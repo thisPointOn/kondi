@@ -3,6 +3,7 @@ import { createOrchestrator, DeliberationOrchestrator } from '../council';
 import { CodingOrchestrator } from '../council/coding-orchestrator';
 import { updateCouncil } from '../council/store';
 import { validateCouncilModels } from '../council/model-validation';
+import { runWorkflowFrom } from '../council/workflow-runner';
 import { ledgerStore } from '../council/ledger-store';
 import { buildFullDeliberation, buildAbbreviatedSummary } from '../services/deliberationSummary';
 import { getDecision } from '../council/context-store';
@@ -205,6 +206,22 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
     }
   }, [makeDeliberator, makeCodingOrchestrator, availableTools, configuredProviders]);
 
+  /**
+   * Run a multi-step workflow from the given step FORWARD: that step and every
+   * step after it are cleared and re-run in order, each fed the previous
+   * step's output. Lives here (not in the view) so the loop survives the
+   * per-step view remounts as the run navigates through the workflow.
+   */
+  const onRunWorkflow = useCallback(async (
+    startCouncilId: string,
+    onStepStart?: (council: Council) => void,
+  ) => {
+    await runWorkflowFrom(startCouncilId, {
+      frameProblem: onFrameProblem,
+      onStepStart: (c) => onStepStart?.(c),
+    });
+  }, [onFrameProblem]);
+
   const onPauseDeliberation = useCallback(async (council: Council) => {
     const deliberator = makeDeliberator({ includeThinking: false });
     await deliberator.pause(council);
@@ -309,6 +326,7 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
     onGenerateSynthesis,
     onResolve,
     onFrameProblem,
+    onRunWorkflow,
     onPauseDeliberation,
     onResumeDeliberation,
     onForceDecision,

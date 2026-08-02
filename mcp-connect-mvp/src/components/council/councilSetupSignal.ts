@@ -22,3 +22,23 @@ export function consumeCouncilSetup(id: string): boolean {
   }
   return false;
 }
+
+/**
+ * View-intent one-shot: the workflow rail sets this when navigating between
+ * steps in view mode, so the target DeliberationView shows the step's
+ * deliberation instead of auto-opening setup for never-run ('created') steps.
+ */
+let pendingViewId: string | null = null;
+
+export function requestCouncilView(id: string): void {
+  pendingViewId = id;
+}
+
+/** Returns true once if view navigation was requested for this council, then clears it. */
+export function consumeCouncilView(id: string): boolean {
+  if (pendingViewId === id) {
+    pendingViewId = null;
+    return true;
+  }
+  return false;
+}

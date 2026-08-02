@@ -23,6 +23,8 @@ interface CouncilViewProps {
   onResolve?: (council: Council) => Promise<void>;
   // Deliberation handlers
   onFrameProblem?: (council: Council, rawProblem: string) => Promise<void>;
+  /** Run a multi-step workflow from this step forward (clears + reruns each). */
+  onRunWorkflow?: (startCouncilId: string, onStepStart?: (council: Council) => void) => Promise<void>;
   onPauseDeliberation?: (council: Council) => Promise<void>;
   onResumeDeliberation?: (council: Council) => Promise<void>;
   onForceDecision?: (council: Council) => Promise<void>;
@@ -51,6 +53,7 @@ export default function CouncilView({
   onResolve,
   // Deliberation handlers
   onFrameProblem,
+  onRunWorkflow,
   onPauseDeliberation,
   onResumeDeliberation,
   onForceDecision,
@@ -112,6 +115,7 @@ export default function CouncilView({
         onBack={onBack}
         onSelectCouncil={onSelectCouncil}
         onFrameProblem={onFrameProblem}
+        onRunWorkflow={onRunWorkflow}
         onPause={onPauseDeliberation}
         onResume={onResumeDeliberation}
         onForceDecision={onForceDecision}

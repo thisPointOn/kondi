@@ -29,7 +29,7 @@ import { buildAbbreviatedSummary, saveDeliberationOutput } from '../../services/
 import { estimateCostUsd, formatUsd } from '../../services/cost';
 import { isModelBroken, filterVisibleModels } from '../../services/modelProbe';
 import { getModelsForPersonaSelector } from '../../config/models';
-import { consumeCouncilSetup, requestCouncilSetup, EDIT_COUNCIL_SETUP_EVENT } from './councilSetupSignal';
+import { consumeCouncilSetup, requestCouncilSetup, consumeCouncilView, requestCouncilView, EDIT_COUNCIL_SETUP_EVENT } from './councilSetupSignal';
 import { consumeCouncilRun } from './councilCreateSignal';
 import { setActiveSetupSection } from './setupDetailStore';
 import WorkflowRail from './WorkflowRail';
@@ -51,6 +51,8 @@ interface DeliberationViewProps {
   /** Navigate to another council (used by the workflow step rail). */
   onSelectCouncil?: (id: string) => void;
   onFrameProblem?: (council: Council, rawProblem: string) => Promise<void>;
+  /** Run a multi-step workflow from this step forward (clears + reruns each). */
+  onRunWorkflow?: (startCouncilId: string, onStepStart?: (council: Council) => void) => Promise<void>;
   onPause?: (council: Council) => Promise<void>;
   onResume?: (council: Council) => Promise<void>;
   onForceDecision?: (council: Council) => Promise<void>;
@@ -174,6 +176,7 @@ export default function DeliberationView({
   onBack,
   onSelectCouncil,
   onFrameProblem,
+  onRunWorkflow,
   onPause,
   onResume,
   onForceDecision,
@@ -210,10 +213,17 @@ export default function DeliberationView({
   const [activePanel, setActivePanel] = useState<'setup' | 'deliberation' | 'output' | null>(() => {
     // The tile "Edit" button requests opening straight into Setup.
     if (consumeCouncilSetup(councilId)) return 'setup';
-    // Auto-open setup panel for new councils
+    // Step-rail navigation in view mode: show the step's deliberation even if
+    // it never ran — don't hijack into setup.
+    if (consumeCouncilView(councilId)) return null;
+    // Auto-open setup ONLY for genuinely new councils. deliberationState is not
+    // persisted to the disk store, so after a restart every council reads phase
+    // 'created' — a resolved council or one with a saved problem must open in
+    // VIEW mode, not hijack into the edit screen.
     const c = councilStore.get(councilId);
     const phase = c?.deliberationState?.currentPhase || 'created';
-    return phase === 'created' ? 'setup' : null;
+    const isNew = phase === 'created' && c?.status !== 'resolved' && !c?.deliberation?.savedProblem;
+    return isNew ? 'setup' : null;
   });
   // Drive the workspace panel's setup-details view: default to the first section
   // while editing, and clear it when the setup panel closes.
@@ -581,6 +591,23 @@ export default function DeliberationView({
     setModelValidationError(null);
     console.log('[DeliberationView] All checks passed, starting...');
 
+    // Multi-step workflow: running a step runs it AND every step after it, in
+    // order, each fed the previous step's output. Persist the typed task first
+    // (the runner reads savedProblem), then hand off to the workflow runner —
+    // it clears each step in the range itself.
+    if (isMultiStep && onRunWorkflow) {
+      const fresh = councilStore.get(councilId);
+      if (fresh?.deliberation) {
+        councilStore.update(councilId, {
+          topic: problemInput.trim() || fresh.name,
+          deliberation: { ...fresh.deliberation, savedProblem: problemInput.trim() },
+        });
+      }
+      await runWorkflowForward();
+      setProblemInput('');
+      return;
+    }
+
     // Always force-reset to a clean state before starting.
     // This handles the case where a previous failed attempt left the phase
     // stuck at 'problem_framing' or any other intermediate state.
@@ -639,6 +666,25 @@ export default function DeliberationView({
     setActivePanel(null);
   };
 
+  // Run the workflow from this step forward; the UI follows the active step.
+  const runWorkflowForward = async () => {
+    if (!onRunWorkflow) return;
+    setIsGenerating(true);
+    setDeliberationError(null);
+    try {
+      await onRunWorkflow(councilId, (c) => {
+        requestCouncilView(c.id);
+        onSelectCouncil?.(c.id);
+      });
+    } catch (error) {
+      console.error('[DeliberationView] Workflow run error:', error);
+      const msg = error instanceof Error ? error.message : String(error);
+      setDeliberationError(`Workflow error: ${msg}`);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   // Restart deliberation - clear results and start fresh
   const handleRestartDeliberation = async () => {
     if (!council || !onFrameProblem || !problemInput.trim()) return;
@@ -671,105 +717,21 @@ export default function DeliberationView({
 
   return (
     <div className="deliberation-view">
-      {/* Workflow step rail — only on the setup/edit screen. The run/view screen
-          stays identical to chat (header + ledger + footer). */}
-      {/* Working-dir + context bars are part of the chat-style run/view screen only.
-          The setup/edit screen is just the form. */}
-      {activePanel !== 'setup' && (<>
-      {/* Active directory + context usage at the top — same as the chat view. */}
-      <div className="chat-dir-bar">
-        <span className="chat-dir-indicator" title={council.deliberation?.workingDirectory || 'No working directory set'}>
-          <FolderOpen size={14} />
-          <span className="chat-dir-path">
-            {council.deliberation?.workingDirectory || 'No working directory set'}
-          </span>
-        </span>
-      </div>
-      {(() => {
-        const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-        const totalTokens = entries.reduce((s, e) => s + (e.tokensUsed || 0), 0);
-        const totalLatency = entries.reduce((s, e) => s + (e.latencyMs || 0), 0);
-        const round = council.deliberationState?.currentRound || 0;
-        // Per-agent usage (same metrics the chat context bar shows).
-        const stats = new Map<string, { tokens: number; calls: number; latency: number }>();
-        for (const e of entries) {
-          const pid = e.authorPersonaId;
-          if (!pid || pid === 'user' || pid === 'system') continue;
-          const s = stats.get(pid) || { tokens: 0, calls: 0, latency: 0 };
-          s.tokens += e.tokensUsed || 0; s.calls += 1; s.latency += e.latencyMs || 0;
-          stats.set(pid, s);
-        }
-        const modelsUsed = new Set(entries.map(e => council.personas.find(p => p.id === e.authorPersonaId)?.model).filter(Boolean));
-        const totalCost = [...stats.entries()].reduce((sum, [pid, s]) => {
-          const p = council.personas.find(pp => pp.id === pid);
-          return sum + estimateCostUsd(p?.model, s.tokens);
-        }, 0);
-        const st = currentPhase === 'completed' ? { l: 'completed', c: 'completed' }
-          : currentPhase === 'failed' ? { l: 'failed', c: 'failed' }
-          : currentPhase === 'cancelled' ? { l: 'cancelled', c: 'cancelled' }
-          : currentPhase === 'paused' ? { l: 'paused', c: 'paused' }
-          : (currentPhase === 'created' || currentPhase === 'problem_framing') ? { l: 'planning', c: 'planning' }
-          : { l: 'running', c: 'running' };
-        return (
-          <>
-            <div className="chat-context-bar" onClick={() => setShowAgentBreakdown(v => !v)}>
-              <span className="ctx-toggle">{showAgentBreakdown ? '▾' : '▸'}</span>
-              <span className="ctx-stat">{entries.length} {entries.length === 1 ? 'comment' : 'comments'}</span>
-              {totalTokens > 0 && <span className="ctx-stat">{fmt(totalTokens)} tokens</span>}
-              {totalCost > 0 && <span className="ctx-stat">{formatUsd(totalCost)}</span>}
-              {totalLatency > 0 && <span className="ctx-stat">{(totalLatency / 1000).toFixed(0)}s</span>}
-              {round > 0 && <span className="ctx-stat">round {round}</span>}
-              <span className="ctx-stat">{modelsUsed.size || council.personas.length} models</span>
-            </div>
-            {showAgentBreakdown && (
-              <div className="chat-context-detail">
-                {stats.size === 0 ? (
-                  <div className="ctx-empty-detail">No usage yet.</div>
-                ) : (
-                  <table className="ctx-table">
-                    <thead><tr><th>Agent</th><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
-                    <tbody>
-                      {[...stats.entries()].sort((a, b) => b[1].tokens - a[1].tokens).map(([pid, s]) => {
-                        const p = council.personas.find(pp => pp.id === pid);
-                        const role = council.deliberation?.roleAssignments?.find(r => r.personaId === pid)?.role;
-                        return (
-                          <tr key={pid}>
-                            <td>{p?.name || pid}{role ? ` · ${role}` : ''}</td>
-                            <td className="ctx-mono">{(p?.model || '').replace(/^models\//, '')}</td>
-                            <td>{s.calls}</td>
-                            <td>{fmt(s.tokens)}</td>
-                            <td>{formatUsd(estimateCostUsd(p?.model, s.tokens))}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            )}
-          </>
-        );
-      })()}
-      </>)}
-      {/* Step rail — second header. Only for multi-step workflows; a single-step
-          council shows no rail at all (in setup or view). Selecting a step swaps
-          the main ledger + the right panel. */}
-      {isMultiStep && (
-        <WorkflowRail
-          councilId={councilId}
-          onSelect={(id) => {
-            // While editing, jumping to another step opens its edit screen too
-            // (not its completed/run view).
-            if (activePanel === 'setup') requestCouncilSetup(id);
-            onSelectCouncil?.(id);
-          }}
-        />
-      )}
-      {/* Header */}
+      {/* Header — the overall council/workflow name (not the step's), at the
+          very top. The step rail renders below it. */}
       <div className="deliberation-header">
         <div className="deliberation-header-left">
           <div className="deliberation-title-section">
-            <h2>{council.name}</h2>
+            <h2>{councilStore.getWorkflowName(councilId) || council.name}</h2>
+            {activePanel !== 'setup' && (
+              <button
+                className="header-control-btn edit-btn"
+                onClick={() => setActivePanel('setup')}
+                title="Edit this council — its steps stay visible; click a step to edit it"
+              >
+                ✎ Edit
+              </button>
+            )}
             <span className={`deliberation-status deliberation-status-${
               currentPhase === 'completed' ? 'completed'
                 : currentPhase === 'failed' ? 'failed'
@@ -885,6 +847,94 @@ export default function DeliberationView({
           </span>
         </div>
       </div>
+
+      {/* Step rail — below the name header. Only for multi-step workflows; a
+          single-step council shows no rail at all (in setup or view). Selecting
+          a step swaps the main ledger + the right panel. */}
+      {isMultiStep && (
+        <WorkflowRail
+          councilId={councilId}
+          onSelect={(id) => {
+            // While editing, jumping to another step opens its edit screen too;
+            // in view mode it opens the step's deliberation (never setup).
+            if (activePanel === 'setup') requestCouncilSetup(id);
+            else requestCouncilView(id);
+            onSelectCouncil?.(id);
+          }}
+        />
+      )}
+      {/* Working-dir + context bars — part of the chat-style run/view screen only
+          (the setup/edit screen is just the form). Below the name header so the
+          council name stays at the top of the view. */}
+      {activePanel !== 'setup' && (<>
+      <div className="chat-dir-bar">
+        <span className="chat-dir-indicator" title={council.deliberation?.workingDirectory || 'No working directory set'}>
+          <FolderOpen size={14} />
+          <span className="chat-dir-path">
+            {council.deliberation?.workingDirectory || 'No working directory set'}
+          </span>
+        </span>
+      </div>
+      {(() => {
+        const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+        const totalTokens = entries.reduce((s, e) => s + (e.tokensUsed || 0), 0);
+        const totalLatency = entries.reduce((s, e) => s + (e.latencyMs || 0), 0);
+        const round = council.deliberationState?.currentRound || 0;
+        // Per-agent usage (same metrics the chat context bar shows).
+        const stats = new Map<string, { tokens: number; calls: number; latency: number }>();
+        for (const e of entries) {
+          const pid = e.authorPersonaId;
+          if (!pid || pid === 'user' || pid === 'system') continue;
+          const s = stats.get(pid) || { tokens: 0, calls: 0, latency: 0 };
+          s.tokens += e.tokensUsed || 0; s.calls += 1; s.latency += e.latencyMs || 0;
+          stats.set(pid, s);
+        }
+        const modelsUsed = new Set(entries.map(e => council.personas.find(p => p.id === e.authorPersonaId)?.model).filter(Boolean));
+        const totalCost = [...stats.entries()].reduce((sum, [pid, s]) => {
+          const p = council.personas.find(pp => pp.id === pid);
+          return sum + estimateCostUsd(p?.model, s.tokens);
+        }, 0);
+        return (
+          <>
+            <div className="chat-context-bar" onClick={() => setShowAgentBreakdown(v => !v)}>
+              <span className="ctx-toggle">{showAgentBreakdown ? '▾' : '▸'}</span>
+              <span className="ctx-stat">{entries.length} {entries.length === 1 ? 'comment' : 'comments'}</span>
+              {totalTokens > 0 && <span className="ctx-stat">{fmt(totalTokens)} tokens</span>}
+              {totalCost > 0 && <span className="ctx-stat">{formatUsd(totalCost)}</span>}
+              {totalLatency > 0 && <span className="ctx-stat">{(totalLatency / 1000).toFixed(0)}s</span>}
+              {round > 0 && <span className="ctx-stat">round {round}</span>}
+              <span className="ctx-stat">{modelsUsed.size || council.personas.length} models</span>
+            </div>
+            {showAgentBreakdown && (
+              <div className="chat-context-detail">
+                {stats.size === 0 ? (
+                  <div className="ctx-empty-detail">No usage yet.</div>
+                ) : (
+                  <table className="ctx-table">
+                    <thead><tr><th>Agent</th><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
+                    <tbody>
+                      {[...stats.entries()].sort((a, b) => b[1].tokens - a[1].tokens).map(([pid, s]) => {
+                        const p = council.personas.find(pp => pp.id === pid);
+                        const role = council.deliberation?.roleAssignments?.find(r => r.personaId === pid)?.role;
+                        return (
+                          <tr key={pid}>
+                            <td>{p?.name || pid}{role ? ` · ${role}` : ''}</td>
+                            <td className="ctx-mono">{(p?.model || '').replace(/^models\//, '')}</td>
+                            <td>{s.calls}</td>
+                            <td>{fmt(s.tokens)}</td>
+                            <td>{formatUsd(estimateCostUsd(p?.model, s.tokens))}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </>
+        );
+      })()}
+      </>)}
 
       {/* Per-Agent Breakdown Panel */}
       {showAgentBreakdown && entries.length > 0 && (() => {
@@ -1576,10 +1626,13 @@ export default function DeliberationView({
                       && savedAssignments.some((r: { role: string }) => r.role === 'consultant')
                       && savedAssignments.some((r: { role: string }) => r.role === 'worker');
                     // Editing a council that already ran: clear prior output and re-run now
-                    // (the user confirmed this in the Save & Rerun dialog).
+                    // (the user confirmed this in the Save & Rerun dialog). In a
+                    // multi-step workflow this reruns THIS step and every step
+                    // after it — an edited step invalidates everything forward.
                     if (rerun && ready) {
                       setActivePanel('deliberation');
-                      void handleRestartDeliberation();
+                      if (isMultiStep && onRunWorkflow) void runWorkflowForward();
+                      else void handleRestartDeliberation();
                       return;
                     }
                     setActivePanel(ready ? 'deliberation' : null);

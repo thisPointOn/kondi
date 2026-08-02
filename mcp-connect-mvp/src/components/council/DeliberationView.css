@@ -17,29 +17,20 @@
   justify-content: center;
 }
 
-/* No top bar — the only thing that remains is a minimal floating control
-   cluster (Back + run controls) top-right, so the main area reads like chat.
-   Title/status/mode/Artifacts/Context/Patches/stats are all hidden here:
-   navigation is the sidebar, and Artifacts/Context/Setup live in the workspace
-   panel. Usage shows in the bottom context bar (chat styling). */
+/* Slim top bar: council name + Edit + status on the left, run controls on the
+   right. Mode label/Artifacts/Context/Patches/stats stay hidden — those live in
+   the workspace panel and the bottom context bar (chat styling). */
 .deliberation-view { position: relative; }
 .deliberation-header {
-  position: absolute;
-  top: 6px;
-  right: 10px;
-  left: auto;
-  width: auto;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 8px 14px;
   background: transparent;
-  border: none;
-  min-height: 0;
-  z-index: 6;
+  border-bottom: 1px solid var(--border-color, #2a2a2a);
 }
-.deliberation-header-left { margin: 0; }
-.deliberation-title-section,
+.deliberation-header-left { margin: 0; min-width: 0; }
 .deliberation-header .deliberation-mode,
 .deliberation-artifacts-btn,
 .deliberation-context-btn,
@@ -75,13 +66,20 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  min-width: 0;
 }
 
 .deliberation-title-section h2 {
   margin: 0;
   font-size: 1.05rem;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+.deliberation-title-section .header-control-btn.edit-btn { flex-shrink: 0; }
+.deliberation-title-section .deliberation-status { flex-shrink: 0; }
 
 .deliberation-status {
   font-size: 0.75rem;
@@ -143,6 +141,7 @@
 .header-control-btn.resume-btn { color: #16a34a; border-color: #16a34a40; }
 .header-control-btn.abort-btn { color: #dc2626; border-color: #dc262640; }
 .header-control-btn.force-btn { color: #f97316; border-color: #f9731640; }
+.header-control-btn.edit-btn { color: #a5b4fc; border-color: #6366f140; }
 
 .deliberation-mode {
   padding: 0.375rem 0.75rem;

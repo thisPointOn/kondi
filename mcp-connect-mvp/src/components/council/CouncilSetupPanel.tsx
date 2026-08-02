@@ -4,7 +4,7 @@
  * Read-only view of a council's SETUP — its mode, status, topic, and working
  * directory. When the council was spawned by a pipeline step, also shows that
  * pipeline's steps (name, persona count, per-step status, all-finished summary).
- * Personas/roles are managed via the Edit button (full setup form).
+ * Personas/roles are managed via the council header's Edit button (full setup form).
  * Rendered as the "Setup" tab inside the chat-style Workspace panel (pass
  * `embedded`), or standalone with its own chrome.
  */
@@ -15,7 +15,6 @@ import type { Council } from '../../council/types';
 import { pipelineStore } from '../../pipeline/store';
 import { isCouncilType } from '../../pipeline/types';
 import type { Pipeline, PipelineStep, CouncilStepConfig } from '../../pipeline/types';
-import { requestCouncilSetup } from './councilSetupSignal';
 import './CouncilSetupPanel.css';
 
 /**
@@ -90,7 +89,6 @@ const CouncilSetupPanel: FC<{ councilId: string; embedded?: boolean }> = ({ coun
       <div className="cs-body">
         <div className="cs-name-row">
           <div className="cs-name">{council.name}</div>
-          <button className="cs-edit-btn" onClick={() => requestCouncilSetup(councilId)}>✎ Edit</button>
         </div>
         <div className="cs-meta">
           <span className="cs-mode">{council.orchestration.mode}</span>

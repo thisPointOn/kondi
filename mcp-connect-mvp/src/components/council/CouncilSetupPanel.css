@@ -210,18 +210,5 @@
   line-height: 1.4;
 }
 
-/* Edit button in the workspace Setup panel */
 .cs-name-row { display: flex; align-items: center; gap: 8px; }
 .cs-name-row .cs-name { flex: 1; min-width: 0; }
-.cs-edit-btn {
-  flex-shrink: 0;
-  padding: 3px 10px;
-  font-size: 12px;
-  background: #1f1f1f;
-  color: #fff;
-  border: 1px solid var(--border-color, #333);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.cs-edit-btn:hover { background: #2a2a2a; border-color: #818cf8; color: #c7d2fe; }
