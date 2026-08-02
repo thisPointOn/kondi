@@ -181,6 +181,21 @@ Additional entry types: `decomposition`, `module_directive`, `module_output`, `c
 
 Asking chat to "create/spin up/generate a council to …" builds and **opens** one (the user clicks Start — it does NOT auto-run). `council/chat-council-gen.ts`: `isCouncilCreationRequest()` gates on intent (a verb + "council" regex, calibrated to ignore "what is a council"/"city council"); `generateCouncilSetup()` asks a fast model for the council SHAPE only (name, `stepType`, task, persona roles/traits) as strict JSON, then assigns concrete provider/models per role from the user's configured providers (tool-capable CLI worker for coding/enrich/review) — the LLM never picks model ids. `ChatArea` creates the council (`createCouncilFromSetup`, persisted), posts a confirmation, and fires `requestCouncilRun(id, task)` (`councilCreateSignal.ts`). `App` listens for `COUNCIL_RUN_EVENT` → navigates to the council view; `DeliberationView` calls `consumeCouncilRun()` on mount and **pre-fills the task** so the council is ready — the user reviews the setup and starts it.
 
+### 4d. Multi-Step Council Workflows (`council/workflow-runner.ts`)
+
+Councils sharing a `workflowId` (`council/types.ts`) form an ordered chain — the "step rail" (`WorkflowRail.tsx`) shown atop the council view. `council/store.ts` `appendCouncilToWorkflow(councilId)` creates the workflowId on first use and appends a new council after the source; `getWorkflowCouncils(councilId)` returns the ordered chain (a council with no `workflowId` is its own 1-step workflow); both are exposed on `councilStore` as `getWorkflow`/`getWorkflowName`/`appendToWorkflow`.
+
+**Running a step runs it AND every step after it, in order** (`runWorkflowFrom(startCouncilId, { frameProblem, onStepStart })`):
+1. `clearStepResults(id)` on every step from the start index to the end — clears the ledger (`ledgerStore.clear`), artifacts (`deleteAllArtifacts`), and `deliberationState` (reset to `undefined`, `status:'active'`) so each reruns fresh. Steps BEFORE the start index are untouched and keep feeding the run.
+2. For each step in range, `composeStepProblem(step, priorSteps)` builds the problem text: the step's own `savedProblem` (fallback `topic`), plus — if there are prior steps — the previous step's latest output (`context-store.ts` `getLatestOutput`) rendered through the step's `inputTemplate` contract under a `## INPUT FROM PREVIOUS STEP (name)` header, plus — if `includePipelineInput` is set — the workflow's first step's `savedProblem` under `## WORKFLOW STARTING INPUT`.
+3. `callbacks.onStepStart?.(step, index, total)` fires before each step (lets the UI follow along), then `callbacks.frameProblem(step, problem)` runs the normal single-council launch path — same model validation, tool preflight, and orchestrator choice as any council (`useCouncilHandlers.onFrameProblem`). A failing step's error propagates and stops the run.
+
+`renderStepInput` shares `renderCoreTemplate` from `pipeline/input-template.ts` (§5a-2) but with `indexBase: 1` (matches the rail's 1-based step numbering) and rewrites a bare `{{input}}` to `{{input[N]}}` (the PREVIOUS step only) before rendering — unlike the pipeline's `{{input}}`, which joins ALL previous artifacts.
+
+The run loop lives in `useCouncilHandlers.onRunWorkflow` (not the view component) so it survives the per-step view remounts as `DeliberationView` follows the active step. Starting a never-run multi-step council's first step, and "Save & Rerun" on an already-run step mid-workflow, both call `onRunWorkflow`; the latter invalidates that step and everything forward of it only — earlier steps and their outputs are preserved. Single-step councils and councils spawned by a pipeline step are unaffected (they still launch via `frameProblem` directly).
+
+**View-mode navigation**: a one-shot `requestCouncilView(id)`/`consumeCouncilView(id)` signal (`councilSetupSignal.ts`) tells `DeliberationView`'s mount logic to open the target step's deliberation (view mode) instead of auto-opening setup — used when the workflow rail advances between steps mid-run, and when a rail step is clicked while already in view mode. Auto-open of the setup panel is now gated to genuinely NEW councils only: `phase === 'created' && status !== 'resolved' && !deliberation?.savedProblem` — needed because `deliberationState` is not persisted to disk (rule #6), so every council reads phase `'created'` after an app restart; without the extra checks a resolved or in-progress council would hijack into the edit screen on reload.
+
 ---
 
 ## 5. Pipeline Steps
@@ -227,6 +242,9 @@ Asking chat to "create/spin up/generate a council to …" builds and **opens** o
 | `{{input[N].fieldName}}` | JSON field from specific artifact |
 | `{{file}}` | All output file paths joined |
 | `{{file[N]}}` | Specific artifact's file path |
+| `none` | No input from previous steps — the step sees only its own task |
+
+**Shared implementation (`pipeline/input-template.ts`).** `renderCoreTemplate(template, inputs, { indexBase })`, `resolveJsonPath`, and `extractJsonBlock` are the ONE implementation of this contract, used by both the pipeline executor and the council workflow-runner (§4d) so the two can't drift. Each caller keeps its own concerns on top: the executor supplies `indexBase: 0` (artifact position) and layers provenance headers (`display`) + `{{memory.*}}` post-processing; the workflow-runner supplies `indexBase: 1` (step-rail numbering) and rewrites a bare `{{input}}` to an indexed access first, since in a workflow `{{input}}` means only the PREVIOUS step's output, not all prior steps joined. `resolveJsonPath` falls back to `extractJsonBlock` when the raw content isn't itself valid JSON (prose- or fence-wrapped), so `{{input.field}}`/`{{input[N].field}}` recover the same way in both callers. `extractJsonBlock` is no longer exported from `pipeline/executor.ts` — import it from `pipeline/input-template.ts`.
 
 ### 5a-3. Script Step Config
 

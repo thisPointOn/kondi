@@ -445,6 +445,15 @@ During a running council:
 - **Abort** — terminate the council and mark it as failed
 - **Send Message** — while paused, send a message; the last responding persona will reply
 
+### Multi-Step Council Workflows
+
+A council can be chained into a series of steps — a lighter-weight alternative to building a full [pipeline](#10-pipelines). Open a council and click **+** on the step rail above the deliberation to append another council step; the rail shows every step in the series and lets you click between them. The workflow's overall name and status sit above the rail, with an **✎ Edit** button that opens the current step's setup without leaving the workflow.
+
+- **Run a step and everything runs forward.** Clicking **Start** on any step in the series runs that step AND every step after it, in order — each step is handed the previous step's output (through its [input template](#artifact-flow), same syntax as pipeline steps) automatically.
+- **Editing a step reruns forward, not backward.** If you edit an already-run step and choose **Save & Rerun**, that step and every step after it are cleared and rerun; earlier steps and their results are left alone and continue feeding the rerun.
+- Each step configures its own input contract (`{{input}}`, `{{input.fieldName}}`, or a fixed starting input) the same way a pipeline step does — see [Artifact Flow](#artifact-flow) below.
+- A council with no additional steps is just a normal 1-step workflow; nothing changes for it.
+
 ---
 
 ## 7. Personas

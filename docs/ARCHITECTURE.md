@@ -101,7 +101,7 @@ For CLI LLM calls (`run_claude_streaming`), long prompts are piped via stdin to 
 
 ### Frontend Rendering
 
-React 19 with Vite 7 hot-reload in development. No client-side routing — the sidebar controls a single-page view switcher in `App.tsx`. State management uses React hooks (useState, useRef, useEffect, useMemo) and localStorage for persistence.
+React 19 with Vite 7 hot-reload in development. No client-side routing — the sidebar controls a single-page view switcher in `App.tsx`. State management uses React hooks (useState, useRef, useEffect, useMemo) and localStorage for persistence. `Sidebar.tsx` has a **Pipelines** section (expandable list synced from `pipelineStore`, tile-view + new-pipeline actions, plus a collapsed-mode nav button) alongside Council — the pipeline builder/library/graph views existed but had no sidebar entry point before this was added.
 
 ---
 
@@ -391,6 +391,33 @@ detectBuildCommand(workingDir): similar pattern
 detectTestCommand(workingDir): similar pattern
 ```
 
+### Multi-Step Council Workflows (`workflow-runner.ts`)
+
+Councils sharing a `workflowId` form an ordered chain (the step rail rendered atop the council view). The runner owns SEQUENCING only — each step's actual deliberation still goes through the same launch path (`useCouncilHandlers.onFrameProblem`: model validation, tool preflight, orchestrator choice) as any standalone council.
+
+```
+runWorkflowFrom(startCouncilId, { frameProblem, onStepStart }):
+  steps = getWorkflowCouncils(startCouncilId)      # ordered chain (workflowId siblings)
+  toRun = steps[startIndex .. end]
+
+  for step in toRun:
+    clearStepResults(step.id)                      # ledger + artifacts + deliberationState reset
+                                                     # (steps BEFORE startIndex are untouched)
+
+  for step in toRun (in order):
+    problem = composeStepProblem(step, priorSteps)  # step.savedProblem + previous step's output
+                                                     # rendered via step.inputTemplate, +
+                                                     # workflow starting input if includePipelineInput
+    onStepStart(step)                               # UI follows the active step
+    await frameProblem(step, problem)                # normal council launch; throws stop the run
+```
+
+Running a step therefore runs it AND everything after it — editing and "Save & Rerun"-ing a step invalidates that step and every step forward of it, while earlier steps keep their results and keep feeding the rerun. The loop lives in `useCouncilHandlers.onRunWorkflow`, not in `DeliberationView`, so it survives the component remounting as the UI navigates between steps mid-run.
+
+`composeStepProblem`/`renderStepInput` render the step's `inputTemplate` through the SAME `renderCoreTemplate` used by the pipeline executor (`pipeline/input-template.ts` — see §7 below), with `indexBase: 1` (rail numbering) and a bare `{{input}}` meaning only the PREVIOUS step's output (the pipeline's `{{input}}` joins ALL previous artifacts).
+
+Navigation: a one-shot `requestCouncilView`/`consumeCouncilView` signal tells `DeliberationView` to open a step in view mode (its deliberation) instead of auto-opening the setup/edit screen — needed because `deliberationState` isn't persisted to disk, so every council reads phase `'created'` after a restart; auto-setup now additionally requires `status !== 'resolved'` and no saved problem before it will hijack into the edit screen.
+
 ---
 
 ## 7. Pipeline Execution Engine
@@ -461,12 +488,19 @@ PipelineExecutor.run(pipeline):
 
 ### Input Template Rendering
 
+The core `{{input}}`/`{{file}}`/JSON-path substitutions live in `pipeline/input-template.ts` (`renderCoreTemplate`, `resolveJsonPath`, `extractJsonBlock`) — shared with the council workflow-runner (§6) so pipeline steps and workflow steps can't drift apart on template semantics. `pipeline/executor.ts`'s `renderInputTemplate` delegates to it with `indexBase: 0` and layers its own provenance headers + `{{memory.*}}` substitution on top.
+
 ```
 renderTemplate("{{input}}", artifacts):
   -> joins all previous artifacts with provenance headers
 
 renderTemplate("{{input[0]}}", artifacts):
   -> returns first artifact
+
+resolveJsonPath(content, "field.path"):
+  -> JSON.parse(content) and walk the path
+  -> falls back to extractJsonBlock(content) first if content isn't itself valid JSON
+     (recovers from prose/```json-fence-wrapped responses)
 
 Provenance header format:
   [Source: Step Name (step_type)]
