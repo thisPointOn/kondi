@@ -20,6 +20,7 @@ import type {
   ConditionStepConfig,
 } from './types';
 import { migrateLlmConfig } from './types';
+import { renderCoreTemplate, extractJsonBlock } from './input-template';
 
 import { pipelineStore } from './store';
 import { councilStore } from '../council/store';
@@ -125,106 +126,24 @@ function formatArtifactForInput(artifact: StepArtifact): string {
   return artifact.content;
 }
 
-/**
- * Extract a clean JSON value from a worker response for `outputType: 'json'`
- * steps. Weaker council workers (e.g. deepseek) wrap JSON in prose, ```json
- * fences, or hallucinated tool-call narration; if the stored artifact isn't
- * parseable, every downstream `{{input.field}}` access silently resolves to ''
- * and breaks the pipeline. Returns the pretty-printed JSON if a valid object/
- * array can be recovered, else the original content unchanged (best effort).
- */
-export function extractJsonBlock(raw: string): string {
-  if (!raw) return raw;
-  const tryParse = (s: string): string | null => {
-    try { return JSON.stringify(JSON.parse(s.trim()), null, 2); } catch { return null; }
-  };
-  // 0. Already valid JSON.
-  const whole = tryParse(raw);
-  if (whole) return whole;
-  // 1. A ```json … ``` (or bare ```) fenced block.
-  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence) { const p = tryParse(fence[1]); if (p) return p; }
-  // 2. The largest balanced {...} or [...] span in the text.
-  for (const [open, close] of [['{', '}'], ['[', ']']] as const) {
-    const start = raw.indexOf(open);
-    const end = raw.lastIndexOf(close);
-    if (start !== -1 && end > start) { const p = tryParse(raw.slice(start, end + 1)); if (p) return p; }
-  }
-  return raw;
-}
-
-/**
- * Parse artifact content as JSON and walk a dot-separated path.
- * Returns the stringified value at the path, or '' if parsing fails or path not found.
- */
-function resolveJsonPath(content: string, dotPath: string): string {
-  try {
-    let obj = JSON.parse(content);
-    for (const key of dotPath.split('.')) {
-      if (obj == null || typeof obj !== 'object') return '';
-      obj = obj[key];
-    }
-    if (obj === undefined || obj === null) return '';
-    return typeof obj === 'string' ? obj : JSON.stringify(obj);
-  } catch {
-    return '';
-  }
-}
-
 function renderInputTemplate(
   template: string,
   previousArtifacts: StepArtifact[],
   memoryCtx?: MemoryContext
 ): string {
-  // "none" means no input from previous steps — step only sees its task
-  if (template === 'none') return '';
-
-  if (!template || template === '{{input}}') {
-    return previousArtifacts.map((a) => formatArtifactForInput(a)).join('\n\n---\n\n');
-  }
-
-  let result = template;
-
-  // Replace {{input}} with all artifacts joined (with provenance headers)
-  result = result.replace(
-    /\{\{input\}\}/g,
-    previousArtifacts.map((a) => formatArtifactForInput(a)).join('\n\n---\n\n')
+  // Core {{input}}/{{file}} semantics are shared with the council
+  // workflow-runner (input-template.ts). Pipelines index {{input[N]}} by
+  // 0-based artifact position; provenance headers ride in `display`.
+  let result = renderCoreTemplate(
+    template,
+    previousArtifacts.map((a) => ({
+      display: formatArtifactForInput(a),
+      raw: a.content,
+      filePath: a.metadata?.outputPath,
+    })),
+    { indexBase: 0 },
   );
-
-  // Replace {{input[N]}} with specific artifact (with provenance header)
-  result = result.replace(/\{\{input\[(\d+)\]\}\}/g, (_match, index) => {
-    const i = parseInt(index, 10);
-    return previousArtifacts[i] ? formatArtifactForInput(previousArtifacts[i]) : '';
-  });
-
-  // Replace {{file}} with all output file paths (newline-joined, non-null only)
-  result = result.replace(
-    /\{\{file\}\}/g,
-    previousArtifacts
-      .map((a) => a.metadata?.outputPath)
-      .filter(Boolean)
-      .join('\n')
-  );
-
-  // Replace {{file[N]}} with specific artifact's file path
-  result = result.replace(/\{\{file\[(\d+)\]\}\}/g, (_match, index) => {
-    const i = parseInt(index, 10);
-    return previousArtifacts[i]?.metadata?.outputPath || '';
-  });
-
-  // Replace {{input.fieldName}} with JSON field from last artifact (dot-path walk)
-  result = result.replace(/\{\{input\.([a-zA-Z0-9_.]+)\}\}/g, (_match, path) => {
-    const last = previousArtifacts[previousArtifacts.length - 1];
-    if (!last) return '';
-    return resolveJsonPath(last.content, path);
-  });
-
-  // Replace {{input[N].fieldName}} with JSON field from specific artifact
-  result = result.replace(/\{\{input\[(\d+)\]\.([a-zA-Z0-9_.]+)\}\}/g, (_match, index, path) => {
-    const i = parseInt(index, 10);
-    if (!previousArtifacts[i]) return '';
-    return resolveJsonPath(previousArtifacts[i].content, path);
-  });
+  if (!template || template === 'none' || template === '{{input}}') return result;
 
   // ---- Memory template variables ----
   if (memoryCtx) {

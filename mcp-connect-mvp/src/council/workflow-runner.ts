@@ -16,6 +16,7 @@ import type { Council } from './types';
 import { councilStore } from './store';
 import { ledgerStore } from './ledger-store';
 import { getLatestOutput, deleteAllArtifacts } from './context-store';
+import { renderCoreTemplate } from '../pipeline/input-template';
 
 export interface WorkflowRunCallbacks {
   /** Runs one council's full deliberation (blocking until done). */
@@ -33,30 +34,23 @@ export function clearStepResults(councilId: string): void {
 
 /**
  * Render a step's input template against the outputs of the steps before it.
- *   {{input}}        → the immediately previous step's output
- *   {{input[N]}}     → step N's output (1-based, matching the rail numbering)
- *   {{input.field}}  → dot-path into the previous step's output parsed as JSON
+ * Shares the core {{input}}/{{input[N]}}/{{input.field}} semantics with the
+ * pipeline executor (input-template.ts); here {{input[N]}} is 1-based to
+ * match the step-rail numbering, and {{input}} is the previous step's output.
  */
 export function renderStepInput(template: string, priorSteps: Council[]): string {
-  const prev = priorSteps[priorSteps.length - 1];
-  const outputOf = (c: Council | undefined): string =>
-    (c && getLatestOutput(c.id)?.content) || '';
-
-  return template
-    .replace(/\{\{\s*input\[(\d+)\]\s*\}\}/g, (_, n) => outputOf(priorSteps[Number(n) - 1]))
-    .replace(/\{\{\s*input\.([\w.[\]]+)\s*\}\}/g, (_, path: string) => {
-      try {
-        const json = JSON.parse(outputOf(prev));
-        const val = path.split('.').reduce<unknown>(
-          (o, k) => (o != null && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined),
-          json,
-        );
-        return val == null ? '' : typeof val === 'string' ? val : JSON.stringify(val);
-      } catch {
-        return '';
-      }
-    })
-    .replace(/\{\{\s*input\s*\}\}/g, () => outputOf(prev));
+  const inputs = priorSteps.map((c) => {
+    const content = getLatestOutput(c.id)?.content || '';
+    return { display: content, raw: content };
+  });
+  const last = inputs[inputs.length - 1];
+  if (!template || template === '{{input}}') return last?.display ?? '';
+  // Workflow {{input}} means the PREVIOUS step's output (per the rail UX), not
+  // all steps joined — rewrite bare {{input}} to an indexed access, then let
+  // the shared renderer handle everything ({{input.field}} already targets the
+  // last input, i.e. the previous step).
+  const rewritten = template.replace(/\{\{input\}\}/g, `{{input[${inputs.length}]}}`);
+  return renderCoreTemplate(rewritten, inputs, { indexBase: 1 });
 }
 
 /**
