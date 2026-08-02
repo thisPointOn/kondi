@@ -1,7 +1,9 @@
-import { Plus, Settings, ChevronDown, ChevronLeft, ChevronRight, MessageSquare, Cpu, Users, AlertCircle, Server, LayoutGrid, Folder, X } from 'lucide-react';
+import { Plus, Settings, ChevronDown, ChevronLeft, ChevronRight, MessageSquare, Cpu, Users, AlertCircle, Server, LayoutGrid, Folder, X, Workflow } from 'lucide-react';
 import { useEffect, useState, type FC } from 'react';
 import { councilStore } from '../council';
 import type { Council } from '../council/types';
+import { pipelineStore } from '../pipeline/store';
+import type { Pipeline } from '../pipeline/types';
 import { useProjects, createProject, deleteProject, addChatToProject } from '../services/projectsStore';
 import './Sidebar.css';
 
@@ -66,6 +68,10 @@ const Sidebar: FC<SidebarProps> = ({
   currentCouncilId,
   onCouncilSelect,
   onShowCouncilLibrary,
+  currentPipelineId,
+  onPipelineSelect,
+  onShowPipelineLibrary,
+  onNewPipeline,
   currentProjectId,
   onSelectProject,
   className,
@@ -96,6 +102,15 @@ const Sidebar: FC<SidebarProps> = ({
     const load = () => setCouncils(councilStore.getAll().filter((c) => !c.pipelineId && (!c.workflowId || (c.workflowOrder ?? 0) === 0)));
     load();
     return councilStore.subscribe(load);
+  }, []);
+
+  // Keep the pipeline list in sync with the store.
+  const [pipelinesExpanded, setPipelinesExpanded] = useState(false);
+  const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  useEffect(() => {
+    const load = () => setPipelines(pipelineStore.getAll());
+    load();
+    return pipelineStore.subscribe(load);
   }, []);
   const [showChatsPopover, setShowChatsPopover] = useState(false);
   const [chatMenu, setChatMenu] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -303,6 +318,65 @@ const Sidebar: FC<SidebarProps> = ({
       {!collapsed && (
         <div className="flowforge-section">
           <div className="section-divider section-divider-plain" />
+        </div>
+      )}
+
+      {collapsed ? (
+        <button
+          className={`nav-btn ${currentView === 'pipelines' ? 'active' : ''}`}
+          onClick={() => onShowPipelineLibrary?.()}
+          title="Pipelines - Multi-Stage Workflows"
+        >
+          <Workflow size={18} />
+        </button>
+      ) : (
+        <div className="council-section">
+          <div className="section-header">
+            <button
+              className="section-header-toggle"
+              onClick={() => setPipelinesExpanded((p) => !p)}
+            >
+              <ChevronDown
+                size={16}
+                className="chevron"
+                style={{ transform: pipelinesExpanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+              />
+              <Workflow size={15} />
+              <span className="section-label">Pipelines</span>
+            </button>
+            <button
+              className="section-header-action"
+              onClick={() => onShowPipelineLibrary?.()}
+              title="All pipelines (tile view)"
+            >
+              <LayoutGrid size={14} />
+            </button>
+            <button
+              className="section-header-action"
+              onClick={() => onNewPipeline?.()}
+              title="New pipeline"
+            >
+              <Plus size={14} />
+            </button>
+          </div>
+
+          {pipelinesExpanded && (
+            <div className="chat-list">
+              {pipelines.map((p) => (
+                <button
+                  key={p.id}
+                  className={`chat-item ${p.id === currentPipelineId && currentView === 'pipelines' ? 'active' : ''}`}
+                  onClick={() => onPipelineSelect?.(p.id)}
+                  title={p.name}
+                >
+                  <span className="chat-item-title">{p.name}</span>
+                </button>
+              ))}
+              {pipelines.length === 0 && (
+                <div className="chat-item empty">No pipelines yet</div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
