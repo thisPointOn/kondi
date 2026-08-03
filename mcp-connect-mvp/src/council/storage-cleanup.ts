@@ -257,7 +257,16 @@ class CouncilDataStore {
    */
   setItemPersistent(key: string, value: string): void {
     this.cache.set(key, value);
-    localStorage.setItem(key, value);
+    // Best-effort localStorage mirror — a full quota must NOT throw (it used
+    // to, killing e.g. pipeline saves once other data filled the ~5MB cap).
+    // Restart-persistence is guaranteed by the disk write below, not by
+    // localStorage.
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      console.warn(`[CouncilDataStore] localStorage full — "${key}" persisted to disk only`);
+    }
+    this.scheduleDiskWrite(key, value);
   }
 
   /**
