@@ -143,17 +143,19 @@ export default function PipelineBuilder({
   };
 
   const handleAddStep = (stageId: string) => {
-    const defaultConfig = getDefaultConfigForType('agent', configuredProviders);
+    const defaultConfig = getDefaultConfigForType('council', configuredProviders);
     pipelineStore.addStep(pipelineId, stageId, defaultConfig, 'New Step');
   };
 
   // Graph mode: a new step gets its own sequential stage (stages are an
   // internal execution detail — the graph shows a plain chain of steps).
+  // Default to a FULL council (manager/consultant/worker) — the Type dropdown
+  // in the config panel downgrades to lightweight agent/analysis if wanted.
   const handleGraphAddStep = () => {
     const updated = pipelineStore.addStage(pipelineId);
     const newStage = updated?.stages[updated.stages.length - 1];
     if (!newStage) return;
-    const defaultConfig = getDefaultConfigForType('agent', configuredProviders);
+    const defaultConfig = getDefaultConfigForType('council', configuredProviders);
     const withStep = pipelineStore.addStep(pipelineId, newStage.id, defaultConfig, `Step ${updated.stages.length}`);
     const step = withStep?.stages.find((s) => s.id === newStage.id)?.steps[0];
     if (step) {
