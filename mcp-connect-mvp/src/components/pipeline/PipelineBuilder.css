@@ -67,6 +67,23 @@
   gap: 0.5rem;
 }
 
+.builder-details-btn {
+  padding: 0.4rem 0.75rem;
+  background: transparent;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  color: var(--text-secondary, #999);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  transition: all 0.15s;
+}
+
+.builder-details-btn:hover,
+.builder-details-btn.open {
+  color: var(--text-primary, #e5e5e5);
+  border-color: var(--text-secondary, #999);
+}
+
 .builder-view-toggle {
   display: flex;
   border: 1px solid var(--border-color, #333);

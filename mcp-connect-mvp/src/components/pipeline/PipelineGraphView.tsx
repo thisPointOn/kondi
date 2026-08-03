@@ -1,11 +1,17 @@
 /**
- * PipelineGraphView: node-graph projection of a pipeline.
+ * PipelineGraphView: the primary pipeline surface — a node graph of steps.
  *
- * Stages render as vertical layers, steps as clickable nodes. Condition
- * branches are drawn as real edges: loop_to_stage as an amber back-edge on
- * the left lane, skip_next_stage as a dashed bypass on the right lane, stop
- * as a terminal badge. Clicking a node opens the existing StepConfigPanel.
- * Structural editing (add/remove stages & steps) stays in the List view.
+ * Stages are an internal execution detail and are NOT shown: steps render as
+ * chained nodes (steps that share a stage still sit side by side and run per
+ * the stage's execution mode, but there is no stage chrome). The graph is
+ * editable: "+ Add Step" appends a new step (its own sequential stage under
+ * the hood), each node has a remove ✕, and nodes that ran expose "view
+ * deliberation". Clicking the Input node or a step selects it — the side
+ * panel shows the pipeline input or the step's config.
+ *
+ * Condition branches render as real edges: loop_to_stage as an amber
+ * back-edge (labeled with maxLoops), skip_next_stage as a dotted bypass,
+ * stop as a badge. Node left-border reflects live step status.
  */
 
 import type {
@@ -19,7 +25,14 @@ import './PipelineGraphView.css';
 interface PipelineGraphViewProps {
   pipeline: Pipeline;
   selectedStepId: string | null;
+  /** True when the Input pseudo-node is selected (side panel shows pipeline input). */
+  inputSelected?: boolean;
   onStepSelect: (stepId: string) => void;
+  onSelectInput?: () => void;
+  onAddStep?: () => void;
+  onRemoveStep?: (stageId: string, stepId: string) => void;
+  /** Open the full deliberation of a step's council. */
+  onOpenCouncil?: (councilId: string) => void;
 }
 
 const NODE_W = 190;
@@ -27,22 +40,23 @@ const NODE_H = 92;
 const INPUT_W = 150;
 const INPUT_H = 40;
 const H_GAP = 36;
-const V_GAP = 76;
+const V_GAP = 56;
 const SIDE_PAD = 96;
-const TOP_PAD = 30;
+const TOP_PAD = 24;
 const LANE_STEP = 16;
 const BADGE_SPACE = 26;
+const ADD_W = 150;
+const ADD_H = 44;
 
 interface GraphNode {
-  step: PipelineStep | null; // null = empty-stage placeholder
+  step: PipelineStep | null;
+  stageId: string;
   x: number;
   y: number;
 }
 
 interface GraphRow {
   stageId: string;
-  label: string;
-  mode: 'sequential' | 'parallel';
   y: number;
   nodes: GraphNode[];
 }
@@ -58,51 +72,56 @@ interface GraphEdge {
 export default function PipelineGraphView({
   pipeline,
   selectedStepId,
+  inputSelected,
   onStepSelect,
+  onSelectInput,
+  onAddStep,
+  onRemoveStep,
+  onOpenCouncil,
 }: PipelineGraphViewProps) {
-  const stages = pipeline.stages;
+  const stages = pipeline.stages.filter((s) => s.steps.length > 0);
 
   // ---- Layout ----
   const rowWidth = (n: number) => Math.max(n, 1) * NODE_W + (Math.max(n, 1) - 1) * H_GAP;
   const canvasW =
-    Math.max(INPUT_W, ...stages.map((s) => rowWidth(s.steps.length))) + SIDE_PAD * 2;
+    Math.max(INPUT_W, ADD_W, ...stages.map((s) => rowWidth(s.steps.length))) + SIDE_PAD * 2;
 
   const inputY = TOP_PAD;
   const stageY = (i: number) => inputY + INPUT_H + V_GAP + i * (NODE_H + V_GAP + BADGE_SPACE);
 
   const rows: GraphRow[] = stages.map((stage, i) => {
-    const n = Math.max(stage.steps.length, 1);
+    const n = stage.steps.length;
     const startX = (canvasW - rowWidth(n)) / 2;
     const y = stageY(i);
-    const nodes: GraphNode[] =
-      stage.steps.length > 0
-        ? stage.steps.map((step, j) => ({ step, x: startX + j * (NODE_W + H_GAP), y }))
-        : [{ step: null, x: startX, y }];
     return {
       stageId: stage.id,
-      label: `Stage ${i + 1} · ${stage.name}`,
-      mode: stage.executionMode || 'sequential',
       y,
-      nodes,
+      nodes: stage.steps.map((step, j) => ({
+        step,
+        stageId: stage.id,
+        x: startX + j * (NODE_W + H_GAP),
+        y,
+      })),
     };
   });
 
-  const canvasH =
-    (rows.length > 0 ? rows[rows.length - 1].y + NODE_H : inputY + INPUT_H) + BADGE_SPACE + TOP_PAD;
+  const addY = stageY(rows.length);
+  const canvasH = addY + ADD_H + TOP_PAD;
 
   // ---- Edges ----
   const edges: GraphEdge[] = [];
-  const badges = new Map<string, string[]>(); // stepId -> badge texts
+  const badges = new Map<string, string[]>();
   let loopLane = 0;
   let skipLane = 0;
 
   const downEdge = (x1: number, y1: number, x2: number, y2: number): string =>
     `M ${x1} ${y1} C ${x1} ${y1 + (y2 - y1) / 2}, ${x2} ${y1 + (y2 - y1) / 2}, ${x2} ${y2 - 3}`;
 
-  // Input node → stage 1 entry
   const inputX = (canvasW - INPUT_W) / 2;
   if (rows.length > 0) {
-    const entry = rows[0].mode === 'sequential' ? [rows[0].nodes[0]] : rows[0].nodes;
+    const first = rows[0];
+    const mode = stages[0].executionMode || 'sequential';
+    const entry = mode === 'sequential' ? [first.nodes[0]] : first.nodes;
     for (const t of entry) {
       edges.push({
         path: downEdge(inputX + INPUT_W / 2, inputY + INPUT_H, t.x + NODE_W / 2, t.y),
@@ -112,10 +131,11 @@ export default function PipelineGraphView({
   }
 
   rows.forEach((row, i) => {
-    // Stage-to-stage flow: every prior-stage step feeds this stage's entry node(s)
+    const mode = stages[i].executionMode || 'sequential';
+
     if (i > 0) {
       const prev = rows[i - 1];
-      const entry = row.mode === 'sequential' ? [row.nodes[0]] : row.nodes;
+      const entry = mode === 'sequential' ? [row.nodes[0]] : row.nodes;
       for (const s of prev.nodes) {
         for (const t of entry) {
           edges.push({
@@ -126,8 +146,7 @@ export default function PipelineGraphView({
       }
     }
 
-    // Sibling chain in sequential stages (execution order)
-    if (row.mode === 'sequential') {
+    if (mode === 'sequential') {
       for (let j = 1; j < row.nodes.length; j++) {
         const a = row.nodes[j - 1];
         const b = row.nodes[j];
@@ -138,7 +157,6 @@ export default function PipelineGraphView({
       }
     }
 
-    // Condition branches
     for (const node of row.nodes) {
       if (!node.step || node.step.config.type !== 'condition') continue;
       const cfg = node.step.config as ConditionStepConfig;
@@ -198,18 +216,19 @@ export default function PipelineGraphView({
     }
   });
 
+  // Edge from last row to the add node
+  if (onAddStep) {
+    const addX = (canvasW - ADD_W) / 2;
+    const from = rows.length > 0
+      ? rows[rows.length - 1].nodes.map((n) => ({ x: n.x + NODE_W / 2, y: n.y + NODE_H }))
+      : [{ x: inputX + INPUT_W / 2, y: inputY + INPUT_H }];
+    for (const f of from) {
+      edges.push({ path: downEdge(f.x, f.y, addX + ADD_W / 2, addY), cls: 'chain' });
+    }
+  }
+
   return (
     <div className="pipeline-graph-view">
-      <div className="graph-legend">
-        <span className="legend-item"><span className="legend-line flow" /> flow</span>
-        <span className="legend-item"><span className="legend-line loop" /> loop back</span>
-        <span className="legend-item"><span className="legend-line skip" /> skip</span>
-        <span className="legend-hint">
-          Click a node to edit its config. Sequential steps also receive the previous
-          stage's outputs. Add or remove stages in List view.
-        </span>
-      </div>
-
       <div className="graph-scroll">
         <div className="graph-canvas" style={{ width: canvasW, height: canvasH }}>
           <svg className="graph-edges" width={canvasW} height={canvasH}>
@@ -241,25 +260,22 @@ export default function PipelineGraphView({
             )}
           </svg>
 
-          {/* Initial input pseudo-node */}
+          {/* Initial input pseudo-node — click to edit the pipeline input */}
           <div
-            className="graph-input-node"
+            className={`graph-input-node clickable ${inputSelected ? 'selected' : ''}`}
             style={{ left: inputX, top: inputY, width: INPUT_W, height: INPUT_H }}
-            title={pipeline.initialInput || 'No initial input set'}
+            title={pipeline.initialInput || 'Click to set the pipeline input'}
+            onClick={() => onSelectInput?.()}
           >
-            <span className="graph-input-icon">▶</span> Initial Input
+            <span className="graph-input-icon">▶</span> Input
           </div>
 
-          {rows.map((row, i) => (
+          {rows.map((row) => (
             <div key={row.stageId}>
-              <div className="graph-stage-label" style={{ top: row.y - 22 }}>
-                {row.label}
-                {row.nodes.length > 1 && (
-                  <span className={`graph-stage-mode ${row.mode}`}>{row.mode}</span>
-                )}
-              </div>
-              {row.nodes.map((node, j) =>
-                node.step ? (
+              {row.nodes.map((node) => {
+                if (!node.step) return null;
+                const councilId = node.step.artifact?.metadata?.councilId;
+                return (
                   <div
                     key={node.step.id}
                     className={[
@@ -274,15 +290,41 @@ export default function PipelineGraphView({
                     <div className="graph-node-type">
                       <span>{getStepIcon(node.step.config.type)}</span>
                       <span>{node.step.config.type}</span>
+                      {onRemoveStep && (
+                        <button
+                          className="graph-node-remove"
+                          title="Remove step"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRemoveStep(node.stageId, node.step!.id);
+                          }}
+                        >
+                          ✕
+                        </button>
+                      )}
                     </div>
                     <div className="graph-node-name">{node.step.name}</div>
                     <div className="graph-node-summary">{getStepSummary(node.step)}</div>
-                    {node.step.status !== 'pending' && (
-                      <div className="graph-node-status">
-                        <span className={`step-status-dot ${node.step.status}`} />
-                        {node.step.status === 'waiting_approval' ? 'Waiting' : node.step.status}
-                      </div>
-                    )}
+                    <div className="graph-node-foot">
+                      {node.step.status !== 'pending' && (
+                        <span className="graph-node-status">
+                          <span className={`step-status-dot ${node.step.status}`} />
+                          {node.step.status === 'waiting_approval' ? 'Waiting' : node.step.status}
+                        </span>
+                      )}
+                      {councilId && onOpenCouncil && (
+                        <button
+                          className="graph-node-delib"
+                          title="View this step's full deliberation"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenCouncil(councilId);
+                          }}
+                        >
+                          ⚖ deliberation
+                        </button>
+                      )}
+                    </div>
                     {badges.has(node.step.id) && (
                       <div className="graph-node-badges" style={{ top: NODE_H + 3 }}>
                         {badges.get(node.step.id)!.map((b, k) => (
@@ -291,18 +333,20 @@ export default function PipelineGraphView({
                       </div>
                     )}
                   </div>
-                ) : (
-                  <div
-                    key={`empty-${i}-${j}`}
-                    className="graph-node placeholder"
-                    style={{ left: node.x, top: node.y, width: NODE_W, height: NODE_H }}
-                  >
-                    <div className="graph-node-summary">No steps yet — add in List view</div>
-                  </div>
-                )
-              )}
+                );
+              })}
             </div>
           ))}
+
+          {onAddStep && (
+            <button
+              className="graph-add-node"
+              style={{ left: (canvasW - ADD_W) / 2, top: addY, width: ADD_W, height: ADD_H }}
+              onClick={onAddStep}
+            >
+              + Add Step
+            </button>
+          )}
         </div>
       </div>
     </div>

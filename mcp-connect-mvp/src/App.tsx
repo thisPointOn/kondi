@@ -4,6 +4,7 @@ import ChatArea from './components/ChatArea';
 import { PipelineLibrary, PipelineBuilder, PipelineExecutionView } from './components/pipeline';
 import { requestPipelineCreate } from './components/pipeline/pipelineCreateSignal';
 import { COUNCIL_RUN_EVENT } from './components/council/councilCreateSignal';
+import { requestCouncilView } from './components/council/councilSetupSignal';
 import ErrorBoundary from './components/ErrorBoundary';
 import ProjectView from './components/ProjectView';
 import { createDefaultCouncil } from './council/createDefaultCouncil';
@@ -162,6 +163,11 @@ function App() {
               onBack={pipeline.handlePipelineBack}
               onViewResults={pipeline.handlePipelineViewResults}
               onRun={pipeline.handlePipelineRun}
+              onOpenCouncil={(councilId) => {
+                requestCouncilView(councilId);
+                council.setCurrentCouncilId(councilId);
+                setCurrentView('council');
+              }}
             />
           ) : (
             <PipelineLibrary
