@@ -76,6 +76,17 @@ export interface PipelineExecutorCallbacks {
 // Platform Adapter (abstracts Tauri / Node.js)
 // ============================================================================
 
+/** A condition step's loop-back request, carried to the stage loop. */
+interface LoopRequest {
+  targetStageId: string;
+  fromStepId: string;
+  fromStepName?: string;
+  /** What the condition evaluated (typically the judge's verdict) — delivered
+   *  to the loop target as an extra input artifact. */
+  feedback?: string;
+  iteration?: number;
+}
+
 export interface PlatformAdapter {
   writeFile(path: string, content: string): Promise<void>;
   readFile?(path: string): Promise<string | null>;
@@ -191,7 +202,10 @@ export class PipelineExecutor {
   /** Set by condition steps to stop the pipeline (completes, not fails) */
   private stopPipeline = false;
   /** Set by a condition step to loop back to an earlier stage (iterative refine). */
-  private loopRequest: { targetStageId: string; fromStepId: string } | null = null;
+  private loopRequest: LoopRequest | null = null;
+  /** Feedback carried along a loop-back edge — the loop target receives this
+   *  as an extra input artifact (the "input from a future step"). */
+  private loopFeedback: StepArtifact | null = null;
   /** Per-condition-step loop counter — bounds loop_to_stage so it can't run forever. */
   private loopCounts = new Map<string, number>();
   /** Memory context loaded at pipeline start (if maintainMemory is enabled) */
@@ -226,6 +240,7 @@ export class PipelineExecutor {
     this.skipNextStage = false;
     this.stopPipeline = false;
     this.loopRequest = null;
+    this.loopFeedback = null;
     this.loopCounts.clear();
     this.runningPipelineId = pipelineId;
     this.memoryCtx = undefined;
@@ -307,8 +322,14 @@ export class PipelineExecutor {
           continue;
         }
 
-        // Collect previous stage artifacts (or initial input for stage 0)
+        // Collect previous stage artifacts (or initial input for stage 0).
+        // A loop target ALSO receives the feedback that rode the back-edge —
+        // the one case where a step gets input from a future step.
         const previousArtifacts = this.collectPreviousArtifacts(current, i);
+        if (this.loopFeedback) {
+          previousArtifacts.push(this.loopFeedback);
+          this.loopFeedback = null;
+        }
 
         this.callbacks.onStageStart?.(i);
 
@@ -325,7 +346,9 @@ export class PipelineExecutor {
         // Loop-back: a condition step in this stage asked to re-run from an
         // earlier stage (iterative refine→review). Reset the intervening stages
         // to pending and rewind the loop. Bounded by maxLoops in the condition.
-        const lr: { targetStageId: string; fromStepId: string } | null = this.loopRequest;
+        // Cast defeats TS's bogus null-narrowing of the field (it can't see
+        // that runStage → runConditionStep mutates this.loopRequest).
+        const lr = this.loopRequest as LoopRequest | null;
         if (lr) {
           this.loopRequest = null;
           const live = pipelineStore.get(pipelineId);
@@ -337,8 +360,20 @@ export class PipelineExecutor {
               }
             }
             pipelineStore.update(pipelineId, { currentStageIndex: targetIdx });
+            // The feedback rides the back-edge into the target's next input.
+            if (lr.feedback) {
+              this.loopFeedback = {
+                stepId: lr.fromStepId,
+                content: `THIS IS A RETRY (attempt ${(lr.iteration ?? 0) + 1}). The previous attempt was sent back. Address the feedback below.\n\n${lr.feedback}`,
+                artifactType: 'output',
+                metadata: {
+                  stepName: `Loop feedback from "${lr.fromStepName || 'condition'}" (iteration ${lr.iteration ?? 1})`,
+                },
+                createdAt: new Date().toISOString(),
+              };
+            }
             this.callbacks.onLog?.(
-              `↻ Looping back to stage "${live.stages[targetIdx].name}" (iteration via ${lr.fromStepId})`
+              `↻ Looping back to "${live.stages[targetIdx].name}" (iteration via ${lr.fromStepName || lr.fromStepId})`
             );
             i = targetIdx - 1; // for-loop i++ → targetIdx
             continue;
@@ -988,7 +1023,15 @@ export class PipelineExecutor {
       const count = this.loopCounts.get(step.id) ?? 0;
       if (config.loopTargetStageId && count < max) {
         this.loopCounts.set(step.id, count + 1);
-        this.loopRequest = { targetStageId: config.loopTargetStageId, fromStepId: step.id };
+        this.loopRequest = {
+          targetStageId: config.loopTargetStageId,
+          fromStepId: step.id,
+          fromStepName: step.name,
+          // What the condition evaluated (typically the judge's verdict) rides
+          // the back-edge so the target knows WHY it was sent back.
+          feedback: inputContext,
+          iteration: count + 1,
+        };
         actionNote = `loop_to_stage → ${config.loopTargetStageId} (iteration ${count + 1}/${max})`;
       } else {
         // Budget exhausted (or no target) — fall through to continue, never loop forever.
