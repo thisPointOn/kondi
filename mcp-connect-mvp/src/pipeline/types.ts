@@ -253,6 +253,11 @@ export interface ConditionStepConfig {
   loopTargetStageId?: string;
   /** Max times this condition may loop back before giving up (default 3). */
   maxLoops?: number;
+  /** What happens when maxLoops is exhausted and the check STILL fails:
+   *  'continue' (default) proceeds with the last attempt, 'stop' ends the
+   *  pipeline as completed, 'fail' fails the step (and the pipeline under the
+   *  default failure policy). */
+  onLoopExhausted?: 'continue' | 'stop' | 'fail';
 }
 
 export type StepConfig = CouncilStepConfig | LlmStepConfig | GateStepConfig | ScriptStepConfig | ConditionStepConfig;

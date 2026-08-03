@@ -1407,7 +1407,22 @@ function ConditionConfig({
                 value={config.maxLoops ?? 3}
                 onChange={(e) => update({ maxLoops: Math.max(1, parseInt(e.target.value, 10) || 3) })}
               />
-              <span className="hint">After this many loop-backs the condition gives up and continues — prevents infinite loops.</span>
+              <span className="hint">Max times the loop can fire — prevents infinite loops.</span>
+            </div>
+            <div className="config-field">
+              <label>After max loops (still failing)</label>
+              <select
+                value={config.onLoopExhausted || 'continue'}
+                onChange={(e) => update({ onLoopExhausted: e.target.value as 'continue' | 'stop' | 'fail' })}
+              >
+                <option value="continue">Continue with the last attempt</option>
+                <option value="stop">Stop the pipeline (completed)</option>
+                <option value="fail">Fail the pipeline</option>
+              </select>
+              <span className="hint">
+                What happens when the budget is spent and the check STILL fails —
+                continue pretends success; stop ends cleanly; fail marks the run failed.
+              </span>
             </div>
           </>
         )}

@@ -1033,11 +1033,23 @@ export class PipelineExecutor {
           iteration: count + 1,
         };
         actionNote = `loop_to_stage → ${config.loopTargetStageId} (iteration ${count + 1}/${max})`;
+      } else if (!config.loopTargetStageId) {
+        actionNote = 'loop_to_stage has no loopTargetStageId — continuing';
       } else {
-        // Budget exhausted (or no target) — fall through to continue, never loop forever.
-        actionNote = config.loopTargetStageId
-          ? `loop_to_stage budget reached (${max}) — continuing`
-          : 'loop_to_stage has no loopTargetStageId — continuing';
+        // Budget exhausted and the check still failed — apply the configured
+        // exhaustion outcome (never loop forever).
+        const exhausted = config.onLoopExhausted || 'continue';
+        if (exhausted === 'fail') {
+          throw new Error(
+            `Condition "${step.name}" still failing after ${max} loop${max === 1 ? '' : 's'} — failing the step (onLoopExhausted: fail)`
+          );
+        }
+        if (exhausted === 'stop') {
+          this.stopPipeline = true;
+          actionNote = `loop budget reached (${max}) — stopping pipeline (onLoopExhausted: stop)`;
+        } else {
+          actionNote = `loop budget reached (${max}) — continuing with last attempt`;
+        }
       }
     }
 
