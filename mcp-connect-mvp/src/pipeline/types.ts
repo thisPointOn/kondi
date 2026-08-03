@@ -362,11 +362,28 @@ export interface PipelineSchedule {
   captureStepIds?: string[];
 }
 
+/**
+ * Where the pipeline's initial input comes from. 'text' is the classic typed
+ * seed (Pipeline.initialInput). 'file'/'directory' point the first step at an
+ * external path (the step is instructed to read it with its tools). 'url' is
+ * fetched at run start (HTTPS; via the platform's fetchText). `instructions`
+ * ride along for every kind — what the first step should DO with the input.
+ */
+export interface PipelineInputSource {
+  kind: 'text' | 'file' | 'directory' | 'url';
+  /** Path (file/directory) or URL. Unused for 'text' (initialInput holds it). */
+  value?: string;
+  /** What to do with the input — prepended to the first step's input context. */
+  instructions?: string;
+}
+
 export interface Pipeline {
   id: string;
   name: string;
   description?: string;
   initialInput: string;
+  /** Optional external input source; absent = classic typed text input. */
+  inputSource?: PipelineInputSource;
   stages: PipelineStage[];
   settings: {
     workingDirectory?: string;

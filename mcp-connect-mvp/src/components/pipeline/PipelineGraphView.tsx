@@ -264,10 +264,17 @@ export default function PipelineGraphView({
           <div
             className={`graph-input-node clickable ${inputSelected ? 'selected' : ''}`}
             style={{ left: inputX, top: inputY, width: INPUT_W, height: INPUT_H }}
-            title={pipeline.initialInput || 'Click to set the pipeline input'}
+            title={
+              pipeline.inputSource?.kind && pipeline.inputSource.kind !== 'text'
+                ? `${pipeline.inputSource.kind}: ${pipeline.inputSource.value || '(not set)'}`
+                : pipeline.initialInput || 'Click to set the pipeline input'
+            }
             onClick={() => onSelectInput?.()}
           >
-            <span className="graph-input-icon">▶</span> Input
+            <span className="graph-input-icon">▶</span>
+            {pipeline.inputSource?.kind && pipeline.inputSource.kind !== 'text'
+              ? `Input · ${pipeline.inputSource.kind}`
+              : 'Input'}
           </div>
 
           {rows.map((row) => (

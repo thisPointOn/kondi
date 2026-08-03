@@ -83,6 +83,9 @@ export interface PlatformAdapter {
   setWorkingDir(dir: string): void;
   getWorkingDir(): string;
   saveDeliberationOutput?(council: any, mode: 'full' | 'abbreviated'): Promise<string>;
+  /** Fetch a URL's body as text (used by the 'url' pipeline input source).
+   *  GUI: http_relay Tauri command (webview CORS can't be trusted); CLI: fetch. */
+  fetchText?(url: string): Promise<string>;
 }
 
 // ============================================================================
@@ -199,6 +202,8 @@ export class PipelineExecutor {
   private currentRunNumber = 0;
   /** Pipeline start timestamp */
   private runStartedAt: string | null = null;
+  /** Body of the 'url' input source, fetched once at run start. */
+  private resolvedUrlInput: string | null = null;
 
   constructor(callbacks: PipelineExecutorCallbacks, platform: PlatformAdapter) {
     this.callbacks = callbacks;
@@ -227,7 +232,24 @@ export class PipelineExecutor {
     this.currentRunDir = null;
     this.currentRunNumber = 0;
     this.runStartedAt = new Date().toISOString();
+    this.resolvedUrlInput = null;
     pipelineStore.setPipelineStatus(pipelineId, 'running');
+
+    // Resolve a URL input source up front — fail fast if it can't be fetched.
+    if (pipeline.inputSource?.kind === 'url' && pipeline.inputSource.value?.trim()) {
+      const url = pipeline.inputSource.value.trim();
+      if (!this.platform.fetchText) {
+        pipelineStore.setPipelineStatus(pipelineId, 'failed');
+        throw new Error('URL input source requires a platform with fetchText support');
+      }
+      try {
+        this.resolvedUrlInput = await this.platform.fetchText(url);
+        this.callbacks.onLog?.(`Fetched pipeline input from ${url} (${this.resolvedUrlInput.length} chars)`);
+      } catch (err) {
+        pipelineStore.setPipelineStatus(pipelineId, 'failed');
+        throw new Error(`Failed to fetch pipeline input URL: ${err instanceof Error ? err.message : err}`);
+      }
+    }
 
     const workingDir = pipeline.settings.workingDirectory;
 
@@ -439,13 +461,45 @@ export class PipelineExecutor {
     currentStageIndex: number
   ): StepArtifact[] {
     if (currentStageIndex === 0) {
-      // For stage 0, create a synthetic artifact from initialInput
-      if (!pipeline.initialInput) return [];
+      // For stage 0, create a synthetic artifact from the input source:
+      // typed text, an external file/directory (first step reads it with its
+      // tools), or a URL (fetched at run start into resolvedUrlInput).
+      const src = pipeline.inputSource;
+      const kind = src?.kind || 'text';
+      const parts: string[] = [];
+      if (src?.instructions?.trim()) parts.push(src.instructions.trim());
+
+      let outputType: 'string' | 'file' | 'directory' = 'string';
+      let outputPath: string | undefined;
+
+      if (kind === 'file' || kind === 'directory') {
+        const path = src?.value?.trim();
+        if (!path) return [];
+        outputType = kind;
+        outputPath = path;
+        parts.push(
+          `[Input type: ${kind}]`,
+          `[Input ${kind === 'directory' ? 'directory' : 'file'}: ${path}]`,
+          kind === 'directory'
+            ? 'IMPORTANT: The pipeline input is the directory above. Use your tools to list and read the files in that directory.'
+            : 'IMPORTANT: The pipeline input is the file above. Use your tools to read that file.'
+        );
+      } else if (kind === 'url') {
+        const url = src?.value?.trim();
+        if (!url) return [];
+        parts.push(`[Input source: ${url}]`, this.resolvedUrlInput ?? '');
+      } else {
+        if (pipeline.initialInput) parts.push(pipeline.initialInput);
+      }
+
+      const content = parts.filter(Boolean).join('\n\n');
+      if (!content) return [];
       return [
         {
           stepId: '__initial__',
-          content: pipeline.initialInput,
+          content,
           artifactType: 'output',
+          metadata: outputPath ? { outputType, outputPath } : undefined,
           createdAt: new Date().toISOString(),
         },
       ];

@@ -53,6 +53,13 @@ export function createNodePlatform(initialWorkingDir: string): PlatformAdapter {
       return workingDir;
     },
 
+    // URL pipeline-input source. Node has no CORS; plain fetch works.
+    async fetchText(url: string): Promise<string> {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
+      return res.text();
+    },
+
     // saveDeliberationOutput is optional in CLI — files are written directly via writeFile
   };
 }

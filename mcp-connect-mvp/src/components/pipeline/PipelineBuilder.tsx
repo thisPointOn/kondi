@@ -444,27 +444,123 @@ export default function PipelineBuilder({
           onClose={() => setSelectedStepId(null)}
         />
       ) : viewMode === 'graph' ? (
-        <div className="step-config-panel">
-          <div className="config-panel-header">
-            <h3>Pipeline Input</h3>
-          </div>
-          <div className="config-field">
-            <label>Initial Input</label>
-            <textarea
-              value={pipeline.initialInput}
-              onChange={(e) =>
-                pipelineStore.update(pipelineId, { initialInput: e.target.value })
-              }
-              placeholder="Seed input for the first step..."
-              rows={12}
-            />
-            <span className="hint">
-              The first step receives this as {'{{input}}'}. Click a step node to
-              edit that step instead.
-            </span>
-          </div>
-        </div>
+        <PipelineInputPanel pipeline={pipeline} pipelineId={pipelineId} />
       ) : null}
+    </div>
+  );
+}
+
+// ============================================================================
+// Pipeline Input Panel (graph mode side panel, no step selected)
+// ============================================================================
+
+const INPUT_KINDS = [
+  { kind: 'text' as const, label: 'Text' },
+  { kind: 'file' as const, label: 'File' },
+  { kind: 'directory' as const, label: 'Directory' },
+  { kind: 'url' as const, label: 'URL' },
+];
+
+function PipelineInputPanel({ pipeline, pipelineId }: { pipeline: Pipeline; pipelineId: string }) {
+  const source = pipeline.inputSource;
+  const kind = source?.kind || 'text';
+
+  const updateSource = (partial: Partial<NonNullable<Pipeline['inputSource']>>) => {
+    pipelineStore.update(pipelineId, {
+      inputSource: { kind, value: source?.value, instructions: source?.instructions, ...partial },
+    });
+  };
+
+  const browse = async () => {
+    const selected = await open({
+      directory: kind === 'directory',
+      multiple: false,
+    });
+    if (selected) updateSource({ value: selected as string });
+  };
+
+  return (
+    <div className="step-config-panel">
+      <div className="config-panel-header">
+        <h3>Pipeline Input</h3>
+      </div>
+
+      <div className="config-field">
+        <label>Source</label>
+        <div className="input-kind-selector">
+          {INPUT_KINDS.map(({ kind: k, label }) => (
+            <button
+              key={k}
+              type="button"
+              className={`input-kind-btn ${kind === k ? 'active' : ''}`}
+              onClick={() => updateSource({ kind: k })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {kind === 'text' && (
+        <div className="config-field">
+          <label>Initial Input</label>
+          <textarea
+            value={pipeline.initialInput}
+            onChange={(e) => pipelineStore.update(pipelineId, { initialInput: e.target.value })}
+            placeholder="Seed input for the first step..."
+            rows={10}
+          />
+          <span className="hint">The first step receives this as {'{{input}}'}.</span>
+        </div>
+      )}
+
+      {(kind === 'file' || kind === 'directory') && (
+        <div className="config-field">
+          <label>{kind === 'file' ? 'File Path' : 'Directory Path'}</label>
+          <div className="directory-input-row">
+            <input
+              type="text"
+              value={source?.value || ''}
+              onChange={(e) => updateSource({ value: e.target.value })}
+              placeholder={kind === 'file' ? '/path/to/input.md' : '/path/to/input-dir'}
+            />
+            <button className="directory-browse-btn" onClick={browse}>Browse...</button>
+          </div>
+          <span className="hint">
+            The first step is pointed at this {kind} and instructed to read it with
+            its tools.
+          </span>
+        </div>
+      )}
+
+      {kind === 'url' && (
+        <div className="config-field">
+          <label>URL</label>
+          <input
+            type="text"
+            value={source?.value || ''}
+            onChange={(e) => updateSource({ value: e.target.value })}
+            placeholder="https://example.com/data.json"
+          />
+          <span className="hint">
+            Fetched once when the run starts (HTTPS only); the body becomes the
+            first step&rsquo;s input.
+          </span>
+        </div>
+      )}
+
+      <div className="config-field">
+        <label>Instructions</label>
+        <textarea
+          value={source?.instructions || ''}
+          onChange={(e) => updateSource({ instructions: e.target.value })}
+          placeholder="What should the first step do with this input?"
+          rows={5}
+        />
+        <span className="hint">
+          Prepended to the input — tells the first step what to DO with it.
+        </span>
+      </div>
     </div>
   );
 }

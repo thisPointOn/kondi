@@ -89,6 +89,17 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
       setWorkingDir: (dir) => { platformWorkingDir = dir; },
       getWorkingDir: () => platformWorkingDir,
       saveDeliberationOutput: (council, mode) => saveDeliberationOutput(council, mode),
+      // URL input source — relayed through the backend (webview CORS can't be
+      // trusted for arbitrary hosts). HTTPS-only, enforced by the command.
+      fetchText: async (url) => {
+        const res = await invoke<{ status: number; body: string }>('http_relay', {
+          url, method: 'GET', headers: {}, body: null,
+        });
+        if (res.status < 200 || res.status >= 300) {
+          throw new Error(`HTTP ${res.status} fetching ${url}`);
+        }
+        return res.body;
+      },
     };
 
     const executor = new PipelineExecutor({
