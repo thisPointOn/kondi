@@ -72,6 +72,57 @@
 .graph-input-node.clickable:hover { box-shadow: 0 0 0 1px #16a34a60; }
 .graph-input-node.selected { box-shadow: 0 0 0 2px #16a34a; }
 
+/* Sibling add — "+" beside a layer */
+.graph-sibling-add {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px dashed var(--border-color, #444);
+  border-radius: 50%;
+  color: var(--text-secondary, #777);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  transition: all 0.15s;
+}
+
+.graph-sibling-add:hover {
+  border-color: var(--accent-color, #3b82f6);
+  color: var(--accent-color, #3b82f6);
+}
+
+/* Layer execution-mode chip */
+.graph-layer-mode {
+  position: absolute;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.graph-layer-mode:hover { opacity: 0.8; }
+
+.graph-layer-mode.sequential {
+  background: #16a34a15;
+  color: #16a34a;
+  border-color: #16a34a40;
+}
+
+.graph-layer-mode.parallel {
+  background: #f59e0b15;
+  color: #f59e0b;
+  border-color: #f59e0b40;
+}
+
 /* Canvas */
 .graph-scroll {
   flex: 1;

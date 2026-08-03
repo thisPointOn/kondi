@@ -17,10 +17,48 @@
 import type {
   Pipeline,
   PipelineStep,
+  StepConfig,
   ConditionStepConfig,
 } from '../../pipeline/types';
-import { getStepIcon, getStepSummary } from './StageRow';
+import { isCouncilType } from '../../pipeline/types';
 import './PipelineGraphView.css';
+
+export function getStepIcon(type: StepConfig['type']): string {
+  switch (type) {
+    case 'council': return '🏛️';
+    case 'code_planning': return '📋';
+    case 'analysis': return '🤔';
+    case 'agent': return '🤖';
+    case 'coding': return '💻';
+    case 'review': return '📝';
+    case 'enrich': return '💡';
+    case 'gate': return '🚧';
+    case 'script': return '⚡';
+    case 'condition': return '🔀';
+    default: return '❓';
+  }
+}
+
+export function getStepSummary(step: PipelineStep): string {
+  if (isCouncilType(step.config.type)) {
+    const c = step.config as { councilSetup?: { personas: unknown[] } };
+    if (c.councilSetup) {
+      const count = c.councilSetup.personas.length;
+      return `${count} persona${count !== 1 ? 's' : ''}`;
+    }
+    return (step.config as { model?: string }).model || step.config.type;
+  }
+  if (step.config.type === 'gate') return 'Approval checkpoint';
+  if (step.config.type === 'script') {
+    const cmd = (step.config as { command?: string }).command || '';
+    return cmd ? cmd.slice(0, 40) + (cmd.length > 40 ? '...' : '') : 'No command';
+  }
+  if (step.config.type === 'condition') {
+    const cfg = step.config as { mode?: string; expression?: string };
+    return cfg.expression ? `${cfg.mode}: ${cfg.expression.slice(0, 30)}` : 'No expression';
+  }
+  return '';
+}
 
 interface PipelineGraphViewProps {
   pipeline: Pipeline;
@@ -31,6 +69,10 @@ interface PipelineGraphViewProps {
   onSelectInput?: () => void;
   onAddStep?: () => void;
   onRemoveStep?: (stageId: string, stepId: string) => void;
+  /** Add a step ALONGSIDE this one (same layer — a parallel/sequential sibling). */
+  onAddSibling?: (stageId: string) => void;
+  /** Toggle a multi-step layer between sequential and parallel execution. */
+  onToggleLayerMode?: (stageId: string) => void;
   /** Open the full deliberation of a step's council. */
   onOpenCouncil?: (councilId: string) => void;
 }
@@ -41,7 +83,7 @@ const INPUT_W = 150;
 const INPUT_H = 40;
 const H_GAP = 36;
 const V_GAP = 56;
-const SIDE_PAD = 96;
+const SIDE_PAD = 120;
 const TOP_PAD = 24;
 const LANE_STEP = 16;
 const BADGE_SPACE = 26;
@@ -77,6 +119,8 @@ export default function PipelineGraphView({
   onSelectInput,
   onAddStep,
   onRemoveStep,
+  onAddSibling,
+  onToggleLayerMode,
   onOpenCouncil,
 }: PipelineGraphViewProps) {
   const stages = pipeline.stages.filter((s) => s.steps.length > 0);
@@ -277,8 +321,36 @@ export default function PipelineGraphView({
               : 'Input'}
           </div>
 
-          {rows.map((row) => (
+          {rows.map((row, rowIdx) => (
             <div key={row.stageId}>
+              {/* Sibling add — a "+" just right of the layer's last node */}
+              {onAddSibling && (
+                <button
+                  className="graph-sibling-add"
+                  style={{
+                    left: row.nodes[row.nodes.length - 1].x + NODE_W + 8,
+                    top: row.y + NODE_H / 2 - 12,
+                  }}
+                  title="Add a step alongside — runs in the same layer"
+                  onClick={() => onAddSibling(row.stageId)}
+                >
+                  +
+                </button>
+              )}
+              {/* Execution mode of a multi-step layer — click to toggle */}
+              {row.nodes.length > 1 && onToggleLayerMode && (
+                <button
+                  className={`graph-layer-mode ${stages[rowIdx].executionMode === 'parallel' ? 'parallel' : 'sequential'}`}
+                  style={{
+                    left: row.nodes[row.nodes.length - 1].x + NODE_W + 36,
+                    top: row.y + NODE_H / 2 - 10,
+                  }}
+                  title="How the steps in this layer run — click to toggle"
+                  onClick={() => onToggleLayerMode(row.stageId)}
+                >
+                  {stages[rowIdx].executionMode === 'parallel' ? 'parallel' : 'sequential'}
+                </button>
+              )}
               {row.nodes.map((node) => {
                 if (!node.step) return null;
                 const councilId = node.step.artifact?.metadata?.councilId;

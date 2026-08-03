@@ -3,17 +3,13 @@
  */
 
 import { useState, useEffect } from 'react';
-import { open, ask } from '@tauri-apps/plugin-dialog';
+import { open } from '@tauri-apps/plugin-dialog';
 import type { Pipeline, PipelineStep, StepConfig, PipelineSchedule } from '../../pipeline/types';
 import { pipelineStore } from '../../pipeline/store';
 import { buildScheduledOutputDir } from '../../pipeline/scheduler';
-import StageRow from './StageRow';
 import PipelineGraphView from './PipelineGraphView';
 import StepConfigPanel, { getDefaultConfigForType } from './StepConfigPanel';
 import './PipelineBuilder.css';
-
-type BuilderViewMode = 'list' | 'graph';
-const VIEW_MODE_KEY = 'kondi-pipeline-builder-view';
 
 interface PipelineBuilderPropsExtra {
   /** Open a step council's full deliberation (council view). */
@@ -47,24 +43,11 @@ export default function PipelineBuilder({
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [confirmingReset, setConfirmingReset] = useState(false);
-  // Graph is the primary surface; List remains as a secondary mode.
-  const [viewMode, setViewMode] = useState<BuilderViewMode>(() =>
-    localStorage.getItem(VIEW_MODE_KEY) === 'list' ? 'list' : 'graph'
-  );
   // Pipeline details (name/description/working dir/schedule) are hidden
-  // behind the Details toggle in graph mode.
+  // behind the Details toggle.
   const [detailsOpen, setDetailsOpen] = useState(false);
   // Input pseudo-node selection — side panel shows the pipeline input editor.
   const [inputSelected, setInputSelected] = useState(false);
-
-  const changeViewMode = (mode: BuilderViewMode) => {
-    setViewMode(mode);
-    try {
-      localStorage.setItem(VIEW_MODE_KEY, mode);
-    } catch {
-      // best-effort persistence
-    }
-  };
 
   useEffect(() => {
     const load = () => setPipeline(pipelineStore.get(pipelineId));
@@ -123,34 +106,10 @@ export default function PipelineBuilder({
     pipelineStore.update(pipelineId, { name });
   };
 
-  const handleAddStage = () => {
-    pipelineStore.addStage(pipelineId);
-  };
-
-  const handleRemoveStage = async (stageId: string) => {
-    const ok = await ask('Remove this stage and all its steps?', {
-      title: 'Remove Stage',
-      kind: 'warning',
-    });
-    if (ok) {
-      pipelineStore.removeStage(pipelineId, stageId);
-      setSelectedStepId(null);
-    }
-  };
-
-  const handleStageName = (stageId: string, name: string) => {
-    pipelineStore.updateStage(pipelineId, stageId, { name });
-  };
-
-  const handleAddStep = (stageId: string) => {
-    const defaultConfig = getDefaultConfigForType('council', configuredProviders);
-    pipelineStore.addStep(pipelineId, stageId, defaultConfig, 'New Step');
-  };
-
-  // Graph mode: a new step gets its own sequential stage (stages are an
-  // internal execution detail — the graph shows a plain chain of steps).
-  // Default to a FULL council (manager/consultant/worker) — the Type dropdown
-  // in the config panel downgrades to lightweight agent/analysis if wanted.
+  // A new step gets its own sequential stage (stages are an internal
+  // execution detail — the graph shows a plain chain of steps). Defaults to a
+  // FULL council (manager/consultant/worker) — the Type dropdown in the
+  // config panel downgrades to lightweight agent/analysis if wanted.
   const handleGraphAddStep = () => {
     const updated = pipelineStore.addStage(pipelineId);
     const newStage = updated?.stages[updated.stages.length - 1];
@@ -173,6 +132,26 @@ export default function PipelineBuilder({
     if (stage && stage.steps.length === 0) {
       pipelineStore.removeStage(pipelineId, stageId);
     }
+  };
+
+  // Add a step ALONGSIDE an existing one — same layer, runs per the layer's
+  // execution mode (sequential by default; toggle the chip for parallel).
+  const handleAddSibling = (stageId: string) => {
+    const defaultConfig = getDefaultConfigForType('council', configuredProviders);
+    const updated = pipelineStore.addStep(pipelineId, stageId, defaultConfig, 'New Step');
+    const steps = updated?.stages.find((s) => s.id === stageId)?.steps;
+    const step = steps?.[steps.length - 1];
+    if (step) {
+      setInputSelected(false);
+      setSelectedStepId(step.id);
+    }
+  };
+
+  const handleToggleLayerMode = (stageId: string) => {
+    const mode = pipeline.stages.find((s) => s.id === stageId)?.executionMode || 'sequential';
+    pipelineStore.updateStage(pipelineId, stageId, {
+      executionMode: mode === 'sequential' ? 'parallel' : 'sequential',
+    });
   };
 
   const handleRemoveStep = () => {
@@ -214,39 +193,15 @@ export default function PipelineBuilder({
             <button className="builder-back-btn" onClick={onBack}>
               &larr; Back
             </button>
-            {viewMode === 'graph' ? (
-              <button
-                className={`builder-details-btn ${detailsOpen ? 'open' : ''}`}
-                onClick={() => setDetailsOpen((v) => !v)}
-                title="Pipeline details — name, description, working directory, schedule"
-              >
-                ⚙ Details {detailsOpen ? '▾' : '▸'}
-              </button>
-            ) : (
-              <input
-                className="builder-title-input"
-                value={pipeline.name}
-                onChange={(e) => handleNameChange(e.target.value)}
-              />
-            )}
+            <button
+              className={`builder-details-btn ${detailsOpen ? 'open' : ''}`}
+              onClick={() => setDetailsOpen((v) => !v)}
+              title="Pipeline details — name, description, working directory, schedule"
+            >
+              ⚙ Details {detailsOpen ? '▾' : '▸'}
+            </button>
           </div>
           <div className="builder-header-actions">
-            <div className="builder-view-toggle" role="group" aria-label="Builder view">
-              <button
-                className={`view-toggle-btn ${viewMode === 'list' ? 'active' : ''}`}
-                onClick={() => changeViewMode('list')}
-                title="Edit stages and steps as a list"
-              >
-                List
-              </button>
-              <button
-                className={`view-toggle-btn ${viewMode === 'graph' ? 'active' : ''}`}
-                onClick={() => changeViewMode('graph')}
-                title="View the pipeline as a node graph"
-              >
-                Graph
-              </button>
-            </div>
             {isRunning && (
               <button
                 className="builder-running-btn"
@@ -293,18 +248,16 @@ export default function PipelineBuilder({
 
         {/* Meta — always visible in list mode; behind the Details toggle in
             graph mode (the graph is the primary surface). */}
-        {(viewMode === 'list' || detailsOpen) && (
+        {detailsOpen && (
         <div className="pipeline-meta">
-          {viewMode === 'graph' && (
-            <div className="meta-field">
-              <label>Name</label>
-              <input
-                type="text"
-                value={pipeline.name}
-                onChange={(e) => handleNameChange(e.target.value)}
-              />
-            </div>
-          )}
+          <div className="meta-field">
+            <label>Name</label>
+            <input
+              type="text"
+              value={pipeline.name}
+              onChange={(e) => handleNameChange(e.target.value)}
+            />
+          </div>
           <div className="meta-field">
             <label>Description</label>
             <input
@@ -316,19 +269,6 @@ export default function PipelineBuilder({
               placeholder="Pipeline description..."
             />
           </div>
-          {viewMode === 'list' && (
-            <div className="meta-field">
-              <label>Initial Input</label>
-              <textarea
-                value={pipeline.initialInput}
-                onChange={(e) =>
-                  pipelineStore.update(pipelineId, { initialInput: e.target.value })
-                }
-                placeholder="Seed input for the first step..."
-                rows={3}
-              />
-            </div>
-          )}
           <div className="meta-field">
             <label>Working Directory</label>
             <div className="directory-input-row">
@@ -385,43 +325,19 @@ export default function PipelineBuilder({
         </div>
         )}
 
-        {/* Stages */}
-        {viewMode === 'graph' ? (
-          <PipelineGraphView
-            pipeline={pipeline}
-            selectedStepId={selectedStepId}
-            inputSelected={inputSelected && !selectedStepId}
-            onStepSelect={(id) => { setInputSelected(false); setSelectedStepId(id); }}
-            onSelectInput={() => { setSelectedStepId(null); setInputSelected(true); }}
-            onAddStep={handleGraphAddStep}
-            onRemoveStep={handleGraphRemoveStep}
-            onOpenCouncil={onOpenCouncil}
-          />
-        ) : (
-          <div className="pipeline-stages">
-            {pipeline.stages.map((stage, idx) => (
-              <div key={stage.id}>
-                {idx > 0 && <div className="stage-connector">&darr;</div>}
-                <StageRow
-                  stage={stage}
-                  stageIndex={idx}
-                  selectedStepId={selectedStepId}
-                  onStepSelect={setSelectedStepId}
-                  onStageName={(name) => handleStageName(stage.id, name)}
-                  onAddStep={() => handleAddStep(stage.id)}
-                  onRemoveStage={() => handleRemoveStage(stage.id)}
-                  onExecutionModeChange={(mode) =>
-                    pipelineStore.updateStage(pipelineId, stage.id, { executionMode: mode })
-                  }
-                />
-              </div>
-            ))}
-
-            <button className="add-stage-btn" onClick={handleAddStage}>
-              + Add Stage
-            </button>
-          </div>
-        )}
+        {/* The graph — the pipeline surface */}
+        <PipelineGraphView
+          pipeline={pipeline}
+          selectedStepId={selectedStepId}
+          inputSelected={inputSelected && !selectedStepId}
+          onStepSelect={(id) => { setInputSelected(false); setSelectedStepId(id); }}
+          onSelectInput={() => { setSelectedStepId(null); setInputSelected(true); }}
+          onAddStep={handleGraphAddStep}
+          onRemoveStep={handleGraphRemoveStep}
+          onAddSibling={handleAddSibling}
+          onToggleLayerMode={handleToggleLayerMode}
+          onOpenCouncil={onOpenCouncil}
+        />
       </div>
 
       {/* Side panel: selected step's config, or (graph mode) the pipeline input */}
@@ -445,9 +361,9 @@ export default function PipelineBuilder({
           onDelete={handleRemoveStep}
           onClose={() => setSelectedStepId(null)}
         />
-      ) : viewMode === 'graph' ? (
+      ) : (
         <PipelineInputPanel pipeline={pipeline} pipelineId={pipelineId} />
-      ) : null}
+      )}
     </div>
   );
 }
