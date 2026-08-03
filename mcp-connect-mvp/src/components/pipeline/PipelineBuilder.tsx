@@ -349,7 +349,12 @@ export default function PipelineBuilder({
           availableInputSteps={availableInputSteps}
           loopTargets={pipeline.stages
             .slice(0, selectedStep.stageIndex + 1)
-            .map((s) => ({ id: s.id, name: s.name }))}
+            // Stages are hidden in the graph — label loop targets by the step
+            // name(s) in that layer, not the internal stage name.
+            .map((s) => ({
+              id: s.id,
+              name: s.steps.map((st) => st.name).join(' + ') || s.name,
+            }))}
           connectedServers={connectedServers}
           configuredProviders={configuredProviders}
           onUpdate={(updates) =>
