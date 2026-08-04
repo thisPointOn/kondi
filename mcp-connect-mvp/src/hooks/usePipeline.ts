@@ -24,7 +24,7 @@ interface UsePipelineParams {
 
 export function usePipeline({ availableTools, setThinkingPersonas, configuredProviders }: UsePipelineParams) {
   const [currentPipelineId, setCurrentPipelineId] = useState<string | null>(null);
-  const [pipelineMode, setPipelineMode] = useState<'library' | 'builder' | 'execution'>('library');
+  const [pipelineMode, setPipelineMode] = useState<'library' | 'builder' | 'execution' | 'results'>('library');
   const [gateResolvers, setGateResolvers] = useState<Map<string, (approved: boolean) => void>>(new Map());
   const [pipelineExecutor, setPipelineExecutor] = useState<PipelineExecutor | null>(null);
   const [activePipelineCouncilId, setActivePipelineCouncilId] = useState<string | null>(null);
@@ -50,7 +50,10 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
   };
 
   const handlePipelineViewResults = () => {
-    setPipelineMode('execution');
+    // Live runs open the interactive execution view (gates, live deliberation);
+    // finished runs open the read-only Results review.
+    const p = currentPipelineId ? pipelineStore.get(currentPipelineId) : null;
+    setPipelineMode(p?.status === 'running' ? 'execution' : 'results');
   };
 
   const handleExecutionBack = () => {

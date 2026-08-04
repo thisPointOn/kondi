@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import Sidebar, { type AppView } from './components/Sidebar';
 import ChatArea from './components/ChatArea';
-import { PipelineLibrary, PipelineBuilder, PipelineExecutionView } from './components/pipeline';
+import { PipelineLibrary, PipelineBuilder, PipelineExecutionView, PipelineResultsView } from './components/pipeline';
 import { requestPipelineCreate } from './components/pipeline/pipelineCreateSignal';
 import { COUNCIL_RUN_EVENT } from './components/council/councilCreateSignal';
 import { requestCouncilView } from './components/council/councilSetupSignal';
@@ -139,7 +139,18 @@ function App() {
             }}
           />
         ) : currentView === 'pipelines' ? (
-          pipeline.pipelineMode === 'execution' && pipeline.currentPipelineId ? (
+          pipeline.pipelineMode === 'results' && pipeline.currentPipelineId ? (
+            <PipelineResultsView
+              pipelineId={pipeline.currentPipelineId}
+              onBack={pipeline.handleExecutionBack}
+              onOpenCouncil={(councilId) => {
+                requestCouncilView(councilId);
+                council.setCurrentCouncilId(councilId);
+                setCouncilFromPipeline(true);
+                setCurrentView('council');
+              }}
+            />
+          ) : pipeline.pipelineMode === 'execution' && pipeline.currentPipelineId ? (
             <PipelineExecutionView
               pipelineId={pipeline.currentPipelineId}
               onBack={pipeline.handleExecutionBack}
