@@ -9,7 +9,7 @@ import { pipelineStore } from '../../pipeline/store';
 import { buildScheduledOutputDir } from '../../pipeline/scheduler';
 import PipelineGraphView from './PipelineGraphView';
 import StepConfigPanel, { getDefaultConfigForType } from './StepConfigPanel';
-import { validatePipeline } from '../../pipeline/step-validation';
+import { validatePipeline, INPUT_KEY } from '../../pipeline/step-validation';
 import './PipelineBuilder.css';
 
 interface PipelineBuilderPropsExtra {
@@ -396,6 +396,7 @@ export default function PipelineBuilder({
             }))}
           connectedServers={connectedServers}
           configuredProviders={configuredProviders}
+          problems={problems.get(selectedStep.step.id)}
           onUpdate={(updates) =>
             pipelineStore.updateStep(pipelineId, selectedStep.step.id, updates)
           }
@@ -406,7 +407,11 @@ export default function PipelineBuilder({
           onClose={() => setSelectedStepId(null)}
         />
       ) : (
-        <PipelineInputPanel pipeline={pipeline} pipelineId={pipelineId} />
+        <PipelineInputPanel
+          pipeline={pipeline}
+          pipelineId={pipelineId}
+          problems={problems.get(INPUT_KEY)}
+        />
       )}
     </div>
   );
@@ -423,7 +428,15 @@ const INPUT_KINDS = [
   { kind: 'url' as const, label: 'URL' },
 ];
 
-function PipelineInputPanel({ pipeline, pipelineId }: { pipeline: Pipeline; pipelineId: string }) {
+function PipelineInputPanel({
+  pipeline,
+  pipelineId,
+  problems,
+}: {
+  pipeline: Pipeline;
+  pipelineId: string;
+  problems?: string[];
+}) {
   const source = pipeline.inputSource;
   const kind = source?.kind || 'text';
 
@@ -446,6 +459,17 @@ function PipelineInputPanel({ pipeline, pipelineId }: { pipeline: Pipeline; pipe
       <div className="config-panel-header">
         <h3>Pipeline Input</h3>
       </div>
+
+      {problems && problems.length > 0 && (
+        <div className="config-problems">
+          <div className="config-problems-title">⚠ Not ready to run</div>
+          <ul>
+            {problems.map((p, i) => (
+              <li key={i}>{p}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="config-field">
         <label>Source</label>

@@ -355,6 +355,9 @@ interface StepConfigPanelProps {
   connectedServers?: ConnectedServerInfo[];
   /** Which providers are currently configured/available */
   configuredProviders?: ConfiguredProviders;
+  /** Configuration problems for this step (from step-validation) — shown at
+   *  the top of the panel so the ⚠ badge is explained in place. */
+  problems?: string[];
   onUpdate: (updates: Partial<PipelineStep>) => void;
   onConfigUpdate: (config: StepConfig) => void;
   onDelete: () => void;
@@ -602,6 +605,7 @@ export default function StepConfigPanel({
   loopTargets,
   connectedServers,
   configuredProviders,
+  problems,
   onUpdate,
   onConfigUpdate,
   onDelete,
@@ -660,6 +664,18 @@ export default function StepConfigPanel({
         <h3>Step Config</h3>
         <button className="config-close-btn" onClick={onClose}>&times;</button>
       </div>
+
+      {/* Configuration problems — why this step carries a ⚠ */}
+      {problems && problems.length > 0 && (
+        <div className="config-problems">
+          <div className="config-problems-title">⚠ Not ready to run</div>
+          <ul>
+            {problems.map((p, i) => (
+              <li key={i}>{p}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Step Name */}
       <div className="config-section">
