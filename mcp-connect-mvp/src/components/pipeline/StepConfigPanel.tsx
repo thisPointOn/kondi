@@ -963,6 +963,13 @@ function CouncilConfig({
             />
           </div>
         </div>
+        {(config.councilSetup.maxRounds ?? 4) === 0 && (config.councilSetup.maxRevisions ?? 3) === 0 && (
+          <span className="hint">
+            0 / 0 = single pass: no consultant discussion rounds, first output
+            accepted. This is the point of lightweight Analysis/Agent steps —
+            add personas and raise these for a real deliberation.
+          </span>
+        )}
       </div>
 
       <div className="config-section">
