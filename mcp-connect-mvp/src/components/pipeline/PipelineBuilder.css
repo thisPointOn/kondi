@@ -171,7 +171,7 @@
 .input-kind-btn:hover { color: var(--text-primary, #e5e5e5); }
 
 .input-kind-btn.active {
-  background: var(--accent-color, #3b82f6);
+  background: #6366f1;
   color: #fff;
 }
 
@@ -216,12 +216,12 @@
 .pipeline-meta textarea,
 .pipeline-meta input {
   width: 100%;
-  padding: 0.75rem;
-  background: var(--bg-secondary, #1a1a1a);
+  padding: 7px 9px;
+  background: var(--bg-tertiary, #1d1d1d);
   border: 1px solid var(--border-color, #333);
   border-radius: 6px;
-  color: var(--text-primary, #e5e5e5);
-  font-size: 0.875rem;
+  color: #f1f1f3;
+  font-size: var(--font-chat, 13.5px);
   font-family: inherit;
   resize: vertical;
 }
@@ -229,15 +229,15 @@
 .pipeline-meta textarea:focus,
 .pipeline-meta input:focus {
   outline: none;
-  border-color: var(--accent-color, #3b82f6);
+  border-color: #6366f1;
 }
 
 .pipeline-meta label {
   display: block;
   margin-bottom: 0.375rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--text-secondary, #999);
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -493,12 +493,12 @@
   color: var(--accent-color, #3b82f6);
 }
 
-/* Config Panel */
+/* Config Panel — matches the council workspace panel idiom */
 .step-config-panel {
   width: 380px;
   min-width: 380px;
-  border-left: 1px solid var(--border-color, #333);
-  background: var(--bg-secondary, #1a1a1a);
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--bg-secondary, #14141c);
   padding: 1.25rem;
   overflow-y: auto;
 }
@@ -509,14 +509,14 @@
   align-items: center;
   margin-bottom: 1.25rem;
   padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--border-color, #333);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .config-panel-header h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--font-chat, 13.5px);
   font-weight: 600;
-  color: var(--text-primary, #e5e5e5);
+  color: var(--text-primary, #e4e4e7);
 }
 
 .config-close-btn {
@@ -537,9 +537,9 @@
 }
 
 .config-section-title {
-  font-size: 0.75rem;
+  font-size: 11px;
   font-weight: 600;
-  color: var(--text-secondary, #999);
+  color: #6b7280;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-bottom: 0.5rem;
@@ -552,20 +552,21 @@
 .config-field label {
   display: block;
   margin-bottom: 0.375rem;
-  font-size: 0.8125rem;
-  color: var(--text-primary, #e5e5e5);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #f1f1f3;
 }
 
 .config-field input,
 .config-field textarea,
 .config-field select {
   width: 100%;
-  padding: 0.5rem 0.75rem;
-  background: var(--bg-tertiary, #252525);
+  padding: 7px 9px;
+  background: var(--bg-tertiary, #1d1d1d);
   border: 1px solid var(--border-color, #333);
   border-radius: 6px;
-  color: var(--text-primary, #e5e5e5);
-  font-size: 0.8125rem;
+  color: #f1f1f3;
+  font-size: var(--font-chat, 13.5px);
   font-family: inherit;
 }
 
@@ -573,7 +574,13 @@
 .config-field textarea:focus,
 .config-field select:focus {
   outline: none;
-  border-color: var(--accent-color, #3b82f6);
+  border-color: #6366f1;
+}
+
+.config-field input:disabled,
+.config-field select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .config-field textarea {
@@ -613,21 +620,21 @@
 
 .persona-row input {
   flex: 1;
-  padding: 0.375rem 0.5rem;
-  background: var(--bg-primary, #0f0f0f);
+  padding: 6px 8px;
+  background: var(--bg-primary, #111);
   border: 1px solid var(--border-color, #333);
   border-radius: 4px;
-  color: var(--text-primary, #e5e5e5);
-  font-size: 0.75rem;
+  color: #f1f1f3;
+  font-size: 12.5px;
 }
 
 .persona-row select {
-  padding: 0.375rem 0.5rem;
-  background: var(--bg-primary, #0f0f0f);
+  padding: 6px 8px;
+  background: var(--bg-primary, #111);
   border: 1px solid var(--border-color, #333);
   border-radius: 4px;
-  color: var(--text-primary, #e5e5e5);
-  font-size: 0.75rem;
+  color: #f1f1f3;
+  font-size: 12.5px;
   cursor: pointer;
 }
 
