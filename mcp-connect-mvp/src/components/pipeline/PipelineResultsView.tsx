@@ -42,7 +42,12 @@ export default function PipelineResultsView({
 }: PipelineResultsViewProps) {
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
-  const [collapsedSteps, setCollapsedSteps] = useState<Set<string>>(new Set());
+  // Steps start COLLAPSED — expand the ones you want to read.
+  const [collapsedSteps, setCollapsedSteps] = useState<Set<string>>(
+    () => new Set(
+      (pipelineStore.get(pipelineId)?.stages || []).flatMap((s) => s.steps.map((st) => st.id))
+    )
+  );
 
   useEffect(() => {
     const load = () => setPipeline(pipelineStore.get(pipelineId));
