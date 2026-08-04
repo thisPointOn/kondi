@@ -73,6 +73,8 @@ interface PipelineGraphViewProps {
   onAddSibling?: (stageId: string) => void;
   /** Toggle a multi-step layer between sequential and parallel execution. */
   onToggleLayerMode?: (stageId: string) => void;
+  /** Rename a layer (stage). */
+  onRenameLayer?: (stageId: string, name: string) => void;
   /** Open the full deliberation of a step's council. */
   onOpenCouncil?: (councilId: string) => void;
 }
@@ -121,6 +123,7 @@ export default function PipelineGraphView({
   onRemoveStep,
   onAddSibling,
   onToggleLayerMode,
+  onRenameLayer,
   onOpenCouncil,
 }: PipelineGraphViewProps) {
   const stages = pipeline.stages.filter((s) => s.steps.length > 0);
@@ -323,6 +326,32 @@ export default function PipelineGraphView({
 
           {rows.map((row, rowIdx) => (
             <div key={row.stageId}>
+              {/* Layer (stage) name — small editable label above the layer */}
+              <input
+                className="graph-layer-name"
+                style={{
+                  left: row.nodes[0].x,
+                  top: row.y - 24,
+                  width: Math.min(220, row.nodes[row.nodes.length - 1].x + NODE_W - row.nodes[0].x),
+                }}
+                value={stages[rowIdx].name}
+                onChange={(e) => onRenameLayer?.(row.stageId, e.target.value)}
+                readOnly={!onRenameLayer}
+                title="Layer name — click to rename"
+              />
+              {/* Layer hull — faint grouping outline for multi-step layers so
+                  "these run together" (and loop targets) stay readable. */}
+              {row.nodes.length > 1 && (
+                <div
+                  className={`graph-layer-hull ${stages[rowIdx].executionMode === 'parallel' ? 'parallel' : 'sequential'}`}
+                  style={{
+                    left: row.nodes[0].x - 10,
+                    top: row.y - 10,
+                    width: row.nodes[row.nodes.length - 1].x + NODE_W - row.nodes[0].x + 20,
+                    height: NODE_H + 20,
+                  }}
+                />
+              )}
               {/* Sibling add — a "+" just right of the layer's last node */}
               {onAddSibling && (
                 <button

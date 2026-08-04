@@ -72,6 +72,46 @@
 .graph-input-node.clickable:hover { box-shadow: 0 0 0 1px #16a34a60; }
 .graph-input-node.selected { box-shadow: 0 0 0 2px #16a34a; }
 
+/* Layer (stage) name — small editable label above each layer */
+.graph-layer-name {
+  position: absolute;
+  padding: 0 2px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  color: var(--text-secondary, #888);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  outline: none;
+}
+
+.graph-layer-name:hover { color: var(--text-primary, #ccc); }
+.graph-layer-name:focus {
+  color: var(--text-primary, #e5e5e5);
+  border-bottom-color: var(--accent-color, #3b82f6);
+  text-transform: none;
+}
+
+/* Layer hull — faint grouping outline behind multi-step layers */
+.graph-layer-hull {
+  position: absolute;
+  border-radius: 12px;
+  border: 1px dashed transparent;
+  pointer-events: none;
+}
+
+.graph-layer-hull.sequential {
+  border-color: #16a34a30;
+  background: #16a34a06;
+}
+
+.graph-layer-hull.parallel {
+  border-color: #f59e0b30;
+  background: #f59e0b06;
+}
+
 /* Sibling add — "+" beside a layer */
 .graph-sibling-add {
   position: absolute;

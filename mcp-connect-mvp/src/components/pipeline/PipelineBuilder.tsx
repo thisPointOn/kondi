@@ -336,6 +336,9 @@ export default function PipelineBuilder({
           onRemoveStep={handleGraphRemoveStep}
           onAddSibling={handleAddSibling}
           onToggleLayerMode={handleToggleLayerMode}
+          onRenameLayer={(stageId, name) =>
+            pipelineStore.updateStage(pipelineId, stageId, { name })
+          }
           onOpenCouncil={onOpenCouncil}
         />
       </div>
