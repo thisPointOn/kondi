@@ -9,6 +9,7 @@ import { pipelineStore } from '../../pipeline/store';
 import { buildScheduledOutputDir } from '../../pipeline/scheduler';
 import PipelineGraphView from './PipelineGraphView';
 import StepConfigPanel, { getDefaultConfigForType } from './StepConfigPanel';
+import { validatePipeline } from '../../pipeline/step-validation';
 import './PipelineBuilder.css';
 
 interface PipelineBuilderPropsExtra {
@@ -48,6 +49,8 @@ export default function PipelineBuilder({
   const [detailsOpen, setDetailsOpen] = useState(false);
   // Input pseudo-node selection — side panel shows the pipeline input editor.
   const [inputSelected, setInputSelected] = useState(false);
+  // Run was refused because steps are misconfigured — banner lists why.
+  const [showRunBlocked, setShowRunBlocked] = useState(false);
 
   useEffect(() => {
     const load = () => setPipeline(pipelineStore.get(pipelineId));
@@ -163,8 +166,20 @@ export default function PipelineBuilder({
   const canRun = pipeline.stages.length > 0 &&
     pipeline.stages.every((s) => s.steps.length > 0);
 
+  // Configuration problems — ⚠ badges on nodes, and the run gate.
+  const problems = validatePipeline(
+    pipeline,
+    configuredProviders as Record<string, boolean> | undefined,
+  );
+
   const handleRun = () => {
     if (!canRun) return;
+    if (problems.size > 0) {
+      // Refuse to run a misconfigured pipeline — the banner lists what's wrong.
+      setShowRunBlocked(true);
+      return;
+    }
+    setShowRunBlocked(false);
     // Reset all step statuses and currentStageIndex so we start fresh
     // (without this, re-running a completed/imported pipeline skips all steps)
     pipelineStore.resetExecution(pipelineId);
@@ -325,6 +340,26 @@ export default function PipelineBuilder({
         </div>
         )}
 
+        {/* Run refused — list what's misconfigured */}
+        {showRunBlocked && problems.size > 0 && (
+          <div className="run-blocked-banner">
+            <div className="run-blocked-title">
+              ⚠ Not run — {problems.size} item{problems.size !== 1 ? 's are' : ' is'} not properly configured:
+              <button className="run-blocked-dismiss" onClick={() => setShowRunBlocked(false)}>×</button>
+            </div>
+            <ul>
+              {[...problems.entries()].map(([key, list]) => {
+                const step = pipeline.stages.flatMap((s) => s.steps).find((s) => s.id === key);
+                return (
+                  <li key={key}>
+                    <strong>{step ? step.name : 'Pipeline input'}:</strong> {list.join('; ')}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
         {/* The graph — the pipeline surface */}
         <PipelineGraphView
           pipeline={pipeline}
@@ -340,6 +375,7 @@ export default function PipelineBuilder({
             pipelineStore.updateStage(pipelineId, stageId, { name })
           }
           onOpenCouncil={onOpenCouncil}
+          problems={problems}
         />
       </div>
 

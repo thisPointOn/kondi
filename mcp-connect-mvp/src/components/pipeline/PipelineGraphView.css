@@ -30,6 +30,15 @@
   color: var(--accent-color, #3b82f6);
 }
 
+/* Configuration warning badge — hover for the problem list */
+.graph-node-warn {
+  margin-left: 0.25rem;
+  color: #f59e0b;
+  font-size: 0.8rem;
+  cursor: help;
+  line-height: 1;
+}
+
 /* Node remove + deliberation affordances */
 .graph-node-remove {
   margin-left: auto;

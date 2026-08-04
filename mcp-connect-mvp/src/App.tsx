@@ -40,6 +40,9 @@ function App() {
   const editingCouncilSetup = useActiveSetupSection();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showRightSidebar, setShowRightSidebar] = useState(true);
+  // Set when a council was opened FROM the pipeline graph (⚖ deliberation) —
+  // Back returns to the pipeline builder instead of the council library.
+  const [councilFromPipeline, setCouncilFromPipeline] = useState(false);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
 
   const { theme, setTheme } = useTheme();
@@ -87,7 +90,7 @@ function App() {
       <Sidebar
         className="sidebar-drawer"
         currentView={currentView}
-        onViewChange={setCurrentView}
+        onViewChange={(v) => { setCouncilFromPipeline(false); setCurrentView(v); }}
         currentChatId={chats.currentChatId}
         onChatSelect={(id) => {
           chats.setCurrentChatId(id);
@@ -99,7 +102,7 @@ function App() {
         chats={chats.sidebarChats}
         chatsSending={chats.chatsSending}
         currentCouncilId={council.currentCouncilId}
-        onCouncilSelect={(id) => { council.setCurrentCouncilId(id); setCurrentView('council'); }}
+        onCouncilSelect={(id) => { setCouncilFromPipeline(false); council.setCurrentCouncilId(id); setCurrentView('council'); }}
         onNewCouncil={() => { council.setCurrentCouncilId(null); setCurrentView('council'); }}
         onShowCouncilLibrary={() => { council.setCurrentCouncilId(null); setCurrentView('council'); }}
         currentProjectId={currentProjectId}
@@ -166,6 +169,7 @@ function App() {
               onOpenCouncil={(councilId) => {
                 requestCouncilView(councilId);
                 council.setCurrentCouncilId(councilId);
+                setCouncilFromPipeline(true);
                 setCurrentView('council');
               }}
             />
@@ -179,7 +183,15 @@ function App() {
           council.currentCouncilId ? (
             <CouncilView
               councilId={council.currentCouncilId}
-              onBack={() => council.setCurrentCouncilId(null)}
+              onBack={() => {
+                if (councilFromPipeline) {
+                  // Came from the pipeline graph — return to the builder.
+                  setCouncilFromPipeline(false);
+                  setCurrentView('pipelines');
+                } else {
+                  council.setCurrentCouncilId(null);
+                }
+              }}
               onSelectCouncil={(id) => council.setCurrentCouncilId(id)}
               onGenerateTurn={council.onGenerateTurn}
               onGenerateRound={council.onGenerateRound}

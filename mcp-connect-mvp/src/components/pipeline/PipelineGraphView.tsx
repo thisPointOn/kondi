@@ -21,6 +21,7 @@ import type {
   ConditionStepConfig,
 } from '../../pipeline/types';
 import { isCouncilType } from '../../pipeline/types';
+import { INPUT_KEY } from '../../pipeline/step-validation';
 import './PipelineGraphView.css';
 
 export function getStepIcon(type: StepConfig['type']): string {
@@ -77,6 +78,9 @@ interface PipelineGraphViewProps {
   onRenameLayer?: (stageId: string, name: string) => void;
   /** Open the full deliberation of a step's council. */
   onOpenCouncil?: (councilId: string) => void;
+  /** Configuration problems per stepId (INPUT_KEY for the Input node) — shows
+   *  a ⚠ badge on the node; hover lists the problems. */
+  problems?: Map<string, string[]>;
 }
 
 const NODE_W = 190;
@@ -125,6 +129,7 @@ export default function PipelineGraphView({
   onToggleLayerMode,
   onRenameLayer,
   onOpenCouncil,
+  problems,
 }: PipelineGraphViewProps) {
   const stages = pipeline.stages.filter((s) => s.steps.length > 0);
 
@@ -322,6 +327,11 @@ export default function PipelineGraphView({
             {pipeline.inputSource?.kind && pipeline.inputSource.kind !== 'text'
               ? `Input · ${pipeline.inputSource.kind}`
               : 'Input'}
+            {problems?.has(INPUT_KEY) && (
+              <span className="graph-node-warn" title={problems.get(INPUT_KEY)!.join('\n')}>
+                ⚠
+              </span>
+            )}
           </div>
 
           {rows.map((row, rowIdx) => (
@@ -398,6 +408,14 @@ export default function PipelineGraphView({
                     <div className="graph-node-type">
                       <span>{getStepIcon(node.step.config.type)}</span>
                       <span>{node.step.config.type}</span>
+                      {problems?.has(node.step.id) && (
+                        <span
+                          className="graph-node-warn"
+                          title={problems.get(node.step.id)!.join('\n')}
+                        >
+                          ⚠
+                        </span>
+                      )}
                       {onRemoveStep && (
                         <button
                           className="graph-node-remove"

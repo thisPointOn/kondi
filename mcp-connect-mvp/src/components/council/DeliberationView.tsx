@@ -722,6 +722,11 @@ export default function DeliberationView({
       <div className="deliberation-header">
         <div className="deliberation-header-left">
           <div className="deliberation-title-section">
+            {onBack && (
+              <button className="deliberation-back-btn" onClick={onBack} title="Back">
+                ←
+              </button>
+            )}
             <h2>{councilStore.getWorkflowName(councilId) || council.name}</h2>
             {activePanel !== 'setup' && (
               <button
