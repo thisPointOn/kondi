@@ -10,9 +10,19 @@
 
 import { useEffect, useState } from 'react';
 import { pipelineStore } from '../../pipeline/store';
-import type { Pipeline, PipelineStep } from '../../pipeline/types';
+import type { Pipeline, PipelineStep, StepArtifact } from '../../pipeline/types';
 import { getStepIcon } from './PipelineGraphView';
 import './PipelineResultsView.css';
+
+/** What kind of thing the artifact IS — so "the output" is unambiguous. */
+function artifactLabel(a: StepArtifact): string {
+  switch (a.artifactType) {
+    case 'decision': return 'Decision (manager)';
+    case 'approval': return 'Approval';
+    case 'llm_response': return 'LLM response';
+    default: return 'Output (worker deliverable)';
+  }
+}
 
 interface PipelineResultsViewProps {
   pipelineId: string;
@@ -31,12 +41,21 @@ export default function PipelineResultsView({
   onOpenCouncil,
 }: PipelineResultsViewProps) {
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
+  const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
+  const [collapsedSteps, setCollapsedSteps] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const load = () => setPipeline(pipelineStore.get(pipelineId));
     load();
     return pipelineStore.subscribe(load);
   }, [pipelineId]);
+
+  const toggle = (set: Set<string>, id: string, apply: (s: Set<string>) => void) => {
+    const next = new Set(set);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    apply(next);
+  };
 
   if (!pipeline) return null;
 
@@ -56,9 +75,15 @@ export default function PipelineResultsView({
         {pipeline.stages.map((stage, i) => {
           const produced = stage.steps.filter((s) => s.artifact);
           const nextStage = pipeline.stages[i + 1];
+          const stageCollapsed = collapsedStages.has(stage.id);
           return (
             <section className="results-stage" key={stage.id}>
-              <div className="results-stage-header">
+              <div
+                className="results-stage-header clickable"
+                onClick={() => toggle(collapsedStages, stage.id, setCollapsedStages)}
+                title={stageCollapsed ? 'Expand stage' : 'Collapse stage'}
+              >
+                <span className="results-chevron">{stageCollapsed ? '▸' : '▾'}</span>
                 <span className="results-stage-eyebrow">Stage {i + 1}</span>
                 <span className="results-stage-name">{stage.name}</span>
                 {stage.steps.length > 1 && (
@@ -66,14 +91,23 @@ export default function PipelineResultsView({
                     {stage.executionMode === 'parallel' ? 'parallel' : 'sequential'}
                   </span>
                 )}
+                <span className="results-stage-count">
+                  {stage.steps.filter((s) => s.status === 'completed').length}/{stage.steps.length} completed
+                </span>
               </div>
 
-              {stage.steps.map((step) => {
+              {!stageCollapsed && stage.steps.map((step) => {
                 const councilId = step.artifact?.metadata?.councilId;
                 const outputPath = step.artifact?.metadata?.outputPath;
+                const stepCollapsed = collapsedSteps.has(step.id);
                 return (
                   <div className={`results-step ${step.status}`} key={step.id}>
-                    <div className="results-step-head">
+                    <div
+                      className="results-step-head clickable"
+                      onClick={() => toggle(collapsedSteps, step.id, setCollapsedSteps)}
+                      title={stepCollapsed ? 'Expand step' : 'Collapse step'}
+                    >
+                      <span className="results-chevron">{stepCollapsed ? '▸' : '▾'}</span>
                       <span className="results-step-icon">{getStepIcon(step.config.type)}</span>
                       <span className="results-step-name">{step.name}</span>
                       <span className="results-step-type">{step.config.type}</span>
@@ -84,47 +118,70 @@ export default function PipelineResultsView({
                       {councilId && onOpenCouncil && (
                         <button
                           className="results-delib-btn"
-                          onClick={() => onOpenCouncil(councilId)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenCouncil(councilId);
+                          }}
                           title="Open this step's full deliberation"
                         >
                           ⚖ deliberation
                         </button>
                       )}
                     </div>
-                    {step.error && step.status === 'failed' && (
-                      <div className="results-step-error">{step.error}</div>
-                    )}
-                    {outputPath && (
-                      <div className="results-step-path" title={outputPath}>
-                        📄 {outputPath}
-                      </div>
-                    )}
-                    {step.artifact ? (
-                      <pre className="results-step-output">{step.artifact.content}</pre>
-                    ) : (
-                      <div className="results-step-none">
-                        {step.status === 'pending' ? 'Not run yet' : 'No output produced'}
-                      </div>
+                    {!stepCollapsed && (
+                      <>
+                        {step.error && step.status === 'failed' && (
+                          <div className="results-step-error">{step.error}</div>
+                        )}
+                        {step.artifact ? (
+                          <div className="results-output-block">
+                            <div className="results-output-head">
+                              <span className="results-output-label">
+                                {artifactLabel(step.artifact)}
+                              </span>
+                              <span className="results-output-meta">
+                                {step.artifact.metadata?.outputType || 'string'}
+                                {step.artifact.metadata?.tokensUsed
+                                  ? ` · ${step.artifact.metadata.tokensUsed.toLocaleString()} tokens`
+                                  : ''}
+                                {` · ${step.artifact.content.length.toLocaleString()} chars`}
+                              </span>
+                            </div>
+                            {outputPath && (
+                              <div className="results-step-path" title={outputPath}>
+                                📄 saved to {outputPath}
+                              </div>
+                            )}
+                            <pre className="results-step-output">{step.artifact.content}</pre>
+                          </div>
+                        ) : (
+                          <div className="results-step-none">
+                            {step.status === 'pending' ? 'Not run yet' : 'No output produced'}
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 );
               })}
 
-              <div className="results-stage-output">
-                <span className="results-stage-output-title">
-                  Stage output → {nextStage ? `“${nextStage.name}”` : 'final result'}
-                </span>
-                {produced.length === 0 ? (
-                  <span className="results-stage-output-none">nothing produced</span>
-                ) : (
-                  produced.map((s) => (
-                    <span className="results-stage-output-item" key={s.id}>
-                      {s.name} ({s.artifact?.metadata?.outputType || 'string'}
-                      {s.artifact?.metadata?.outputPath ? ` · ${s.artifact.metadata.outputPath}` : ''})
-                    </span>
-                  ))
-                )}
-              </div>
+              {!stageCollapsed && (
+                <div className="results-stage-output">
+                  <span className="results-stage-output-title">
+                    Stage output → {nextStage ? `“${nextStage.name}”` : 'final result'}
+                  </span>
+                  {produced.length === 0 ? (
+                    <span className="results-stage-output-none">nothing produced</span>
+                  ) : (
+                    produced.map((s) => (
+                      <span className="results-stage-output-item" key={s.id}>
+                        {s.name} ({s.artifact?.metadata?.outputType || 'string'}
+                        {s.artifact?.metadata?.outputPath ? ` · ${s.artifact.metadata.outputPath}` : ''})
+                      </span>
+                    ))
+                  )}
+                </div>
+              )}
             </section>
           );
         })}
