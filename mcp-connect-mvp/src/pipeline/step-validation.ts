@@ -41,6 +41,16 @@ function validateCouncilStep(
     }
   }
 
+  // Consultants only ever speak during discussion rounds — with 0 rounds
+  // they're configured but silent (wasted persona).
+  const consultants = personas.filter((p) => p.role === 'consultant');
+  const rounds = config.councilSetup?.maxRounds ?? 4;
+  if (consultants.length > 0 && rounds === 0) {
+    problems.push(
+      `Consultant${consultants.length > 1 ? 's' : ''} (${consultants.map((p) => p.name).join(', ')}) will never speak — Max Rounds is 0`
+    );
+  }
+
   const hasTask = !!config.task?.trim();
   const receivesInput = config.inputTemplate !== 'none';
   if (!hasTask && !receivesInput) {

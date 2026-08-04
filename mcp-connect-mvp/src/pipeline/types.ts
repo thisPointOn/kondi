@@ -299,7 +299,7 @@ export function migrateLlmConfig(config: LlmStepConfig): CouncilStepConfig {
         systemPrompt: config.systemPrompt,
         suppressPersona: true,
       }],
-      maxRounds: 0,
+      maxRounds: 1,
       maxRevisions: 0,
       workingDirectory: config.workingDirectory,
       directoryConstrained: config.directoryConstrained,

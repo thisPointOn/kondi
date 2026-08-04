@@ -17,7 +17,7 @@ import type {
   ConditionMode,
   ConditionAction,
 } from '../../pipeline/types';
-import { isCouncilType } from '../../pipeline/types';
+import { isCouncilType, isLightweightCouncilType } from '../../pipeline/types';
 import type { OutputType } from '../../pipeline/types';
 import { detectTestCommand } from '../../pipeline/test-detect';
 import type { Persona, DeliberationRoleAssignment } from '../../council/types';
@@ -440,7 +440,7 @@ function defaultAnalysisConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): 
           saveOutput: true,
         },
       ],
-      maxRounds: 0,
+      maxRounds: 1,
       maxRevisions: 0,
     },
     inputTemplate: '{{input}}',
@@ -474,7 +474,7 @@ After executing, report: what you did, what succeeded, what failed, and any rema
         traits: ['thorough', 'detail-oriented'],
         saveOutput: true,
       }],
-      maxRounds: 0,
+      maxRounds: 1,
       maxRevisions: 0,
     },
     inputTemplate: '{{input}}',
@@ -618,6 +618,18 @@ export default function StepConfigPanel({
   useEffect(() => {
     if (isCouncilType(step.config.type) && !(step.config as CouncilStepConfig).councilSetup) {
       onConfigUpdate(getDefaultConfigForType(step.config.type, configuredProviders));
+      return;
+    }
+    // Lightweight steps are pinned to 1 round / 0 revisions (single pass, a
+    // consultant can still weigh in). Normalize older 0/0 configs.
+    if (isLightweightCouncilType(step.config.type)) {
+      const c = step.config as CouncilStepConfig;
+      if (c.councilSetup && (c.councilSetup.maxRounds !== 1 || c.councilSetup.maxRevisions !== 0)) {
+        onConfigUpdate({
+          ...c,
+          councilSetup: { ...c.councilSetup, maxRounds: 1, maxRevisions: 0 },
+        });
+      }
     }
   }, [step.id]);
 
@@ -950,6 +962,7 @@ function CouncilConfig({
               max={10}
               value={config.councilSetup.maxRounds ?? 4}
               onChange={(e) => updateSetup({ maxRounds: parseInt(e.target.value) || 4 })}
+              disabled={isLightweightCouncilType(config.type)}
             />
           </div>
           <div className="config-field">
@@ -960,14 +973,15 @@ function CouncilConfig({
               max={10}
               value={config.councilSetup.maxRevisions ?? 3}
               onChange={(e) => updateSetup({ maxRevisions: parseInt(e.target.value) || 3 })}
+              disabled={isLightweightCouncilType(config.type)}
             />
           </div>
         </div>
-        {(config.councilSetup.maxRounds ?? 4) === 0 && (config.councilSetup.maxRevisions ?? 3) === 0 && (
+        {isLightweightCouncilType(config.type) && (
           <span className="hint">
-            0 / 0 = single pass: no consultant discussion rounds, first output
-            accepted. This is the point of lightweight Analysis/Agent steps —
-            add personas and raise these for a real deliberation.
+            Fixed for {config.type === 'analysis' ? 'Analysis' : 'Agent'} steps:
+            one round (a consultant can weigh in), no revision cycles. Switch
+            the Type to Council for full deliberation control.
           </span>
         )}
       </div>
