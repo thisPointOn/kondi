@@ -414,11 +414,14 @@ function defaultCodePlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAI
 
 function defaultAnalysisConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
   const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'analysis',
     councilSetup: {
       name: 'Analysis',
+      // Manager-only by design: analysis = DECIDE. The orchestrator completes
+      // with the decision as the final output when no worker is assigned, and
+      // the executor's artifact extraction prefers the decision \u2014 a worker
+      // here would produce output that goes nowhere (and double the cost).
       personas: [
         {
           name: 'Analyst',
@@ -430,17 +433,6 @@ function defaultAnalysisConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): 
           systemPrompt: 'You are a decision-making agent. Analyze the input, weigh the options, and provide a clear decision with rationale. Structure your response as: Decision, Rationale, Risks, and Next Steps.',
           suppressPersona: true,
           traits: ['analytical', 'decisive'],
-        },
-        {
-          name: 'Executor',
-          role: 'worker',
-          model: worker.model,
-          provider: worker.provider,
-          avatar: '\uD83E\uDD16',
-          color: '#f59e0b',
-          suppressPersona: true,
-          traits: ['thorough', 'detail-oriented'],
-          saveOutput: true,
         },
       ],
       maxRounds: 1,
