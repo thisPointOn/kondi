@@ -369,18 +369,54 @@ interface StepConfigPanelProps {
  *  real availability is passed in from useProviderConfig and drives the picks. */
 const DEFAULT_AVAIL: Record<string, boolean> = { 'anthropic-cli': false, 'anthropic-api': false, 'openai-cli': false, 'openai-api': false, deepseek: false };
 
+// \u2500\u2500\u2500 Default model SKUs \u2014 the rule-14 refresh point \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// Every pipeline step preset derives its models from these two. When a model
+// generation bumps (codex update, new Claude), change them HERE only.
+const DEFAULT_PRIMARY_MODEL = { model: 'claude-sonnet-4-5-20250929', provider: 'anthropic-cli' };
+const DEFAULT_SECONDARY_MODEL = { model: 'gpt-5.5', provider: 'openai-cli' };
+
+const primary = (avail: Record<string, boolean>) =>
+  resolveDefaultModel(DEFAULT_PRIMARY_MODEL.model, DEFAULT_PRIMARY_MODEL.provider, avail);
+const secondary = (avail: Record<string, boolean>) =>
+  resolveDefaultModel(DEFAULT_SECONDARY_MODEL.model, DEFAULT_SECONDARY_MODEL.provider, avail);
+
+/** Shared persona factory for the step presets \u2014 one place for the persona shape. */
+function presetPersona(
+  role: PipelinePersona['role'],
+  name: string,
+  resolved: { model: string; provider: string },
+  opts: Partial<Pick<PipelinePersona, 'avatar' | 'color' | 'traits' | 'suppressPersona' | 'saveOutput' | 'systemPrompt'>> = {},
+): PipelinePersona {
+  const roleDefaults: Record<PipelinePersona['role'], { avatar: string; color: string; traits: string[]; suppressPersona: boolean }> = {
+    manager: { avatar: '\uD83C\uDFDB\uFE0F', color: '#6366f1', traits: ['analytical', 'strategic'], suppressPersona: false },
+    consultant: { avatar: '\uD83C\uDF93', color: '#16a34a', traits: ['insightful', 'collaborative'], suppressPersona: false },
+    worker: { avatar: '\uD83D\uDEE0\uFE0F', color: '#f59e0b', traits: ['thorough', 'detail-oriented'], suppressPersona: true },
+    reviewer: { avatar: '\uD83D\uDD0D', color: '#0ea5e9', traits: ['critical', 'quality-focused'], suppressPersona: true },
+  };
+  const d = roleDefaults[role];
+  return {
+    name,
+    role,
+    model: resolved.model,
+    provider: resolved.provider,
+    avatar: opts.avatar ?? d.avatar,
+    color: opts.color ?? d.color,
+    traits: opts.traits ?? d.traits,
+    suppressPersona: opts.suppressPersona ?? d.suppressPersona,
+    ...(role === 'worker' ? { saveOutput: opts.saveOutput ?? true } : {}),
+    ...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),
+  };
+}
+
 function defaultCouncilConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
-  const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const consultant = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
-  const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'council',
     councilSetup: {
       name: 'Council',
       personas: [
-        { name: 'Council Lead', role: 'manager', model: manager.model, provider: manager.provider, avatar: '\uD83C\uDFDB\uFE0F', color: '#6366f1', suppressPersona: false, traits: ['analytical', 'strategic'] },
-        { name: 'Domain Expert', role: 'consultant', model: consultant.model, provider: consultant.provider, avatar: '\uD83C\uDF93', color: '#16a34a', traits: ['insightful', 'collaborative'] },
-        { name: 'Executor', role: 'worker', model: worker.model, provider: worker.provider, avatar: '\uD83D\uDEE0\uFE0F', color: '#f59e0b', suppressPersona: false, traits: ['thorough', 'detail-oriented'], saveOutput: true },
+        presetPersona('manager', 'Council Lead', primary(avail)),
+        presetPersona('consultant', 'Domain Expert', secondary(avail)),
+        presetPersona('worker', 'Executor', primary(avail), { suppressPersona: false }),
       ],
       maxRounds: 4,
       maxRevisions: 3,
@@ -391,17 +427,14 @@ function defaultCouncilConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): C
 }
 
 function defaultCodePlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
-  const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const consultant = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
-  const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'code_planning',
     councilSetup: {
       name: 'Code Planning',
       personas: [
-        { name: 'Planning Lead', role: 'manager', model: manager.model, provider: manager.provider, avatar: '\uD83D\uDCCB', color: '#6366f1', suppressPersona: false, traits: ['analytical', 'strategic'] },
-        { name: 'Domain Expert', role: 'consultant', model: consultant.model, provider: consultant.provider, avatar: '\uD83C\uDF93', color: '#16a34a', traits: ['insightful', 'collaborative'] },
-        { name: 'Plan Author', role: 'worker', model: worker.model, provider: worker.provider, avatar: '\u270D\uFE0F', color: '#f59e0b', suppressPersona: true, traits: ['thorough', 'detail-oriented'], saveOutput: true },
+        presetPersona('manager', 'Planning Lead', primary(avail), { avatar: '\uD83D\uDCCB' }),
+        presetPersona('consultant', 'Domain Expert', secondary(avail)),
+        presetPersona('worker', 'Plan Author', primary(avail), { avatar: '\u270D\uFE0F' }),
       ],
       maxRounds: 4,
       maxRevisions: 3,
@@ -413,7 +446,6 @@ function defaultCodePlanningConfig(avail: Record<string, boolean> = DEFAULT_AVAI
 }
 
 function defaultAnalysisConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
-  const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'analysis',
     councilSetup: {
@@ -423,17 +455,12 @@ function defaultAnalysisConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): 
       // the executor's artifact extraction prefers the decision \u2014 a worker
       // here would produce output that goes nowhere (and double the cost).
       personas: [
-        {
-          name: 'Analyst',
-          role: 'manager',
-          model: manager.model,
-          provider: manager.provider,
+        presetPersona('manager', 'Analyst', primary(avail), {
           avatar: '\uD83E\uDD14',
-          color: '#6366f1',
-          systemPrompt: 'You are a decision-making agent. Analyze the input, weigh the options, and provide a clear decision with rationale. Structure your response as: Decision, Rationale, Risks, and Next Steps.',
           suppressPersona: true,
           traits: ['analytical', 'decisive'],
-        },
+          systemPrompt: 'You are a decision-making agent. Analyze the input, weigh the options, and provide a clear decision with rationale. Structure your response as: Decision, Rationale, Risks, and Next Steps.',
+        }),
       ],
       maxRounds: 1,
       maxRevisions: 0,
@@ -444,19 +471,14 @@ function defaultAnalysisConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): 
 }
 
 function defaultAgentConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
-  const m = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'agent',
     councilSetup: {
       name: 'Agent',
-      personas: [{
-        name: 'Executor',
-        role: 'worker',
-        model: m.model,
-        provider: m.provider,
-        avatar: '\uD83E\uDD16',
-        color: '#f59e0b',
-        systemPrompt: `You are an execution agent with access to tools. Your job is to ACTUALLY EXECUTE the work described in the input — do not just describe what you would do.
+      personas: [
+        presetPersona('worker', 'Executor', primary(avail), {
+          avatar: '🤖',
+          systemPrompt: `You are an execution agent with access to tools. Your job is to ACTUALLY EXECUTE the work described in the input — do not just describe what you would do.
 
 Use your available tools to:
 - Read and write files
@@ -465,10 +487,8 @@ Use your available tools to:
 - Fix any errors you encounter
 
 After executing, report: what you did, what succeeded, what failed, and any remaining issues. Include actual command output and test results.`,
-        suppressPersona: true,
-        traits: ['thorough', 'detail-oriented'],
-        saveOutput: true,
-      }],
+        }),
+      ],
       maxRounds: 1,
       maxRevisions: 0,
     },
@@ -478,19 +498,15 @@ After executing, report: what you did, what succeeded, what failed, and any rema
 }
 
 function defaultCodingConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
-  const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const dev1 = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const dev2 = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
-  const reviewer = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
   return {
     type: 'coding',
     councilSetup: {
       name: 'Coding Council',
       personas: [
-        { name: 'Tech Lead', role: 'manager', model: manager.model, provider: manager.provider, avatar: '\uD83D\uDC68\u200D\uD83D\uDCBB', color: '#6366f1', suppressPersona: false, traits: ['analytical', 'decisive'] },
-        { name: 'Developer 1', role: 'worker', model: dev1.model, provider: dev1.provider, avatar: '\uD83D\uDCBB', color: '#f59e0b', suppressPersona: true, traits: ['thorough', 'detail-oriented'], saveOutput: true },
-        { name: 'Developer 2', role: 'worker', model: dev2.model, provider: dev2.provider, avatar: '\u2328\uFE0F', color: '#ea580c', suppressPersona: true, traits: ['thorough', 'detail-oriented'], saveOutput: true },
-        { name: 'Code Reviewer', role: 'reviewer', model: reviewer.model, provider: reviewer.provider, avatar: '\uD83D\uDD0D', color: '#0ea5e9', suppressPersona: true, traits: ['critical', 'quality-focused'] },
+        presetPersona('manager', 'Tech Lead', primary(avail), { avatar: '\uD83D\uDC68\u200D\uD83D\uDCBB', traits: ['analytical', 'decisive'] }),
+        presetPersona('worker', 'Developer 1', primary(avail), { avatar: '\uD83D\uDCBB' }),
+        presetPersona('worker', 'Developer 2', secondary(avail), { avatar: '\u2328\uFE0F', color: '#ea580c' }),
+        presetPersona('reviewer', 'Code Reviewer', secondary(avail)),
       ],
       maxRounds: 4,
       maxRevisions: 3,
@@ -504,17 +520,14 @@ function defaultCodingConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): Co
 }
 
 function defaultReviewConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
-  const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const consultant = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
-  const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'review',
     councilSetup: {
       name: 'Review & Documentation',
       personas: [
-        { name: 'Code Reviewer', role: 'manager', model: manager.model, provider: manager.provider, avatar: '\uD83D\uDD0D', color: '#6366f1', suppressPersona: false, traits: ['analytical', 'quality-focused'] },
-        { name: 'Domain Expert', role: 'consultant', model: consultant.model, provider: consultant.provider, avatar: '\uD83C\uDF93', color: '#16a34a', traits: ['insightful', 'collaborative'] },
-        { name: 'Documentation Writer', role: 'worker', model: worker.model, provider: worker.provider, avatar: '\uD83D\uDCDD', color: '#f59e0b', suppressPersona: true, traits: ['thorough', 'detail-oriented'], saveOutput: true },
+        presetPersona('manager', 'Review Lead', primary(avail), { avatar: '🔍', traits: ['analytical', 'quality-focused'] }),
+        presetPersona('consultant', 'Domain Expert', secondary(avail)),
+        presetPersona('worker', 'Documentation Writer', primary(avail), { avatar: '📝' }),
       ],
       maxRounds: 3,
       maxRevisions: 2,
@@ -526,17 +539,14 @@ function defaultReviewConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): Co
 }
 
 function defaultEnrichConfig(avail: Record<string, boolean> = DEFAULT_AVAIL): CouncilStepConfig {
-  const manager = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
-  const consultant = resolveDefaultModel('gpt-5.5', 'openai-cli', avail);
-  const worker = resolveDefaultModel('claude-sonnet-4-5-20250929', 'anthropic-cli', avail);
   return {
     type: 'enrich',
     councilSetup: {
       name: 'Enrichment Council',
       personas: [
-        { name: 'Product Lead', role: 'manager', model: manager.model, provider: manager.provider, avatar: '\uD83D\uDCA1', color: '#6366f1', suppressPersona: false, traits: ['strategic', 'evaluative'] },
-        { name: 'Market Expert', role: 'consultant', model: consultant.model, provider: consultant.provider, avatar: '\uD83C\uDFAF', color: '#16a34a', traits: ['insightful', 'market-aware'] },
-        { name: 'Innovation Specialist', role: 'worker', model: worker.model, provider: worker.provider, avatar: '\uD83D\uDD2C', color: '#f59e0b', suppressPersona: true, traits: ['creative', 'research-oriented'], saveOutput: true },
+        presetPersona('manager', 'Product Lead', primary(avail), { avatar: '💡', traits: ['strategic', 'evaluative'] }),
+        presetPersona('consultant', 'Market Expert', secondary(avail), { avatar: '🎯', traits: ['insightful', 'market-aware'] }),
+        presetPersona('worker', 'Innovation Specialist', primary(avail), { avatar: '🔬', traits: ['creative', 'research-oriented'] }),
       ],
       maxRounds: 3,
       maxRevisions: 2,
