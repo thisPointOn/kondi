@@ -1,0 +1,29 @@
+{
+  "test": "01-linear-chain",
+  "ranAt": "2026-08-04T15:23:56.966Z",
+  "pass": 5,
+  "fail": 0,
+  "checks": [
+    {
+      "name": "pipeline completed",
+      "pass": true
+    },
+    {
+      "name": "analysis artifact is a decision",
+      "pass": true
+    },
+    {
+      "name": "decision artifact exists in council store",
+      "pass": true
+    },
+    {
+      "name": "summarizer received the decision text",
+      "pass": true
+    },
+    {
+      "name": "instructions reached step 1",
+      "pass": true
+    }
+  ],
+  "llmCalls": 3
+}

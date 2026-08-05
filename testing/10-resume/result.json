@@ -1,0 +1,21 @@
+{
+  "test": "10-resume",
+  "ranAt": "2026-08-04T15:23:57.194Z",
+  "pass": 3,
+  "fail": 0,
+  "checks": [
+    {
+      "name": "first run completed",
+      "pass": true
+    },
+    {
+      "name": "completed step was skipped on resume",
+      "pass": true
+    },
+    {
+      "name": "pending step re-ran with original upstream artifact",
+      "pass": true
+    }
+  ],
+  "llmCalls": 3
+}

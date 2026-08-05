@@ -1,0 +1,10 @@
+{
+  "stepId": "52362d6f-def6-4048-89ec-6c570ba0cf46",
+  "stepName": "locate",
+  "stepType": "agent",
+  "stageIndex": 1,
+  "stepIndex": 0,
+  "status": "completed",
+  "outputType": "string",
+  "councilId": "00db556c-d425-4178-a0f2-3c582989982f"
+}

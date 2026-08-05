@@ -1,0 +1,29 @@
+{
+  "test": "09-failure-policy",
+  "ranAt": "2026-08-04T15:23:57.172Z",
+  "pass": 5,
+  "fail": 0,
+  "checks": [
+    {
+      "name": "stop policy: run rejects",
+      "pass": true
+    },
+    {
+      "name": "stop policy: failing step marked failed",
+      "pass": true
+    },
+    {
+      "name": "stop policy: downstream never ran",
+      "pass": true
+    },
+    {
+      "name": "skip_step policy: pipeline completes despite failure",
+      "pass": true
+    },
+    {
+      "name": "skip_step policy: downstream ran",
+      "pass": true
+    }
+  ],
+  "llmCalls": 3
+}

@@ -1,0 +1,17 @@
+{
+  "test": "03-json-fields",
+  "ranAt": "2026-08-04T15:23:56.983Z",
+  "pass": 2,
+  "fail": 0,
+  "checks": [
+    {
+      "name": "fenced JSON recovered to clean JSON at store time",
+      "pass": true
+    },
+    {
+      "name": "{{input.field}} dot-paths resolved",
+      "pass": true
+    }
+  ],
+  "llmCalls": 2
+}

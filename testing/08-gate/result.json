@@ -1,0 +1,25 @@
+{
+  "test": "08-gate",
+  "ranAt": "2026-08-04T15:23:57.148Z",
+  "pass": 4,
+  "fail": 0,
+  "checks": [
+    {
+      "name": "approved gate: downstream ran",
+      "pass": true
+    },
+    {
+      "name": "gate artifact recorded",
+      "pass": true
+    },
+    {
+      "name": "rejected gate: run fails",
+      "pass": true
+    },
+    {
+      "name": "rejected gate: downstream did not run",
+      "pass": true
+    }
+  ],
+  "llmCalls": 3
+}

@@ -378,3 +378,20 @@
   font-size: 0.75rem;
   color: var(--text-secondary, #999);
 }
+
+/* Council-style table layout (shares .council-table classes from
+   CouncilLibrary.css); pl-grid overrides the column layout. */
+.pipeline-table .pl-grid {
+  grid-template-columns: 28px 1fr 90px 70px 60px 110px;
+}
+
+.pipeline-table .pipeline-cli-badge {
+  margin-left: 0.4rem;
+  font-size: 0.55rem;
+  font-weight: 700;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  background: #8b5cf620;
+  color: #a78bfa;
+  vertical-align: middle;
+}

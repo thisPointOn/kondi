@@ -1,0 +1,33 @@
+{
+  "test": "05-loop-feedback",
+  "ranAt": "2026-08-04T15:23:57.033Z",
+  "pass": 6,
+  "fail": 0,
+  "checks": [
+    {
+      "name": "worker ran twice (loop fired once)",
+      "pass": true
+    },
+    {
+      "name": "retry received the loop feedback",
+      "pass": true
+    },
+    {
+      "name": "pipeline completed after PASS",
+      "pass": true
+    },
+    {
+      "name": "exhausted loop with onLoopExhausted=fail rejects the run",
+      "pass": true
+    },
+    {
+      "name": "worker ran initial + maxLoops times",
+      "pass": true
+    },
+    {
+      "name": "pipeline marked failed",
+      "pass": true
+    }
+  ],
+  "llmCalls": 6
+}

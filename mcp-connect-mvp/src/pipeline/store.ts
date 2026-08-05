@@ -296,6 +296,30 @@ export function updatePipeline(
   return updated;
 }
 
+/**
+ * Import pipelines (from an exported JSON file). Colliding ids get fresh ones.
+ * Returns the number imported.
+ */
+export function importPipelines(incoming: Pipeline[]): number {
+  const data = loadFromStorage();
+  const existing = new Set(data.pipelines.map((p) => p.id));
+  let count = 0;
+  for (const p of incoming) {
+    if (!p || typeof p !== 'object' || !Array.isArray((p as Pipeline).stages)) continue;
+    const pipeline: Pipeline = {
+      ...p,
+      id: existing.has(p.id) ? crypto.randomUUID() : p.id,
+      updatedAt: p.updatedAt || new Date().toISOString(),
+      createdAt: p.createdAt || new Date().toISOString(),
+    };
+    existing.add(pipeline.id);
+    data.pipelines.push(pipeline);
+    count++;
+  }
+  if (count > 0) saveToStorage(data);
+  return count;
+}
+
 export function deletePipeline(id: string): boolean {
   const data = loadFromStorage();
   const index = data.pipelines.findIndex((p) => p.id === id);
@@ -687,6 +711,12 @@ export class PipelineStore {
     const pipeline = duplicatePipeline(id, newName);
     if (pipeline) this.notify();
     return pipeline;
+  }
+
+  import(pipelines: Pipeline[]): number {
+    const count = importPipelines(pipelines);
+    if (count > 0) this.notify();
+    return count;
   }
 
   addStage(pipelineId: string, name?: string, atIndex?: number): Pipeline | null {

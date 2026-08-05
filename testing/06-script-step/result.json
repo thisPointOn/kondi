@@ -1,0 +1,17 @@
+{
+  "test": "06-script-step",
+  "ranAt": "2026-08-04T15:23:57.049Z",
+  "pass": 2,
+  "fail": 0,
+  "checks": [
+    {
+      "name": "script saw previous output via $KONDI_INPUT",
+      "pass": true
+    },
+    {
+      "name": "script stdout chained to next step",
+      "pass": true
+    }
+  ],
+  "llmCalls": 2
+}

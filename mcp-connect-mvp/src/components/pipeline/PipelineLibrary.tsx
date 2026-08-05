@@ -3,7 +3,8 @@
  */
 
 import { useState, useEffect } from 'react';
-import { ask } from '@tauri-apps/plugin-dialog';
+import { ask, open as openDialog } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 import type { Pipeline } from '../../pipeline/types';
 import { pipelineStore } from '../../pipeline/store';
 import { consumePipelineCreate, PIPELINE_CREATE_EVENT } from './pipelineCreateSignal';
@@ -91,6 +92,36 @@ export default function PipelineLibrary({
     URL.revokeObjectURL(url);
   };
 
+  // Import pipelines from a JSON file: a single exported pipeline, an array,
+  // {pipelines:[...]}, or a harness store dump ({"mcp-pipelines": "..."}).
+  const handleImportFile = async () => {
+    const sel = await openDialog({ multiple: false, filters: [{ name: 'JSON', extensions: ['json'] }] });
+    if (!sel) return;
+    try {
+      const raw = await invoke<string>('read_local_file', { path: sel as string });
+      const parsed = JSON.parse(raw);
+      let list: Pipeline[] = [];
+      if (Array.isArray(parsed)) list = parsed;
+      else if (Array.isArray(parsed?.pipelines)) list = parsed.pipelines;
+      else if (typeof parsed?.['mcp-pipelines'] === 'string') list = JSON.parse(parsed['mcp-pipelines']).pipelines || [];
+      else if (parsed?.stages) list = [parsed];
+      const n = pipelineStore.import(list);
+      await ask(n > 0 ? `Imported ${n} pipeline${n === 1 ? '' : 's'}.` : 'No pipelines found in that file.', {
+        title: 'Import Pipelines', kind: n > 0 ? 'info' : 'warning', okLabel: 'OK', cancelLabel: 'Close',
+      });
+    } catch (e) {
+      console.error('[PipelineLibrary] Import failed:', e);
+      await ask(`Import failed: ${e instanceof Error ? e.message : e}`, { title: 'Import Pipelines', kind: 'error' });
+    }
+  };
+
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleExpanded = (id: string) => setExpanded((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
   const getStatusColor = (status: Pipeline['status']) => {
     switch (status) {
       case 'draft': return '#6b7280';
@@ -121,6 +152,9 @@ export default function PipelineLibrary({
           <span className="header-subtitle">Councils as Workflow Steps</span>
         </div>
         <div className="header-actions">
+          <button className="import-cli-btn" onClick={handleImportFile}>
+            Import
+          </button>
           <button className="import-cli-btn" onClick={() => setShowImportModal(true)}>
             Import CLI Session
           </button>
@@ -152,95 +186,87 @@ export default function PipelineLibrary({
           </button>
         </div>
       ) : (
-        <div className="pipeline-library-grid">
-          {filtered.map((pipeline) => (
-            <div
-              key={pipeline.id}
-              className="pipeline-card"
-              onClick={() => onPipelineSelect(pipeline.id)}
-            >
-              <div className="pipeline-card-header">
-                <h3>{pipeline.name}</h3>
-                <div className="pipeline-badges">
-                  {pipeline.source === 'cli' && (
-                    <span className="pipeline-cli-badge">CLI</span>
-                  )}
-                  <span
-                    className={`pipeline-status-badge${pipeline.status === 'running' ? ' running' : ''}`}
-                    style={{
-                      backgroundColor: getStatusColor(pipeline.status) + '20',
-                      color: getStatusColor(pipeline.status),
-                    }}
-                  >
-                    {pipeline.status === 'running' && <span className="running-dot" />}
-                    {pipeline.status}
+        <div className="council-table pipeline-table">
+          <div className="council-table-head pl-grid">
+            <span className="ct-col ct-expand" />
+            <span className="ct-col ct-name">Name</span>
+            <span className="ct-col ct-status">Status</span>
+            <span className="ct-col ct-type">Stages</span>
+            <span className="ct-col ct-agents">Steps</span>
+            <span className="ct-col ct-updated">Updated</span>
+          </div>
+          {filtered.map((pipeline) => {
+            const isOpen = expanded.has(pipeline.id);
+            const stepCount = pipeline.stages.reduce((n, st) => n + st.steps.length, 0);
+            return (
+              <div key={pipeline.id} className="council-row-group">
+                <div
+                  className={`council-row pl-grid ${isOpen ? 'open' : ''}`}
+                  onClick={() => toggleExpanded(pipeline.id)}
+                >
+                  <span className="ct-col ct-expand">{isOpen ? '▾' : '▸'}</span>
+                  <span className="ct-col ct-name" title={pipeline.name}>
+                    {pipeline.name}
+                    {pipeline.source === 'cli' && <span className="pipeline-cli-badge">CLI</span>}
                   </span>
-                </div>
-              </div>
-
-              {pipeline.description && (
-                <p className="pipeline-description">{pipeline.description}</p>
-              )}
-
-              <div className="pipeline-stages-preview">
-                {pipeline.stages.map((stage, idx) => (
-                  <span key={stage.id}>
-                    {idx > 0 && <span className="stage-arrow"> → </span>}
-                    <span className="stage-chip">
-                      {stage.name} ({stage.steps.length})
+                  <span className="ct-col ct-status">
+                    <span
+                      className="council-status-badge"
+                      style={{ backgroundColor: getStatusColor(pipeline.status) + '20', color: getStatusColor(pipeline.status) }}
+                    >
+                      {pipeline.status}
                     </span>
                   </span>
-                ))}
-                {pipeline.stages.length === 0 && (
-                  <span className="stage-chip">No stages</span>
+                  <span className="ct-col ct-type">{pipeline.stages.length}</span>
+                  <span className="ct-col ct-agents">{stepCount}</span>
+                  <span className="ct-col ct-updated">{formatDate(pipeline.updatedAt)}</span>
+                </div>
+
+                {isOpen && (
+                  <div className="council-row-detail">
+                    {pipeline.description && (
+                      <div className="crd-block">
+                        <div className="crd-label">Description</div>
+                        <div className="crd-task">{pipeline.description}</div>
+                      </div>
+                    )}
+                    <div className="crd-block">
+                      <div className="crd-label">Steps</div>
+                      <div className="pipeline-stages-preview">
+                        {pipeline.stages.map((stage, idx) => (
+                          <span key={stage.id}>
+                            {idx > 0 && <span className="stage-arrow"> → </span>}
+                            <span className="stage-chip">
+                              {stage.steps.map((st) => st.name).join(' + ') || stage.name}
+                            </span>
+                          </span>
+                        ))}
+                        {pipeline.stages.length === 0 && <span className="stage-chip">No steps</span>}
+                      </div>
+                    </div>
+                    <div className="crd-meta">
+                      <div className="crd-meta-item">
+                        <span className="crd-label">Working dir</span>
+                        <span className="crd-meta-val">{pipeline.settings.workingDirectory || '—'}</span>
+                      </div>
+                      <div className="crd-meta-item">
+                        <span className="crd-label">Input</span>
+                        <span className="crd-meta-val">{pipeline.inputSource?.kind || 'text'}</span>
+                      </div>
+                    </div>
+                    <div className="crd-actions">
+                      <button className="council-action" onClick={() => onPipelineSelect(pipeline.id)}>
+                        {pipeline.status === 'running' ? 'View Progress' : 'Open'}
+                      </button>
+                      <button className="council-action" onClick={() => handleDuplicate(pipeline.id)}>Duplicate</button>
+                      <button className="council-action" onClick={() => handleExport(pipeline.id)}>Export</button>
+                      <button className="council-action danger" onClick={() => handleDelete(pipeline.id)}>Delete</button>
+                    </div>
+                  </div>
                 )}
               </div>
-
-              <div className="pipeline-card-footer">
-                <span>{pipeline.stages.length} stages</span>
-                <span>{formatDate(pipeline.updatedAt)}</span>
-              </div>
-
-              <div className="pipeline-card-actions">
-                <button
-                  className={`pipeline-action primary${pipeline.status === 'running' ? ' running' : ''}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onPipelineSelect(pipeline.id);
-                  }}
-                >
-                  {pipeline.status === 'running' ? 'View Progress' : 'Open'}
-                </button>
-                <button
-                  className="pipeline-action"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDuplicate(pipeline.id);
-                  }}
-                >
-                  Duplicate
-                </button>
-                <button
-                  className="pipeline-action"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleExport(pipeline.id);
-                  }}
-                >
-                  Export
-                </button>
-                <button
-                  className="pipeline-action danger"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete(pipeline.id);
-                  }}
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

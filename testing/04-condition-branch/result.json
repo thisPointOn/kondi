@@ -1,0 +1,29 @@
+{
+  "test": "04-condition-branch",
+  "ranAt": "2026-08-04T15:23:57.005Z",
+  "pass": 5,
+  "fail": 0,
+  "checks": [
+    {
+      "name": "true→continue: downstream ran",
+      "pass": true
+    },
+    {
+      "name": "false→stop: downstream did NOT run",
+      "pass": true
+    },
+    {
+      "name": "false→stop: pipeline still ends as completed",
+      "pass": true
+    },
+    {
+      "name": "skip_next_stage: next step skipped",
+      "pass": true
+    },
+    {
+      "name": "skip_next_stage: following step ran",
+      "pass": true
+    }
+  ],
+  "llmCalls": 5
+}

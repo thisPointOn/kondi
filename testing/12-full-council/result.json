@@ -1,0 +1,25 @@
+{
+  "test": "12-full-council",
+  "ranAt": "2026-08-04T15:24:45.402Z",
+  "pass": 4,
+  "fail": 0,
+  "checks": [
+    {
+      "name": "full council pipeline completed",
+      "pass": true
+    },
+    {
+      "name": "council produced a non-empty output artifact",
+      "pass": true
+    },
+    {
+      "name": "worker output exists in council store",
+      "pass": true
+    },
+    {
+      "name": "manager decision exists in council store",
+      "pass": true
+    }
+  ],
+  "llmCalls": 5
+}

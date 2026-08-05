@@ -1,0 +1,25 @@
+{
+  "test": "07-input-sources",
+  "ranAt": "2026-08-04T15:23:57.126Z",
+  "pass": 4,
+  "fail": 0,
+  "checks": [
+    {
+      "name": "file source: path + read instruction delivered",
+      "pass": true
+    },
+    {
+      "name": "file source: instructions delivered",
+      "pass": true
+    },
+    {
+      "name": "directory source: dir + list instruction delivered",
+      "pass": true
+    },
+    {
+      "name": "url source: body fetched at run start and delivered",
+      "pass": true
+    }
+  ],
+  "llmCalls": 3
+}

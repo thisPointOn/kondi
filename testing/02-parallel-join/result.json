@@ -1,0 +1,21 @@
+{
+  "test": "02-parallel-join",
+  "ranAt": "2026-08-04T15:23:56.977Z",
+  "pass": 3,
+  "fail": 0,
+  "checks": [
+    {
+      "name": "both parallel steps completed",
+      "pass": true
+    },
+    {
+      "name": "join saw BOTH parallel outputs",
+      "pass": true
+    },
+    {
+      "name": "{{input[0]}} selected only the first prior artifact",
+      "pass": true
+    }
+  ],
+  "llmCalls": 4
+}
