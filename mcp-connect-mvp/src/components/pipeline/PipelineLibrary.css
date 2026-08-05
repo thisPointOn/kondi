@@ -6,6 +6,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   padding: 1rem;
   overflow-y: auto;
   background: #0a0a0a;
@@ -431,3 +432,9 @@
 .pl-step-name { font-size: 0.8rem; font-weight: 600; color: var(--text-primary, #e5e5e5); }
 .pl-step-type { font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.05em; color: #888; }
 .pl-step-status { margin-left: auto; display: flex; align-items: center; gap: 0.3rem; font-size: 0.68rem; color: #999; text-transform: capitalize; }
+
+
+/* Step head is the toggle — button-like, collapsed by default */
+.pl-step-head { cursor: pointer; user-select: none; }
+.pl-step-head:hover .pl-step-name { color: #c7d2fe; }
+.pl-step-chevron { color: #6b7280; font-size: 0.65rem; width: 0.8rem; flex-shrink: 0; }

@@ -118,6 +118,13 @@ export default function PipelineLibrary({
   };
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Steps inside an expanded pipeline are collapsed by default.
+  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const toggleStep = (id: string) => setExpandedSteps((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   const toggleExpanded = (id: string) => setExpanded((prev) => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
@@ -249,7 +256,12 @@ export default function PipelineLibrary({
                             )}
                             {stage.steps.map((step) => (
                               <div key={step.id} className="pl-step">
-                                <div className="pl-step-head">
+                                <div
+                                  className="pl-step-head"
+                                  onClick={() => toggleStep(step.id)}
+                                  title={expandedSteps.has(step.id) ? 'Hide details' : 'Show details'}
+                                >
+                                  <span className="pl-step-chevron">{expandedSteps.has(step.id) ? '▾' : '▸'}</span>
                                   <span>{getStepIcon(step.config.type)}</span>
                                   <span className="pl-step-name">{step.name}</span>
                                   <span className="pl-step-type">{step.config.type}</span>
@@ -260,7 +272,7 @@ export default function PipelineLibrary({
                                     </span>
                                   )}
                                 </div>
-                                <StepDetails step={step} />
+                                {expandedSteps.has(step.id) && <StepDetails step={step} />}
                               </div>
                             ))}
                           </div>
