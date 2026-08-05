@@ -5,8 +5,11 @@
 .pipeline-library {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  /* Fill the main column BY FLEX (percentage height fails to constrain here,
+     letting the element grow to content height and killing scroll). */
+  flex: 1 1 0;
   min-height: 0;
+  height: auto;
   padding: 1rem;
   overflow-y: auto;
   background: #0a0a0a;
