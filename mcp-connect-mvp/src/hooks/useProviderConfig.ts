@@ -8,6 +8,7 @@ import { startupValidator, type StartupValidationReport } from '../services/star
 import { getModelsForProviderSettings } from '../config/models';
 import { invoke } from '@tauri-apps/api/core';
 import type { ProviderInfo } from '../components/ProviderSettings';
+import { safeSetItem } from '../utils/safeStorage';
 import {
   hasProfiles,
   listProfiles,
@@ -258,15 +259,15 @@ export function useProviderConfig() {
   }, [hasLoadedKeys]);
 
   // Persist selections
-  useEffect(() => { localStorage.setItem('kondi-provider', provider); }, [provider]);
-  useEffect(() => { localStorage.setItem('kondi-openai-model', openaiModel); }, [openaiModel]);
-  useEffect(() => { localStorage.setItem('kondi-anthropic-model', anthropicModel); }, [anthropicModel]);
+  useEffect(() => { safeSetItem('kondi-provider', provider); }, [provider]);
+  useEffect(() => { safeSetItem('kondi-openai-model', openaiModel); }, [openaiModel]);
+  useEffect(() => { safeSetItem('kondi-anthropic-model', anthropicModel); }, [anthropicModel]);
   useEffect(() => {
-    try { localStorage.setItem('kondi-provider-models', JSON.stringify(providerModels)); } catch {}
+    try { safeSetItem('kondi-provider-models', JSON.stringify(providerModels)); } catch {}
   }, [providerModels]);
   useEffect(() => {
     if (globalWorkingDirectory) {
-      localStorage.setItem('kondi-global-working-directory', globalWorkingDirectory);
+      safeSetItem('kondi-global-working-directory', globalWorkingDirectory);
     } else {
       localStorage.removeItem('kondi-global-working-directory');
     }
@@ -349,7 +350,7 @@ export function useProviderConfig() {
       anthropic: anthropicKey || null,
       anthropicModel: anthropicModel || null,
     };
-    localStorage.setItem('mcp-api-keys', JSON.stringify(payload));
+    safeSetItem('mcp-api-keys', JSON.stringify(payload));
     invoke('save_api_keys', { keys: payload }).catch(() => {});
   }, [openaiKey, openaiModel, anthropicKey, anthropicModel, hasLoadedKeys]);
 
@@ -416,13 +417,13 @@ export function useProviderConfig() {
   const handleDefaultChange = (providerId: string, modelId: string) => {
     console.log('[useProviderConfig] onDefaultChange called:', { providerId, modelId });
     setSelectedProviderId(providerId);
-    localStorage.setItem('kondi-provider-id', providerId);
+    safeSetItem('kondi-provider-id', providerId);
 
     if (providerId.startsWith('anthropic')) {
       setProvider('claude');
       setAnthropicModel(modelId);
-      localStorage.setItem('kondi-provider', 'claude');
-      localStorage.setItem('kondi-anthropic-model', modelId);
+      safeSetItem('kondi-provider', 'claude');
+      safeSetItem('kondi-anthropic-model', modelId);
       invoke('save_api_keys', {
         keys: {
           openai: openaiKey || null,
@@ -434,8 +435,8 @@ export function useProviderConfig() {
     } else if (providerId.startsWith('openai')) {
       setProvider('chatgpt');
       setOpenaiModel(modelId);
-      localStorage.setItem('kondi-provider', 'chatgpt');
-      localStorage.setItem('kondi-openai-model', modelId);
+      safeSetItem('kondi-provider', 'chatgpt');
+      safeSetItem('kondi-openai-model', modelId);
       invoke('save_api_keys', {
         keys: {
           openai: openaiKey || null,
@@ -666,17 +667,17 @@ export function useProviderConfig() {
 
   const handleProviderModelChange = (providerId: string, modelId: string) => {
     setSelectedProviderId(providerId);
-    localStorage.setItem('kondi-provider-id', providerId);
+    safeSetItem('kondi-provider-id', providerId);
     if (providerId.startsWith('anthropic')) {
       setProvider('claude');
       setAnthropicModel(modelId);
-      localStorage.setItem('kondi-provider', 'claude');
-      localStorage.setItem('kondi-anthropic-model', modelId);
+      safeSetItem('kondi-provider', 'claude');
+      safeSetItem('kondi-anthropic-model', modelId);
     } else if (providerId.startsWith('openai')) {
       setProvider('chatgpt');
       setOpenaiModel(modelId);
-      localStorage.setItem('kondi-provider', 'chatgpt');
-      localStorage.setItem('kondi-openai-model', modelId);
+      safeSetItem('kondi-provider', 'chatgpt');
+      safeSetItem('kondi-openai-model', modelId);
     } else {
       setProviderModels(prev => ({ ...prev, [providerId]: modelId }));
     }

@@ -19,6 +19,7 @@ import { useActiveSetupSection } from './council/setupDetailStore';
 import { addTask } from '../services/taskSync';
 import { enqueueTask, getQueue, pauseTask, resumeTask, removeQueuedTask, type QueuedTask } from '../services/taskQueue';
 import './RightSidebar.css';
+import { safeSetItem } from '../utils/safeStorage';
 
 /** Map file extension → highlight.js language id. */
 const EXT_LANG: Record<string, string> = {
@@ -173,7 +174,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
       document.removeEventListener('mouseup', onUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      setPanelWidth(w => { try { localStorage.setItem('kondi-workspace-width', String(w)); } catch {} return w; });
+      setPanelWidth(w => { try { safeSetItem('kondi-workspace-width', String(w)); } catch {} return w; });
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);

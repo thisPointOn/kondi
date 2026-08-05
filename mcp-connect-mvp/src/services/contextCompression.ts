@@ -20,6 +20,7 @@
 
 import { useSyncExternalStore } from 'react';
 import type { Message, MCPTool } from '../types/mcp';
+import { safeSetItem } from '../utils/safeStorage';
 
 export type CompressionLevel = 'off' | 'light' | 'balanced' | 'aggressive';
 
@@ -76,7 +77,7 @@ export function getCompressionSettings(): CompressionSettings {
 
 export function setCompressionSettings(patch: Partial<CompressionSettings>): void {
   settings = { ...settings, ...patch };
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch { /* quota */ }
+  try { safeSetItem(STORAGE_KEY, JSON.stringify(settings)); } catch { /* quota */ }
   emit();
 }
 

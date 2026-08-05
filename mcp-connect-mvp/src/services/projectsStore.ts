@@ -4,6 +4,7 @@
  * project. Viewing a project lists its councils, chats, and generated artifacts.
  */
 import { useSyncExternalStore } from 'react';
+import { safeSetItem } from '../utils/safeStorage';
 
 export interface Project {
   id: string;
@@ -31,7 +32,7 @@ let projects: Project[] = load();
 let version = 0;
 
 function persist() {
-  try { localStorage.setItem(KEY, JSON.stringify(projects)); } catch { /* quota */ }
+  try { safeSetItem(KEY, JSON.stringify(projects)); } catch { /* quota */ }
   version++;
   try { window.dispatchEvent(new CustomEvent(EVENT)); } catch { /* no window */ }
 }

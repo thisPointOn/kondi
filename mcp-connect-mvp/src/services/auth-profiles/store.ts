@@ -5,6 +5,7 @@
 
 import type { AuthProfile, AuthProfileStoreData, AuthProvider } from './types';
 import { STORAGE_KEY, LEGACY_AUTH_PROFILES_KEY, LEGACY_API_KEYS_KEY, PROFILE_IDS } from './constants';
+import { safeSetItem } from '../../utils/safeStorage';
 
 function createEmptyStore(): AuthProfileStoreData {
   return {
@@ -49,14 +50,14 @@ export function loadStore(): AuthProfileStoreData {
 /** Save current store to localStorage */
 export function saveStore(): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(storeData));
+    safeSetItem(STORAGE_KEY, JSON.stringify(storeData));
   } catch (e) {
     // Quota exceeded — try to recover
     console.error('[AuthProfileStore] Save failed:', e);
     try {
       // Clear old usage stats to free space
       storeData.usageStats = {};
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(storeData));
+      safeSetItem(STORAGE_KEY, JSON.stringify(storeData));
     } catch {
       console.error('[AuthProfileStore] Save failed even after cleanup');
     }

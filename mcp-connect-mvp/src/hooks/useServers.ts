@@ -8,6 +8,7 @@ import * as proxyService from '../services/proxyService';
 import type { MCPServer, MCPTool } from '../types/mcp';
 import type { StartupValidationReport } from '../services/startupValidator';
 import { invoke } from '@tauri-apps/api/core';
+import { safeSetItem } from '../utils/safeStorage';
 
 interface UseServersParams {
   hasLoadedKeys: boolean;
@@ -61,7 +62,7 @@ export function useServers({ hasLoadedKeys, validationReport }: UseServersParams
       configsToSave.forEach((c) => {
         mapById[c.id] = c;
       });
-      localStorage.setItem('mcp-servers', JSON.stringify(mapById));
+      safeSetItem('mcp-servers', JSON.stringify(mapById));
     } catch (e) {
       console.error('Failed to save servers locally:', e);
     }
@@ -321,7 +322,7 @@ export function useServers({ hasLoadedKeys, validationReport }: UseServersParams
         console.warn('[useServers] Failed to sync server to CLI tools:', err);
       });
 
-      localStorage.setItem(`mcp-server-connected-${server.id}`, 'true');
+      safeSetItem(`mcp-server-connected-${server.id}`, 'true');
 
       refreshServers();
     } catch (error) {
@@ -456,7 +457,7 @@ export function useServers({ hasLoadedKeys, validationReport }: UseServersParams
         const { [serverId]: _, ...rest } = prev;
         return rest;
       });
-      localStorage.setItem(`mcp-server-connected-${serverId}`, 'true');
+      safeSetItem(`mcp-server-connected-${serverId}`, 'true');
       const reconnectedServer = mcpClient.getAllServers().find(s => s.id === serverId);
       if (reconnectedServer) {
         mcpCliSync.resyncServer(reconnectedServer).catch(err => {

@@ -11,6 +11,7 @@
  */
 
 import { BUILTIN_PROFILES, PROFILE_ORDER, type BudgetProfile } from './profiles';
+import { safeSetItem } from '../utils/safeStorage';
 
 const KEY = 'kondi-router-profiles';
 const EVENT = 'kondi-router-profiles-updated';
@@ -29,7 +30,7 @@ let custom: Record<string, BudgetProfile> = load();
 let version = 0;
 
 function persist() {
-  try { localStorage.setItem(KEY, JSON.stringify(custom)); } catch { /* quota */ }
+  try { safeSetItem(KEY, JSON.stringify(custom)); } catch { /* quota */ }
   version++;
   try { window.dispatchEvent(new CustomEvent(EVENT)); } catch { /* no window */ }
 }

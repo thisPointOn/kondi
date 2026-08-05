@@ -12,6 +12,7 @@ import { mcpClient } from '../services/mcpClient';
 import type { MCPServer } from '../types/mcp';
 import type { SearchServiceStatus } from '../services/searchService';
 import './SettingsModal.css';
+import { safeSetItem } from '../utils/safeStorage';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -137,7 +138,7 @@ const SettingsModal: FC<SettingsModalProps> = ({
   const toggleCodexNoSandbox = (on: boolean) => {
     setCodexNoSandbox(on);
     try {
-      if (on) localStorage.setItem('kondi-codex-no-sandbox', 'true');
+      if (on) safeSetItem('kondi-codex-no-sandbox', 'true');
       else localStorage.removeItem('kondi-codex-no-sandbox');
     } catch { /* ignore */ }
   };

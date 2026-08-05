@@ -1,3 +1,4 @@
+import { safeSetItem } from '../utils/safeStorage';
 /**
  * Conversation Summary Manager
  * Maintains rolling summaries of conversations for context efficiency
@@ -39,7 +40,7 @@ class ConversationSummaryManager {
   private persist(): void {
     try {
       const summaries = Array.from(this.summaries.values());
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ summaries }));
+      safeSetItem(STORAGE_KEY, JSON.stringify({ summaries }));
     } catch (e) {
       console.error('[ConversationSummary] Failed to persist:', e);
     }

@@ -37,6 +37,7 @@ import { filterVisibleModels, useModelStatus } from '../services/modelProbe';
 import { recordContextSnapshot } from '../services/chatContextSnapshot';
 import { applyCompression, getCompressionSettings } from '../services/contextCompression';
 import './ChatArea.css';
+import { safeSetItem } from '../utils/safeStorage';
 
 interface AttachedFile {
   name: string;
@@ -1305,7 +1306,7 @@ const ChatArea: FC<ChatAreaProps> = ({
       if (inputHistoryRef.current.length > 50) {
         inputHistoryRef.current = inputHistoryRef.current.slice(-50);
       }
-      try { localStorage.setItem('kondi-input-history', JSON.stringify(inputHistoryRef.current)); } catch {}
+      try { safeSetItem('kondi-input-history', JSON.stringify(inputHistoryRef.current)); } catch {}
     }
     historyIndexRef.current = -1;
     savedInputRef.current = '';

@@ -22,6 +22,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { ALL_MODELS } from '../config/models';
+import { safeSetItem } from '../utils/safeStorage';
 
 export type ModelStatusKind = 'ok' | 'broken' | 'soft-fail' | 'untested';
 
@@ -62,7 +63,7 @@ let version = 0;
 
 function persist() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(cache));
+    safeSetItem(STORAGE_KEY, JSON.stringify(cache));
   } catch {
     // best-effort; quota errors are non-fatal
   }

@@ -5,6 +5,7 @@
  * up. Defaults match the current hard-coded sizes.
  */
 import { useSyncExternalStore } from 'react';
+import { safeSetItem } from '../utils/safeStorage';
 
 export interface AppearanceSettings {
   /** Chat message text (px). */
@@ -56,7 +57,7 @@ export function getAppearance(): AppearanceSettings {
 
 export function setAppearance(patch: Partial<AppearanceSettings>): void {
   settings = { ...settings, ...patch };
-  try { localStorage.setItem(KEY, JSON.stringify(settings)); } catch { /* quota */ }
+  try { safeSetItem(KEY, JSON.stringify(settings)); } catch { /* quota */ }
   apply();
   version++;
   try { window.dispatchEvent(new CustomEvent(EVENT)); } catch { /* no window */ }

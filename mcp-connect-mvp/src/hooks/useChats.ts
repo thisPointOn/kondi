@@ -3,6 +3,7 @@ import type { AppView } from '../components/Sidebar';
 import { simpleCompletion } from '../services/llm-router';
 import type { Message } from '../types/mcp';
 import { invoke } from '@tauri-apps/api/core';
+import { safeSetItem } from '../utils/safeStorage';
 
 type ChatRecord = Record<string, Message[]>;
 const MAX_CHATS = 20;
@@ -98,7 +99,7 @@ export function useChats({
   // Persist per-chat working directories
   useEffect(() => {
     try {
-      localStorage.setItem(CHAT_WORKING_DIRS_KEY, JSON.stringify(chatWorkingDirs));
+      safeSetItem(CHAT_WORKING_DIRS_KEY, JSON.stringify(chatWorkingDirs));
     } catch (e) {
       console.warn('[useChats] Failed to save chat working dirs:', e);
     }
@@ -107,7 +108,7 @@ export function useChats({
   // Persist per-chat model pins
   useEffect(() => {
     try {
-      localStorage.setItem(CHAT_MODEL_PINS_KEY, JSON.stringify(chatModelPins));
+      safeSetItem(CHAT_MODEL_PINS_KEY, JSON.stringify(chatModelPins));
     } catch (e) {
       console.warn('[useChats] Failed to save chat model pins:', e);
     }
@@ -116,7 +117,7 @@ export function useChats({
   // Persist per-chat custom names
   useEffect(() => {
     try {
-      localStorage.setItem(CHAT_NAMES_KEY, JSON.stringify(chatNames));
+      safeSetItem(CHAT_NAMES_KEY, JSON.stringify(chatNames));
     } catch (e) {
       console.warn('[useChats] Failed to save chat names:', e);
     }
@@ -267,9 +268,9 @@ export function useChats({
       if (data.length > 3 * 1024 * 1024) {
         // Too large — save only the 3 most recent chats as backup
         const trimmed = sorted.slice(0, 3);
-        localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(trimmed));
+        safeSetItem(CHAT_STORAGE_KEY, JSON.stringify(trimmed));
       } else {
-        localStorage.setItem(CHAT_STORAGE_KEY, data);
+        safeSetItem(CHAT_STORAGE_KEY, data);
       }
     } catch {
       // Quota exceeded — silently skip, Tauri storage is the source of truth

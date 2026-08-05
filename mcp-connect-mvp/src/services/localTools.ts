@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { MCPTool } from '../types/mcp';
 import { recordDiff } from './diffStore';
 import { recordArtifact } from './artifactManifest';
+import { safeSetItem } from '../utils/safeStorage';
 
 export interface FileInfo {
   name: string;
@@ -120,7 +121,7 @@ export class LocalToolsService {
   setWorkingDirectory(dir: string | null): void {
     this.workingDirectory = dir;
     if (dir) {
-      localStorage.setItem(WORKING_DIR_KEY, dir);
+      safeSetItem(WORKING_DIR_KEY, dir);
     } else {
       localStorage.removeItem(WORKING_DIR_KEY);
     }

@@ -1,3 +1,4 @@
+import { safeSetItem } from '../utils/safeStorage';
 /**
  * Search backend selection. The built-in web search queries a SearXNG instance;
  * this lets the user choose WHERE that instance is:
@@ -39,7 +40,7 @@ export function getSearchConfig(): SearchConfig {
 
 export function setSearchConfig(cfg: SearchConfig): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify({
+    safeSetItem(KEY, JSON.stringify({
       backend: cfg.backend,
       remoteUrl: (cfg.remoteUrl || DEFAULT_REMOTE).replace(/\/+$/, ''),
     }));

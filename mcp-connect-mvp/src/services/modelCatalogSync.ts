@@ -25,6 +25,7 @@ import { anthropicClient } from './anthropicClient';
 import { openaiClient } from './openaiClient';
 import { deepseekClient, xaiClient, zaiClient, moonshotClient, nvidiaRouterClient, ollamaClient } from './openaiCompatibleClient';
 import { resolveApiKey, PROFILE_IDS } from './auth-profiles';
+import { safeSetItem } from '../utils/safeStorage';
 
 export interface CatalogDiff {
   provider: ModelProvider;
@@ -125,7 +126,7 @@ export async function syncProviderCatalog(provider: ModelProvider): Promise<Cata
 
 function persist(diffs: Record<string, CatalogDiff>) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ at: Date.now(), diffs }));
+    safeSetItem(STORAGE_KEY, JSON.stringify({ at: Date.now(), diffs }));
   } catch {
     // best-effort
   }
