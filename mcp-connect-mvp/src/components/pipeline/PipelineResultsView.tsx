@@ -10,9 +10,70 @@
 
 import { useEffect, useState } from 'react';
 import { pipelineStore } from '../../pipeline/store';
-import type { Pipeline, PipelineStep, StepArtifact } from '../../pipeline/types';
+import type { Pipeline, PipelineStep, StepArtifact, CouncilStepConfig } from '../../pipeline/types';
+import { isCouncilType } from '../../pipeline/types';
 import { getStepIcon } from './PipelineGraphView';
 import './PipelineResultsView.css';
+
+function fmtDuration(start?: string, end?: string): string | null {
+  if (!start || !end) return null;
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  if (ms < 0) return null;
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
+}
+
+/** Compact per-step detail: config (who/what) and run info (when/how much). */
+function StepDetails({ step }: { step: PipelineStep }) {
+  const config = step.config;
+  const council = isCouncilType(config.type) ? (config as CouncilStepConfig) : null;
+  const duration = fmtDuration(step.startedAt, step.completedAt);
+  const template = (council?.inputTemplate ?? (config as { inputTemplate?: string }).inputTemplate) || '{{input}}';
+
+  return (
+    <div className="results-step-details">
+      {council && council.councilSetup?.personas?.length > 0 && (
+        <div className="rsd-row">
+          <span className="rsd-label">Personas</span>
+          <span className="rsd-val">
+            {council.councilSetup.personas.map((p) => (
+              <span className="rsd-persona" key={p.name}>
+                {p.name} <em>{p.role}</em> · {(p.model || '').replace(/^models\//, '')}
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
+      <div className="rsd-row">
+        <span className="rsd-label">Input</span>
+        <span className="rsd-val mono">
+          {template === 'none' ? 'none (task only)' : template}
+          {council?.includePipelineInput ? ' + pipeline input' : ''}
+        </span>
+      </div>
+      {council?.task && (
+        <div className="rsd-row">
+          <span className="rsd-label">Task</span>
+          <span className="rsd-val">{council.task}</span>
+        </div>
+      )}
+      {(step.startedAt || duration || step.artifact?.metadata?.tokensUsed) && (
+        <div className="rsd-row">
+          <span className="rsd-label">Run</span>
+          <span className="rsd-val">
+            {step.startedAt ? new Date(step.startedAt).toLocaleString() : '—'}
+            {duration ? ` · ${duration}` : ''}
+            {step.artifact?.metadata?.tokensUsed
+              ? ` · ${step.artifact.metadata.tokensUsed.toLocaleString()} tokens`
+              : ''}
+            {step.artifact?.metadata?.model ? ` · ${step.artifact.metadata.model}` : ''}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** What kind of thing the artifact IS — so "the output" is unambiguous. */
 function artifactLabel(a: StepArtifact): string {
@@ -135,6 +196,7 @@ export default function PipelineResultsView({
                     </div>
                     {!stepCollapsed && (
                       <>
+                        <StepDetails step={step} />
                         {step.error && step.status === 'failed' && (
                           <div className="results-step-error">{step.error}</div>
                         )}
