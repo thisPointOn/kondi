@@ -25,7 +25,7 @@ function fmtDuration(start?: string, end?: string): string | null {
 }
 
 /** Compact per-step detail: config (who/what) and run info (when/how much). */
-function StepDetails({ step }: { step: PipelineStep }) {
+export function StepDetails({ step }: { step: PipelineStep }) {
   const config = step.config;
   const council = isCouncilType(config.type) ? (config as CouncilStepConfig) : null;
   const duration = fmtDuration(step.startedAt, step.completedAt);

@@ -395,3 +395,39 @@
   color: #a78bfa;
   vertical-align: middle;
 }
+
+/* Per-step details inside the expanded pipeline row */
+.pl-step-list { display: flex; flex-direction: column; gap: 0.6rem; }
+.pl-step-stage { display: flex; flex-direction: column; gap: 0.4rem; }
+
+.pl-stage-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pl-stage-mode {
+  font-size: 0.5625rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+}
+.pl-stage-mode.sequential { background: #16a34a15; color: #16a34a; }
+.pl-stage-mode.parallel { background: #f59e0b15; color: #f59e0b; }
+
+.pl-step {
+  border: 1px solid var(--border-color, #2a2a2a);
+  border-left: 3px solid #6b7280;
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  background: var(--bg-tertiary, #1d1d24);
+}
+
+.pl-step-head { display: flex; align-items: center; gap: 0.45rem; }
+.pl-step-name { font-size: 0.8rem; font-weight: 600; color: var(--text-primary, #e5e5e5); }
+.pl-step-type { font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.05em; color: #888; }
+.pl-step-status { margin-left: auto; display: flex; align-items: center; gap: 0.3rem; font-size: 0.68rem; color: #999; text-transform: capitalize; }

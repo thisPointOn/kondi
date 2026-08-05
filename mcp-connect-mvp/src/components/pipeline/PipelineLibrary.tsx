@@ -9,6 +9,8 @@ import type { Pipeline } from '../../pipeline/types';
 import { pipelineStore } from '../../pipeline/store';
 import { consumePipelineCreate, PIPELINE_CREATE_EVENT } from './pipelineCreateSignal';
 import CliSessionImportModal from './CliSessionImportModal';
+import { StepDetails } from './PipelineResultsView';
+import { getStepIcon } from './PipelineGraphView';
 import './PipelineLibrary.css';
 
 interface PipelineLibraryProps {
@@ -232,14 +234,36 @@ export default function PipelineLibrary({
                     )}
                     <div className="crd-block">
                       <div className="crd-label">Steps</div>
-                      <div className="pipeline-stages-preview">
+                      <div className="pl-step-list">
                         {pipeline.stages.map((stage, idx) => (
-                          <span key={stage.id}>
-                            {idx > 0 && <span className="stage-arrow"> → </span>}
-                            <span className="stage-chip">
-                              {stage.steps.map((st) => st.name).join(' + ') || stage.name}
-                            </span>
-                          </span>
+                          <div key={stage.id} className="pl-step-stage">
+                            {pipeline.stages.length > 1 && (
+                              <div className="pl-stage-label">
+                                Stage {idx + 1} · {stage.name}
+                                {stage.steps.length > 1 && (
+                                  <span className={`pl-stage-mode ${stage.executionMode === 'parallel' ? 'parallel' : 'sequential'}`}>
+                                    {stage.executionMode === 'parallel' ? 'parallel' : 'sequential'}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            {stage.steps.map((step) => (
+                              <div key={step.id} className="pl-step">
+                                <div className="pl-step-head">
+                                  <span>{getStepIcon(step.config.type)}</span>
+                                  <span className="pl-step-name">{step.name}</span>
+                                  <span className="pl-step-type">{step.config.type}</span>
+                                  {step.status !== 'pending' && (
+                                    <span className="pl-step-status">
+                                      <span className={`step-status-dot ${step.status}`} />
+                                      {step.status === 'waiting_approval' ? 'waiting' : step.status}
+                                    </span>
+                                  )}
+                                </div>
+                                <StepDetails step={step} />
+                              </div>
+                            ))}
+                          </div>
                         ))}
                         {pipeline.stages.length === 0 && <span className="stage-chip">No steps</span>}
                       </div>
