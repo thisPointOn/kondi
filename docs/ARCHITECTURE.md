@@ -476,8 +476,8 @@ PipelineExecutor.run(pipeline):
         'coding':        create council, run coding orchestrator
         'review':        create council, run deliberation orchestrator
         'enrich':        create council, run deliberation orchestrator
-        'analysis':      create council, run deliberation orchestrator (same workflow, typically a smaller council)
-        'agent':         create council, run deliberation orchestrator (same workflow, typically a smaller council)
+        'analysis':      create council, run deliberation orchestrator (same workflow; manager-only by default — decision IS the output)
+        'agent':         create council, run deliberation orchestrator (same workflow; worker-only by default — single tool-using pass)
         'gate':          pause, wait for human approval
         'script':        run shell command, capture stdout
         'condition':     evaluate expression -> continue / skip_next_stage / stop / loop_to_stage (bounded)

@@ -658,15 +658,15 @@ A pipeline consists of **stages**, and each stage contains **steps**. Stages run
 | **council** | Open deliberation council — full tools, general output |
 | **code_planning** | Planning council — PLAN_TOOLS only, produces plan documents |
 | **coding** | Coding orchestrator — implement, review, test, debug |
-| **analysis** | Structured analysis (JSON) — same deliberation workflow, typically a smaller council |
-| **agent** | Concise single answer — same deliberation workflow, typically a smaller council |
+| **analysis** | Decision-only — same deliberation workflow, **manager-only by default** (no worker: the manager's decision IS the step's output) |
+| **agent** | Concise single-pass execution — same deliberation workflow, **worker-only by default** (a single tool-using pass, no framing/review) |
 | **review** | Review & documentation — code review + doc generation |
 | **enrich** | Enrichment — research, brainstorm, prioritize features |
 | **script** | Runs a shell command, captures stdout as artifact |
-| **condition** | Evaluates expression against input — continue, skip a stage, stop, or **loop back to an earlier stage** (bounded by max loops) |
+| **condition** | Evaluates expression against input — continue, skip a stage, stop, or **loop back to an earlier stage** (bounded by max loops, with a choice of what happens when that budget runs out) |
 | **gate** | Pauses for human approval before continuing |
 
-> Every council type runs the **same** deliberation workflow. "Lightweight" types (analysis/agent) are just smaller councils — they don't skip phases. Add or remove consultants to control depth.
+> Every council type runs the **same** deliberation workflow. "Lightweight" types (analysis/agent) are just smaller councils — they don't skip phases. Analysis/agent steps have their Max Rounds/Max Revisions locked to 1/0 (a single pass); add consultants or switch to a full **council** step type for more scrutiny.
 
 #### Choosing a council size (all run the same workflow)
 
@@ -678,24 +678,46 @@ A pipeline consists of **stages**, and each stage contains **steps**. Stages run
 
 For file/code-writing tasks, give the worker a **tool-capable provider** (`anthropic-cli`/`openai-cli`) and `writePermissions` — an API-only worker (deepseek/gemini) is automatically treated as a text agent (it returns the content inline rather than writing files).
 
+### The Pipeline Library
+
+**Pipelines** in the sidebar opens a table of your saved pipelines (name, status, stage/step counts, last updated) — click a row to expand it for a description, step summary, working directory, and action buttons (Open, Duplicate, Export, Delete). Two buttons in the header let you bring pipelines in from outside the app:
+
+- **Import** — pick a local JSON file: a single exported pipeline, an array of pipelines, or a bundle file. If an imported pipeline's ID collides with one you already have, it's imported as a new copy rather than overwriting yours.
+- **Import CLI Session** — see [CLI Pipeline Runner](#11-cli-pipeline-runner) for importing a completed CLI run back into the GUI.
+
+**Export** (per-pipeline, in the expanded row) downloads the pipeline as JSON — the counterpart to Import, and how you hand a pipeline to the [CLI runner](#11-cli-pipeline-runner) or share it as a template.
+
 ### Building a Pipeline
 
 1. Navigate to **Pipelines** in the sidebar.
 2. Click **New Pipeline**.
-3. The pipeline builder opens with a visual editor.
-4. **Add stages** — sequential phases of the workflow.
-5. **Add steps** within each stage:
-   - For council steps (council, code_planning, coding, review, enrich, analysis, agent): configure personas, models, rounds, decision criteria (analysis/agent are typically smaller councils)
-   - For script steps: write a shell command
-   - For condition steps: set an expression, mode, and actions (continue / skip next stage / stop / loop back to a stage)
-   - For gates: write an approval prompt
-6. **Configure input templates** — how each step receives context from previous steps.
+3. The pipeline builder opens directly onto the **graph canvas** — there is no separate list editor; the graph IS how you build the pipeline.
+4. **Add a step**: click **+ Add Step** below the last node to append a new step (starts as a full council: manager + consultant + worker). Click the small **+** beside an existing node to add a step *alongside* it instead — the two run together as a layer (toggle the **sequential**/**parallel** chip next to the layer to choose how).
+5. Click any node to open its config in the side panel (same `StepConfigPanel` for every council type; script/condition/gate steps get their own simplified form there). Change the **Type** dropdown to switch between council, code_planning, coding, review, enrich, analysis, agent, script, condition, or gate.
+6. **Configure input templates** — how each step receives context from previous steps (see [Artifact Flow](#artifact-flow)).
 7. **Set output types** — string, file, directory, or json.
-8. **Save** the pipeline.
+8. Remove a step with the **✕** on its node; rename a layer by editing the small label above it.
+9. Click the **▶ Input** node (top of the graph) to configure the pipeline's [starting input](#pipeline-input).
+10. Changes save automatically as you edit — there's no separate Save step.
 
-#### List vs. Graph View
+#### Reading the Graph
 
-The builder header has a **List | Graph** toggle (your choice is remembered). **List** is where you add, remove, and reorder stages/steps. **Graph** shows the same pipeline as a node diagram — stages as columns of nodes, arrows showing how output flows from stage to stage, and (for condition steps) the branch a `loop_to_stage` or `skip_next_stage` action takes. Click any node in Graph view to open its step config, same as clicking a step in List view. Graph is view-only — you still add/remove stages and steps in List view.
+- **Layers** — steps that run together (parallel or sequential-within-a-layer) are drawn inside a faint grouping outline. A single-step layer has no outline.
+- **⚠ warning badges** — a node shows a ⚠ when it's misconfigured (missing persona model, an unconfigured provider, a consultant that will never speak because Max Rounds is 0, a missing Expected Output on a full council, an invalid condition/loop target, etc.). Hover for the specific problem(s). **Run refuses to start while any ⚠ exists** — clicking **Run ▶** instead shows a banner listing every problem so you can fix them first.
+- **⚖ deliberation** — once a step has run, its node shows this button to jump straight into that step's full deliberation view. From there, the **← Back** button returns you to this pipeline (instead of the council library).
+- **Condition branches** — `loop_to_stage` draws as an amber dashed line back to its target (labeled with the loop budget, e.g. `loop ≤3`); `skip_next_stage` draws as a dotted bypass line; `stop` shows as a small red badge under the node.
+- **⚙ Details** (header button) reveals the pipeline's name, description, working directory, and schedule — hidden by default so the graph is the first thing you see.
+
+### Pipeline Input
+
+Click the **▶ Input** node to choose where the pipeline's starting input comes from:
+
+- **Text** (default) — type or paste the input directly.
+- **File** — point at a file path; the first step is instructed to read it with its own tools rather than the app reading it for you.
+- **Directory** — same idea, for a whole folder (the first step lists and reads what it needs).
+- **URL** — fetched once when the run starts (HTTPS) and handed to the first step as its input.
+
+Whichever kind you choose, an **Instructions** field lets you tell the first step what to *do* with that input (e.g. "summarize this file" or "review this codebase for security issues") — it's prepended ahead of the input content.
 
 ### Artifact Flow
 
@@ -715,9 +737,20 @@ Provenance headers tell downstream steps where each artifact came from:
 The council recommended approach A because...
 ```
 
+### Condition Steps and Loops
+
+A condition step matches an expression (`contains`, `regex`, or `equals`) against its input and takes an action per the outcome:
+
+- **continue** — proceed normally.
+- **skip_next_stage** — skip the next layer of steps and proceed after it.
+- **stop** — end the pipeline as completed, skipping everything remaining.
+- **loop_to_stage** — rewind to an earlier step and re-run everything from there (e.g. a "judge" step sending work back for another pass). The target step gets the condition's evaluation as **feedback** ("this is a retry — address the following...") along with the normal input, so it knows *why* it was sent back.
+
+Loops are bounded by **Max Loops** (default 3) so they can never run forever. Once that budget is used up and the condition is still failing, you choose what happens next: **continue** with the last attempt, **stop** the pipeline as completed, or **fail** the step (and, under the default failure policy, the pipeline).
+
 ### Running a Pipeline
 
-1. Open a saved pipeline and click **Run**.
+1. Open a saved pipeline and click **Run ▶** (blocked with a problem list if any step has a ⚠, see [Reading the Graph](#reading-the-graph)).
 2. The execution view shows real-time progress:
    - Each step shows its status (pending, running, completed, failed, waiting_approval)
    - Active council steps show the embedded deliberation view
@@ -726,6 +759,7 @@ The council recommended approach A because...
    - **Pause/Resume** — halt execution at the current point
    - **Force Decision** — skip remaining rounds in the active council
    - **Abort** — terminate the pipeline
+4. Once a run finishes (or fails), click **View Results** to open a read-only summary: steps grouped by stage, collapsed by default so you can expand just the ones you want to read, each output clearly labeled (decision / worker deliverable / approval, with type, token count, and where it was saved), and a stage-output footer showing exactly what fed into the next stage. A still-running pipeline opens the live execution view instead.
 
 ### Gate Steps
 

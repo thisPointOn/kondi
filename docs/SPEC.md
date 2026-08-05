@@ -3,7 +3,7 @@
 > Machine-readable living spec. Single source of truth for current types, defaults, keys, and flags.
 > For architectural rationale and deep "why" explanations, see `ARCHITECTURE.md`.
 >
-> **Last updated:** 2026-03-17
+> **Last updated:** 2026-08-05
 
 ---
 
@@ -30,6 +30,8 @@ mcp-connect-mvp/
       types.ts                   # PipelineStepType, step configs, Pipeline schema
       executor.ts                # PipelineExecutor — stage/step dispatch, artifact flow
       store.ts                   # Pipeline localStorage store (key: mcp-pipelines, version 5)
+      step-validation.ts         # Pre-run validation — per-step problems, run gate (§5a-6)
+      input-template.ts          # Shared {{input}}/{{file}} template rendering (§5a-2)
       output-parsers.ts          # isOpenAIModel(), stream-json parsing
     council/
       types.ts                   # Phases, entry types, roles, modes, artifacts
@@ -209,13 +211,15 @@ The run loop lives in `useCouncilHandlers.onRunWorkflow` (not the view component
 | `coding` | Coding | Manager + Worker + Reviewer | Code files | Worker saves `_code.md`, has testCommand, maxDebugCycles |
 | `review` | Deliberation | Manager + Consultant(s) + Worker | Review document | Worker saves `_review.md` |
 | `enrich` | Deliberation | Manager + Consultant(s) + Worker | Enriched content | Worker saves `_enrichment.md` |
-| `analysis` | Deliberation (same workflow) | Manager + Consultant(s) + Worker | Decision or output artifact | typically a smaller council; JSON output |
-| `agent` | Deliberation (same workflow) | Manager + Consultant(s) + Worker | Output artifact | typically a smaller council; concise output |
+| `analysis` | Deliberation (same workflow) | **Manager only** (default preset) | Decision artifact | 1 persona by default — the manager's `decide()` output IS the step output (0 workers → no execute/review phases); JSON-capable |
+| `agent` | Deliberation (same workflow) | Worker only (default preset) | Output artifact | 1 persona by default — a single tool-using pass, no framing/review; concise output |
 | `gate` | None | None | Approval | Pauses for user confirmation |
 | `script` | None | None | stdout | Runs a shell command, captures stdout as artifact |
 | `condition` | None | None | Evaluation result | Evaluates expression against input; actions: continue, skip_next_stage, stop, loop_to_stage |
 
 **No workflow-skipping "lightweight" path.** Every council type — including `agent`/`analysis` — runs the SAME deliberation workflow (frame → rounds → decide → execute → review). A "lightweight" council is just a SMALLER council (e.g. 2 consultants), never one that skips phases. The workflow stays cheap on its own when there's little to deliberate: with 0 consultants it skips the discussion rounds and goes straight to deciding, and round/revision counts cap the depth. The only direct-execution path is the structural manager-less case (a council with no manager can't orchestrate).
+
+**Lightweight steps are pinned to 1 round / 0 revisions.** `isLightweightCouncilType(type)` (`analysis`/`agent`) steps have `maxRounds`/`maxRevisions` fields **disabled** in `StepConfigPanel` and force-normalized to `maxRounds: 1, maxRevisions: 0` on mount (a `useEffect` corrects any older 0/0-era config on load). **`analysis`'s default preset is manager-only** (single `Analyst` persona, `suppressPersona: true`): analysis = DECIDE, and `deliberation-orchestrator.ts` `decide()` already completes the council with the manager's decision as final output whenever `getPersonaByRole(council, 'worker').length === 0` — a second worker persona would just produce a discarded, doubly-billed output. `agent`'s default preset is a single tool-using `worker` persona instead (§5a-1: `writePermissions` gates whether it can actually write files).
 
 `PipelineStepType = 'council' | 'code_planning' | 'analysis' | 'agent' | 'coding' | 'review' | 'enrich' | 'gate' | 'script' | 'condition'`
 
@@ -277,7 +281,42 @@ interface ConditionStepConfig {
 }
 ```
 
-When a condition step triggers `skip_next_stage`, the executor skips the immediately following stage (marks all its steps as 'skipped') and continues with the stage after that. When it triggers `stop`, the pipeline completes gracefully — remaining stages are marked as 'skipped' and the pipeline status is 'completed'. When it triggers **`loop_to_stage`**, the executor rewinds to `loopTargetStageId`, resets the intervening stages (target…current) to 'pending', and re-runs from there — enabling iterative refine→review→refine loops. **Bounded by `maxLoops` (default 3) per condition step** via an in-run counter; once the budget is exhausted the action falls through to `continue`, so it can never loop forever. The target must be an earlier (or the same) stage; a forward/missing target falls through.
+When a condition step triggers `skip_next_stage`, the executor skips the immediately following stage (marks all its steps as 'skipped') and continues with the stage after that. When it triggers `stop`, the pipeline completes gracefully — remaining stages are marked as 'skipped' and the pipeline status is 'completed'. When it triggers **`loop_to_stage`**, the executor rewinds to `loopTargetStageId`, resets the intervening stages (target…current) to 'pending', and re-runs from there — enabling iterative refine→review→refine loops. **Bounded by `maxLoops` (default 3) per condition step** via an in-run counter (`loopCounts`, keyed by step id); once the budget is exhausted the action falls through per `onLoopExhausted` (default `'continue'`: proceed with the last attempt; `'stop'`: end the pipeline as completed; `'fail'`: throw, failing the step — and the pipeline, under the default failure policy) — see `ConditionStepConfig.onLoopExhausted` below. The target must be an earlier (or the same) stage; a forward/missing target falls through.
+
+**Loop-back feedback rides the back-edge.** When a `loop_to_stage` fires, the condition's evaluated input (`inputContext` — typically a judge/reviewer's verdict) is captured as `loopRequest.feedback`. On the next pass through `run()`, `collectPreviousArtifacts()` appends it as an EXTRA artifact for the loop target: `"THIS IS A RETRY (attempt N). The previous attempt was sent back. Address the feedback below.\n\n<feedback>"`, with `metadata.stepName` set to `Loop feedback from "<condition step name>" (iteration N)`. This is the one case where a step receives input from a step that runs AFTER it in pipeline order.
+
+```typescript
+interface ConditionStepConfig {
+  // ...
+  /** What happens when maxLoops is exhausted and the check STILL fails:
+   *  'continue' (default) proceeds with the last attempt, 'stop' ends the
+   *  pipeline as completed, 'fail' fails the step (and the pipeline under
+   *  the default failure policy). */
+  onLoopExhausted?: 'continue' | 'stop' | 'fail';
+}
+```
+
+### 5a-5. Pipeline Input Sources
+
+`Pipeline.inputSource?: PipelineInputSource` (`{ kind: 'text' | 'file' | 'directory' | 'url', value?: string, instructions?: string }`, `pipeline/types.ts`) generalizes the classic typed `initialInput` seed:
+
+- **`text`** (default when `inputSource` is absent) — the classic `Pipeline.initialInput` string.
+- **`file` / `directory`** — `value` is a path; the executor does NOT read it. It builds a synthetic stage-0 artifact instructing the first step to read the path with its own tools (`[Input type: file]` / `[Input directory: ...]` + an explicit "use your tools to read/list" directive).
+- **`url`** — `value` is fetched once at run start via `platform.fetchText(url)` (GUI: `http_relay` Tauri command; CLI: Node `fetch`) BEFORE stage 0 runs; a fetch failure fails the run immediately. The fetched body becomes the stage-0 artifact content.
+- **`instructions`** (all kinds) — prepended to the stage-0 artifact content: "what the first step should DO with the input."
+
+Implemented in `PipelineExecutor.collectPreviousArtifacts()` (stage-0 special case) and `run()` (up-front URL resolution into `resolvedUrlInput`). The builder's Pipeline Input panel (§5c) edits this via `pipelineStore.update(id, { inputSource })`.
+
+### 5a-6. Pre-Run Validation (`src/pipeline/step-validation.ts`)
+
+`validatePipeline(pipeline, configuredProviders)` returns a `Map<stepId | '__input__', string[]>` of human-readable problems — empty map = ready to run. Powers the ⚠ node badges (§5c) and the run gate: `PipelineBuilder`'s Run button computes `problems` on every render and, if non-empty, refuses to start and shows a dismissible amber banner listing every offending step and its issues (`showRunBlocked`).
+
+Per-type checks (`validateStep`):
+- **Council types** (`validateCouncilStep`): no personas configured; a persona missing `model`/`provider`, or whose provider isn't in `configuredProviders` (router-routed personas exempt); consultants configured with `maxRounds === 0` (they'd never speak); no Task AND `inputTemplate === 'none'` (nothing to work from); **`expectedOutput` required only for FULL council types** — `isLightweightCouncilType()` (analysis/agent) steps are exempt since they define their deliverable in the Task.
+- **`script`**: no shell command.
+- **`gate`**: no approval prompt.
+- **`condition`**: no expression; for a `loop_to_stage` action — no `loopTargetStageId`, target stage no longer exists, or **target is not an earlier (or same) stage** than the condition step's own stage.
+- **Pipeline input** (`validatePipelineInput`, key `__input__`): a non-`text` `inputSource` with no `value`; a `text` source with empty `initialInput` AND no first-step Task to fall back on.
 
 ### 5a. CouncilSetup Defaults (from `factory.ts`)
 
@@ -305,6 +344,8 @@ When a condition step triggers `skip_next_stage`, the executor skips the immedia
 | Worker `writePermissions` | true |
 | Default `temperature` | 0.7 |
 
+**Pipeline step preset model SKUs are centralized.** `StepConfigPanel.tsx` derives every step type's default persona models from two constants — `DEFAULT_PRIMARY_MODEL = { model: 'claude-sonnet-4-5-20250929', provider: 'anthropic-cli' }` and `DEFAULT_SECONDARY_MODEL = { model: 'gpt-5.5', provider: 'openai-cli' }` — resolved per-persona through `resolveDefaultModel()` (falls back to a configured/available provider) and assembled by a shared `presetPersona(role, name, resolved, opts)` factory (role-keyed avatar/color/traits/`suppressPersona` defaults). This is **the single refresh point** for pipeline-preset SKUs when a model generation bumps (rule 14 in `CLAUDE.md`) — change the two constants, not each `default*Config()` function.
+
 ### 5b. Pipeline Store Schema
 
 Key: `mcp-pipelines` — version 5.
@@ -315,16 +356,41 @@ Legacy `LlmStepConfig` (flat `model/provider/systemPrompt`) is auto-migrated to 
 
 Input template variables: `{{input}}` (all previous artifacts), `{{input[N]}}` (specific artifact by index), `{{file}}` (all output file paths), `{{file[N]}}` (specific file path).
 
-### 5c. Builder UI: List vs. Graph View
+### 5c. Builder UI: Graph-Only
 
-`PipelineBuilder.tsx` has a **List | Graph** toggle in its header (`builder-view-toggle`); the choice persists to `kondi-pipeline-builder-view` (`'list'` default, or `'graph'`). List is the structural editor (add/remove stages and steps). Graph (`components/pipeline/PipelineGraphView.tsx` + `.css`) is a **read-only** node-graph projection of the same pipeline, rendered alongside it:
+`PipelineBuilder.tsx` has **no List view** — `StageRow.tsx` was deleted and the graph (`components/pipeline/PipelineGraphView.tsx` + `.css`) is the only pipeline-editing surface, not a read-only projection. The `kondi-pipeline-builder-view` localStorage key (former List/Graph toggle) is **removed**.
 
-- Stages render as vertical layers; steps render as clickable nodes (click opens the existing `StepConfigPanel`, same as List).
-- Edges: an initial-input pseudo-node feeds stage 1; stage-to-stage flow edges connect every step in a stage to the next stage's entry step(s); a sibling "chain" arrow links steps within a sequential stage in execution order.
-- Condition-step actions (§5a-4) are drawn as real edges, not just labels: `loop_to_stage` is an amber dashed back-edge on a left lane, labeled with the loop budget (e.g. `T · loop ≤3`); `skip_next_stage` is a dotted bypass edge on a right lane; `stop` (and a `loop_to_stage`/`skip_next_stage` with no valid target) render as a red badge under the node instead of an edge.
-- Node left-border color reflects the step's `status`.
+Stages are an internal execution detail and are not shown as chrome — the graph renders a plain chain of step nodes, grouped into **layers** (one layer per pipeline stage) only when steps share one:
 
-Graph reuses `getStepIcon()`/`getStepSummary()`, exported from `StageRow.tsx` (previously module-private) for node labels. Both views are exported from `components/pipeline/index.ts`. No pipeline types, executor, or store changes — purely an additive UI projection.
+- **Add Step** (`+ Add Step` under the last layer) appends a new step in its **own sequential stage**. **Sibling add** (a `+` beside a layer's last node) adds a step ALONGSIDE an existing one — same layer/stage, runs per the layer's execution mode.
+- **Layer mode chip** — a clickable `sequential`/`parallel` chip next to any multi-step layer toggles `PipelineStage.executionMode`.
+- **Editable layer-name labels** — an inline `<input>` above each layer renders/edits `PipelineStage.name` directly (`onRenameLayer`).
+- **Faint layer hulls** — a rounded outline drawn behind any layer with 2+ nodes, so "these run together" (and loop targets) stay visually grouped.
+- **⚠ validation badges** — every node (and the ▶ Input pseudo-node) shows a ⚠ when `step-validation.ts` (§5a-6) reports problems for it; hover lists them.
+- **Node ✕** removes the step (and its now-empty stage, if it was 1-step).
+- **⚖ deliberation** — a per-node button (when the step has run and produced a `councilId`) opens that step's full deliberation view. `App.tsx` sets a `councilFromPipeline` flag when navigating there; `DeliberationView`'s **← Back** button (`onBack`, always existed but was never rendered until this change) then returns to the pipeline builder instead of the council library, and clears the flag. Any sidebar navigation away also clears it, so it doesn't stick to the next council opened normally.
+- **▶ Input node** — click selects the pipeline input; the side panel switches to the Pipeline Input panel (§5a-5) instead of `StepConfigPanel`.
+- **Details drawer** — pipeline name/description/working-directory/schedule fields are hidden behind a `⚙ Details ▸` toggle in the header (`detailsOpen` state), not shown inline by default.
+- **Side panel** — mutually exclusive with node selection: a selected step shows `StepConfigPanel` (with its `problems` list atop it, §5a-6); no step selected shows the Pipeline Input panel.
+
+Condition-step actions (§5a-4) are drawn as real edges, not just labels: `loop_to_stage` is an amber dashed back-edge on a left lane, labeled with the loop budget (e.g. `T · loop ≤3`); `skip_next_stage` is a dotted bypass edge on a right lane; `stop` (and a `loop_to_stage`/`skip_next_stage` with no valid target) render as a red badge under the node instead of an edge. Node left-border color reflects the step's `status`.
+
+`getStepIcon()`/`getStepSummary()` now live in and are exported from `PipelineGraphView.tsx` itself (moved when `StageRow.tsx` was deleted). Both `PipelineGraphView` and `PipelineBuilder` are exported from `components/pipeline/index.ts`.
+
+### 5d. PipelineResultsView (finished/partial-run review)
+
+`components/pipeline/PipelineResultsView.tsx` — a read-only surface for reviewing a run after it's no longer live (`PipelineBuilder`'s "View Results" button on a `completed`/`failed` pipeline; `onViewResults`). A still-`running` pipeline instead opens `PipelineExecutionView` (the live progress surface) via the same button.
+
+- **Stage-grouped, collapsible.** Steps are grouped under their producing stage; both stages and individual steps are independently collapsible (`collapsedStages`/`collapsedSteps` sets). **Steps start COLLAPSED** — you expand the ones you want to read; stages start expanded.
+- **Explicitly labeled outputs.** Each step's artifact is labeled by `artifactLabel()`: `Decision (manager)`, `Output (worker deliverable)`, `Approval`, or `LLM response`, plus a meta line (`outputType` / token count / char count) and, when present, `📄 saved to <outputPath>`.
+- **Stage-output footers.** Each stage ends with a summary line naming every artifact-producing step and what it fed to the next stage (or "final result" for the last stage).
+- **Deliberation drill-down.** A step with a `councilId` shows a `⚖ deliberation` button (`onOpenCouncil`) to open its full council view.
+
+### 5e. Pipeline Import (`PipelineLibrary`)
+
+The library header's **Import** button (distinct from **Import CLI Session**, §11) reads a local JSON file and calls `pipelineStore.import(list)` → `importPipelines()` (`pipeline/store.ts`). Accepted shapes: a single exported pipeline object (`{ ...,  stages: [...] }`), an array of pipelines, `{ pipelines: [...] }`, or a harness store dump (`{ "mcp-pipelines": "<json-string>" }`, e.g. `testing/harness/store-dump.json`). **Id collision** — if an incoming pipeline's `id` already exists in the store, it's assigned a fresh `crypto.randomUUID()` instead of overwriting; the pipeline is otherwise imported as-is. A summary dialog reports how many pipelines were imported (or that none were found).
+
+The library itself was rebuilt in the councils-view **table layout** (expandable rows: name/status/stage-count/step-count/updated columns, expanding to description, step chips, working-dir/input-source meta, and action buttons) instead of the old card grid.
 
 ---
 
@@ -446,7 +512,6 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 | `kondi-catalog-sync` | services/modelCatalogSync.ts | Last live `/models` reconciliation per API provider (advisory drift report) |
 | `kondi-council-store-dir` | council/storage-cleanup.ts | User override for the on-disk council store directory (empty = `<dataDir>/council-store`) |
 | `kondi-codex-no-sandbox` | services/codexCliClient.ts | Opt-in: run Codex with `--dangerously-bypass-approvals-and-sandbox` instead of `--sandbox workspace-write` |
-| `kondi-pipeline-builder-view` | components/pipeline/PipelineBuilder.tsx | PipelineBuilder List/Graph view toggle (`'list'` \| `'graph'`; default `'list'`) |
 | `context-{councilId}` | council/context-store.ts | Current ContextArtifact |
 | `context-history-{councilId}` | council/context-store.ts | ContextArtifact[] (all versions) |
 | `context-patches-{councilId}` | council/context-store.ts | ContextPatch[] |
@@ -463,6 +528,7 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 - `getItem(key)`: checks in-memory Map first, falls back to localStorage (promotes to Map on hit)
 - `setItem(key, value)`: always succeeds in Map; localStorage write is try/catch silenced; the FULL value is also scheduled to disk
 - `setItemDurable(key, value, slim)`: full value to Map + disk regardless of localStorage quota; localStorage gets the full value, or `slim()` if that throws — keeps DEFINITIONS (councils, pipelines) surviving a restart even when their live data pushed the blob past the cap
+- `setItemPersistent(key, value)` (used by `pipeline/store.ts` only): full value to Map + scheduled disk write; the localStorage mirror is wrapped in try/catch and **never throws on quota** — it used to call `localStorage.setItem()` unguarded, so once other data filled the ~5MB cap, every pipeline save (including the council-workflow shadow-pipeline write) threw `QuotaExceededError` and aborted the caller mid-run. Restart-persistence still comes from the scheduled disk write, not localStorage.
 - `removeItem(key)`: removes from Map, localStorage, and disk (`delete_local_file`)
 
 **Disk mirror (durable backstop).** localStorage's ~5MB quota means a full deliberation (ledger chunks + deliberation state) may not fit — on a restart the empty Map would lose anything that didn't. The store mirrors the FULL value of every council/pipeline key to disk at `<dataDir>/council-store/<hex(key)>.kv` (hex-encoded key as filename, via the `write_local_file`/`delete_local_file`/`list_directory`/`read_local_file` Tauri commands). Writes are debounced (250ms, `armFlush`/`flushDisk`) and flushed on `beforeunload`. `hydrateFromDisk()` loads disk → the Map at startup and migrates any pre-existing localStorage council data to disk once; it's `await`ed in `src/main.tsx` (after `initKondiPaths()`) BEFORE the first React render, so councils + full ledger/deliberation survive an app restart. The store dir is user-configurable (Settings → General → "Council Deliberation Store"; `setDiskDir`/`getDiskDir`/`getDiskDirOverride`/`getDefaultDiskDir`; override localStorage key `kondi-council-store-dir`; default `<dataDir>/council-store`, where `<dataDir>` is resolved cross-platform by the Rust `get_kondi_data_dir` command via `kondiPaths.ts`). This auto-reload of the FULL deliberation is SEPARATE from a council's per-council `saveDeliberationMode` (full/abbreviated), which exports human-readable markdown to the WORKING directory (`<workingDir>/.kondi/outputs/...` via `deliberationSaveService`).
@@ -494,10 +560,19 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 15. **Text-council artifacts wrapped in file-creation junk**: Weak workers (e.g. gemini) obey the manager's "create a file" directive regardless of worker-prompt overrides, emitting `write_file("path", """…""")` dumps + a "COMPLETION SUMMARY" block around the real answer. Fixed: `sanitizeDeliverable()` (deliberation-orchestrator.ts) extracts the content from XML/triple-quoted/quoted `write_file(...)` forms and strips the summary block — deterministic, model-independent, applied on the no-write `createOutput`/`reviseWork` path.
 16. **Settings → Services froze the whole app** (infinite render loop): `SearchServicePanel`'s mount effect depended on the identity of the un-memoized `onStatusChange` prop, and the `useServers` handler rebuilt the servers array (fresh objects) on EVERY status report — so each refresh re-rendered App → recreated the callback → re-fired the effect → spawned `docker info`/`docker inspect` subprocesses, forever. Only triggered when the built-in search MCP server was connected. Fixed two-sided: the panel keeps `onStatusChange` in a ref (refresh logic never depends on callback identity), and `useServers` bails out of `setServers` when the search server's status and tool count are unchanged.
 17. **NVIDIA NIM "Connection error" from the webview** (CORS): NIM's hosted API sends NO CORS headers (Z.AI/DeepSeek do), so every direct webview call was blocked by the browser and surfaced as "Connection error" — while curl/Node tests passed. Fixed: `http_relay_stream` Tauri command relays HTTPS requests via reqwest (no CORS) and forwards response bytes over an IPC channel as they arrive; `relayFetch` (openaiCompatibleClient.ts) adapts the channel to a fetch `Response` for the OpenAI SDK. A first buffered-relay attempt "worked" but returned nothing until the full body arrived — real chat generations exceed the 90s no-first-byte watchdog, which killed them; streaming the relay fixed both the watchdog false-positive and live tokens. Related: NIM's `/models` list advertises models that don't work (404 "Function not found", hangs, streaming-only 500s) — the catalog ships only completion-verified models (see §3).
+18. **`setItemPersistent` threw `QuotaExceededError`, killing pipeline saves**: found by a live workflow rerun with localStorage near the 5MB cap (59 councils) — any `pipelineStore` save, including the council-workflow shadow-pipeline write, threw and aborted the caller before the executor even started. Fixed: `setItemPersistent` now matches the store's own design (§9) — in-memory cache is primary, localStorage is a best-effort mirror (quota errors warn via `console.warn`, never throw), and restart-persistence comes from the scheduled disk write.
 
 ---
 
 ## 11. Development Workflows
+
+### Pipeline E2E Test Suite (`testing/`)
+
+Feature-verification harness for the pipeline engine, separate from unit tests. `testing/harness/run-all.ts` drives the REAL `PipelineExecutor` + real stores + the Node `PlatformAdapter` (real filesystem) — not mocks. Run: `cd mcp-connect-mvp && NVIDIA_API_KEY=... npx tsx ../testing/harness/run-all.ts`.
+
+- **12 numbered test folders** (`testing/01-linear-chain` … `testing/12-full-council`), each with a `README.md` describing the pipeline shape/assertions and a `result.json` written by the run (pass/fail per assertion + captured artifacts). Coverage: input chaining, parallel-stage `{{input}}`/`{{input[N]}}` joins, `json` outputType + `{{input.field}}` dot-paths (§5a-2), condition `continue`/`stop`/`skip_next_stage`, loop-back feedback + `maxLoops` + `onLoopExhausted: 'fail'` (§5a-4), script steps, all four `inputSource` kinds (§5a-5), gate approve/reject, `failurePolicy` stop vs skip_step, resume-skips-completed-steps, worker file output + `{{file}}` resolution, and a full manager+worker council through the deliberation engine.
+- LLM steps call NVIDIA NIM's free-credit `nemotron-3-nano` for genuine model calls; personas named `SCRIPTED:...` are answered by the harness with canned text instead, so control-flow assertions (loops, conditions, failures) stay deterministic regardless of live model output.
+- **Known issue (logged, non-fatal):** `council/context-bootstrap.ts` calls the Tauri `invoke()` directly (`run_command`, `read_local_file`) with no Node/CLI fallback, so directory-context bootstrap always fails (caught, doesn't abort the run) when the harness (or the CLI runner) runs a step outside the Tauri webview.
 
 ### Dev Mode
 ```bash
