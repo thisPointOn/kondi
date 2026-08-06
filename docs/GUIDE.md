@@ -39,7 +39,7 @@ When Kondi starts for the first time:
 1. The app validates all LLM providers — checking for installed CLIs (`claude`, `codex`, `gemini`), stored API keys, and local Ollama.
 2. If no providers are configured, you'll see a prompt directing you to Settings -> LLM Providers.
 3. A default empty chat is created.
-4. The sidebar shows navigation for Chat, Councils, Pipelines, Providers, Services, and Settings.
+4. The sidebar shows navigation for Chats, Projects, Pipelines, and Settings (Providers and Services live inside Settings). Councils have no separate sidebar section — every council lives inside a pipeline (see [Councils](#6-councils)).
 5. The MCP Servers panel (toggleable from the sidebar) shows built-in servers in the "Built-in" section.
 
 Configure at least one LLM provider before doing anything else.
@@ -391,9 +391,14 @@ A council is a group of AI personas that collaborate on a task following a speci
 
 ### Creating a Council
 
-1. Navigate to **Councils** in the sidebar.
-2. Click **New Council**.
-3. Configure:
+Councils don't have their own top-level "New Council" screen — every council lives inside **Pipelines** (see [section 10](#10-pipelines)), either as a step's engine or as a standalone council with a one-step pipeline of its own. There are two ways to start one:
+
+- **As a pipeline step** — open or create a pipeline, add a step, and pick a council-based step type (`council`, `code_planning`, `coding`, `review`, `enrich`, `analysis`, or `agent`). Configure its personas and task right there in the step's side panel (the same fields listed below). The step becomes an independent council record the first time it runs.
+- **As a standalone council inside a Project** — open a project (sidebar → **Projects**) and click **+ New council**. This opens the same setup screen as below and quietly gives the council its own one-step pipeline, so it's still reachable from the Pipelines view.
+
+Either way, the setup screen is the same:
+
+1. Configure:
    - **Name** — descriptive label for the council
    - **Mode** — deliberation, debate, build, review, synthesis, socratic, or freeform
    - **Task** — what the council should accomplish
@@ -402,8 +407,10 @@ A council is a group of AI personas that collaborate on a task following a speci
    - **Working directory** — where file operations are scoped
    - **Min/max rounds** — how many rounds of discussion
    - **Max revisions** — how many times a worker can revise output
-4. Add personas (see [Personas](#7-personas)).
-5. Click **Start**.
+2. Add personas (see [Personas](#7-personas)).
+3. Click **Start**.
+
+Once a council has run, reach it again from wherever it's used: the pipeline step's **⚖ deliberation** button, or a project's council list. The **← Back** button in the deliberation view always returns you to the pipeline it lives in.
 
 > **Launch-time model validation**: When you start a council, Kondi validates every persona's model first. If a persona points at a model that's unknown, proven-broken, or belongs to a provider you haven't configured (common with template personas), the launch is **blocked with a detailed error** listing each offending persona, its model, and why it's unusable — fix the persona or add the provider key in Settings → Providers, then start again. Kondi deliberately does NOT swap in a substitute model: a silent swap could route your council to a different (and differently-priced) model than you picked. Routed personas (`route:<profile>`) are exempt — they resolve at call time.
 
@@ -447,12 +454,13 @@ During a running council:
 
 ### Multi-Step Council Workflows
 
-A council can be chained into a series of steps — a lighter-weight alternative to building a full [pipeline](#10-pipelines). Open a council and click **+** on the step rail above the deliberation to append another council step; the rail shows every step in the series and lets you click between them. The workflow's overall name and status sit above the rail, with an **✎ Edit** button that opens the current step's setup without leaving the workflow.
+A council can be chained into a series of steps — a lighter-weight alternative to building a full [pipeline](#10-pipelines) from the graph builder. Open a council and click **+** on the step rail above the deliberation to append another council step; the rail shows every step in the series and lets you click between them. The workflow's overall name and status sit above the rail, with an **✎ Edit** button that opens the current step's setup without leaving the workflow.
 
 - **Run a step and everything runs forward.** Clicking **Start** on any step in the series runs that step AND every step after it, in order — each step is handed the previous step's output (through its [input template](#artifact-flow), same syntax as pipeline steps) automatically.
 - **Editing a step reruns forward, not backward.** If you edit an already-run step and choose **Save & Rerun**, that step and every step after it are cleared and rerun; earlier steps and their results are left alone and continue feeding the rerun.
 - Each step configures its own input contract (`{{input}}`, `{{input.fieldName}}`, or a fixed starting input) the same way a pipeline step does — see [Artifact Flow](#artifact-flow) below.
 - A council with no additional steps is just a normal 1-step workflow; nothing changes for it.
+- The whole series also shows up in the **Pipelines** table as an ordinary pipeline (each step bound to its persistent council) — the step rail is just a faster way to build and run the same chain without opening the graph builder.
 
 ---
 
@@ -704,7 +712,7 @@ For file/code-writing tasks, give the worker a **tool-capable provider** (`anthr
 
 - **Layers** — steps that run together (parallel or sequential-within-a-layer) are drawn inside a faint grouping outline. A single-step layer has no outline.
 - **⚠ warning badges** — a node shows a ⚠ when it's misconfigured (missing persona model, an unconfigured provider, a consultant that will never speak because Max Rounds is 0, a missing Expected Output on a full council, an invalid condition/loop target, etc.). Hover for the specific problem(s). **Run refuses to start while any ⚠ exists** — clicking **Run ▶** instead shows a banner listing every problem so you can fix them first.
-- **⚖ deliberation** — once a step has run, its node shows this button to jump straight into that step's full deliberation view. From there, the **← Back** button returns you to this pipeline (instead of the council library).
+- **⚖ deliberation** — once a step has run (or the step is bound to an existing council), its node shows this button to jump straight into that step's full deliberation view. From there, the **← Back** button always returns you to this pipeline — there's no separate council library to fall back to.
 - **Condition branches** — `loop_to_stage` draws as an amber dashed line back to its target (labeled with the loop budget, e.g. `loop ≤3`); `skip_next_stage` draws as a dotted bypass line; `stop` shows as a small red badge under the node.
 - **⚙ Details** (header button) reveals the pipeline's name, description, working directory, and schedule — hidden by default so the graph is the first thing you see.
 

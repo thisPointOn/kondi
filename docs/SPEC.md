@@ -3,7 +3,7 @@
 > Machine-readable living spec. Single source of truth for current types, defaults, keys, and flags.
 > For architectural rationale and deep "why" explanations, see `ARCHITECTURE.md`.
 >
-> **Last updated:** 2026-08-05
+> **Last updated:** 2026-08-06
 
 ---
 
@@ -33,6 +33,7 @@ mcp-connect-mvp/
       step-validation.ts         # Pre-run validation — per-step problems, run gate (§5a-6)
       input-template.ts          # Shared {{input}}/{{file}} template rendering (§5a-2)
       output-parsers.ts          # isOpenAIModel(), stream-json parsing
+      council-migration.ts       # Gives every council a pipeline home (§4e)
     council/
       types.ts                   # Phases, entry types, roles, modes, artifacts
       factory.ts                 # createCouncilFromSetup() — default values
@@ -200,6 +201,23 @@ The run loop lives in `useCouncilHandlers.onRunWorkflow` (not the view component
 
 **View-mode navigation**: a one-shot `requestCouncilView(id)`/`consumeCouncilView(id)` signal (`councilSetupSignal.ts`) tells `DeliberationView`'s mount logic to open the target step's deliberation (view mode) instead of auto-opening setup — used when the workflow rail advances between steps mid-run, and when a rail step is clicked while already in view mode. Auto-open of the setup panel is now gated to genuinely NEW councils only: `phase === 'created' && status !== 'resolved' && !deliberation?.savedProblem` — needed because `deliberationState` is not persisted to disk (rule #6), so every council reads phase `'created'` after an app restart; without the extra checks a resolved or in-progress council would hijack into the edit screen on reload.
 
+### 4e. Councils Live Inside Pipelines — No Standalone Surface
+
+There is no standalone Councils UI: no sidebar section, no council tile/grid library. `CouncilLibrary` (component + CSS) was deleted; its shared table styling (`.council-table`/`.ct-*`/`.crd-*`) now lives in `PipelineLibrary.css`. Pipelines is the single top-level surface — the `'council'` `AppView` is reached only as a **deliberation drill-in** (from a pipeline step's ⚖ button, §5c/§5d, or a project's council list) and its Back button always returns to `'pipelines'` (`App.tsx`), never to a council grid. The council engine itself (deliberation/coding orchestrators, personas, ledger) is unchanged — only the parallel top-level UI is gone.
+
+**Migration (`pipeline/council-migration.ts`)** keeps every pre-existing council reachable through Pipelines:
+
+- `migrateCouncilsToPipelines()` runs once at startup (`main.tsx`, immediately after `councilDataStore.hydrateFromDisk()` and before first render) and sweeps every council in `councilStore`. Councils that already have a pipeline home (via `council.pipelineId`, `council.workflowId`'s shadow pipeline, or a prior one-step pipeline) are skipped.
+- **Standalone single councils** get a deterministic one-step pipeline: id `council-1s-<councilId>`, one stage/one step whose `config.boundCouncilId = councilId` (`config.type` is `'coding'` if `council.deliberation?.stepType === 'coding'`, else `'council'`), `source: 'council-workflow'`, `initialInput` seeded from `council.deliberation?.savedProblem`. The council record stays the single source of truth — nothing is duplicated.
+- **Multi-step council workflows** already had a shadow pipeline (`council-wf-<workflowId>`, built by `workflow-runner.ts`'s `syncWorkflowPipeline`, §4d) that was previously hidden from the sidebar/library by a `source !== 'council-workflow'` filter. That filter is removed from `Sidebar.tsx`/`PipelineLibrary.tsx` — bridge pipelines are now canonical, visible pipelines like any other.
+- `ensurePipelineForCouncil(councilId)` (exported, idempotent) covers councils born AFTER startup: the chat-generated-council path (`COUNCIL_RUN_EVENT` listener in `App.tsx`, §4c) and a project's "+ New council" button (`ProjectView.tsx` → `createDefaultCouncil`) both call it before navigating to the council view, so a freshly created council always has a pipeline home to be reached through.
+
+**Bound-council steps** (`CouncilStepConfig.boundCouncilId`, `pipeline/types.ts`) intentionally carry an empty `councilSetup` shell — the bound council record is authoritative for personas/task/config, both in the UI and at validation/run time:
+
+- **Builder UI**: `PipelineBuilder` renders `StepConfigPanel.tsx`'s exported `BoundCouncilStepPanel` INSTEAD OF the normal `StepConfigPanel` whenever `step.config.boundCouncilId` is set (a separate component, so the two panels' hook order can never mix). It shows the bound council's live name/personas/task (subscribed to `councilStore`) and an "Open deliberation & edit" button (`onOpenCouncil`) that routes to the council's own editor; persona editing happens there, not in the pipeline step config. `PipelineGraphView.getStepSummary()` likewise reads the bound council's LIVE persona count for bound steps (not the empty shell's `councilSetup.personas`).
+- **Validation**: `pipeline/step-validation.ts`'s `validateCouncilStep` short-circuits to `validateBoundCouncil(councilId, configuredProviders)` when `boundCouncilId` is set — checking the live council's personas (missing model/provider, unconfigured provider) instead of the empty shell, which would otherwise wrongly report "No personas configured" and block every migrated pipeline from running (§5a-6).
+- **Launch-time model validation**: bound steps skip the executor's normal council-creation path, so `usePipeline.ts`'s `handlePipelineRun` walks every stage/step up front and calls `validateCouncilModels(bound, configuredProviders)` (§3d) for each `boundCouncilId` found — same throw-never-substitute semantics as any other council launch — before creating the executor and running.
+
 ---
 
 ## 5. Pipeline Steps
@@ -318,7 +336,7 @@ Implemented in `PipelineExecutor.collectPreviousArtifacts()` (stage-0 special ca
 `validatePipeline(pipeline, configuredProviders)` returns a `Map<stepId | '__input__', string[]>` of human-readable problems — empty map = ready to run. Powers the ⚠ node badges (§5c) and the run gate: `PipelineBuilder`'s Run button computes `problems` on every render and, if non-empty, refuses to start and shows a dismissible amber banner listing every offending step and its issues (`showRunBlocked`).
 
 Per-type checks (`validateStep`):
-- **Council types** (`validateCouncilStep`): no personas configured; a persona missing `model`/`provider`, or whose provider isn't in `configuredProviders` (router-routed personas exempt); consultants configured with `maxRounds === 0` (they'd never speak); no Task AND `inputTemplate === 'none'` (nothing to work from); **`expectedOutput` required only for FULL council types** — `isLightweightCouncilType()` (analysis/agent) steps are exempt since they define their deliverable in the Task.
+- **Council types** (`validateCouncilStep`): no personas configured; a persona missing `model`/`provider`, or whose provider isn't in `configuredProviders` (router-routed personas exempt); consultants configured with `maxRounds === 0` (they'd never speak); no Task AND `inputTemplate === 'none'` (nothing to work from); **`expectedOutput` required only for FULL council types** — `isLightweightCouncilType()` (analysis/agent) steps are exempt since they define their deliverable in the Task. **Bound-council steps** (`config.boundCouncilId` set — migrated councils/workflows, §4e) short-circuit entirely to `validateBoundCouncil(councilId, configuredProviders)`, which checks the LIVE council record's personas/providers instead of the step's empty `councilSetup` shell.
 - **`script`**: no shell command.
 - **`gate`**: no approval prompt.
 - **`condition`**: no expression; for a `loop_to_stage` action — no `loopTargetStageId`, target stage no longer exists, or **target is not an earlier (or same) stage** than the condition step's own stage.
@@ -374,7 +392,8 @@ Stages are an internal execution detail and are not shown as chrome — the grap
 - **Faint layer hulls** — a rounded outline drawn behind any layer with 2+ nodes, so "these run together" (and loop targets) stay visually grouped.
 - **⚠ validation badges** — every node (and the ▶ Input pseudo-node) shows a ⚠ when `step-validation.ts` (§5a-6) reports problems for it; hover lists them.
 - **Node ✕** removes the step (and its now-empty stage, if it was 1-step).
-- **⚖ deliberation** — a per-node button (when the step has run and produced a `councilId`) opens that step's full deliberation view. `App.tsx` sets a `councilFromPipeline` flag when navigating there; `DeliberationView`'s **← Back** button (`onBack`, always existed but was never rendered until this change) then returns to the pipeline builder instead of the council library, and clears the flag. Any sidebar navigation away also clears it, so it doesn't stick to the next council opened normally.
+- **⚖ deliberation** — a per-node button (when the step has run and produced a `councilId`, or the step is itself bound to one via `boundCouncilId`) opens that step's full deliberation view. `App.tsx` sets a `councilFromPipeline` flag when navigating there; `DeliberationView`'s **← Back** button (`onBack`) then returns to the pipeline builder (there is no council library to fall back to — §4e), and clears the flag. Any sidebar navigation away also clears it, so it doesn't stick to the next council opened normally.
+- **Bound-council steps** (`step.config.boundCouncilId` set, §4e) render `BoundCouncilStepPanel` in the side panel instead of `StepConfigPanel` — a live read-only summary of the bound council's personas/task plus an "Open deliberation & edit" button, since the council record (not the step) is the source of truth for that step's configuration.
 - **▶ Input node** — click selects the pipeline input; the side panel switches to the Pipeline Input panel (§5a-5) instead of `StepConfigPanel`.
 - **Details drawer** — pipeline name/description/working-directory/schedule fields are hidden behind a `⚙ Details ▸` toggle in the header (`detailsOpen` state), not shown inline by default.
 - **Side panel** — mutually exclusive with node selection: a selected step shows `StepConfigPanel` (with its `problems` list atop it, §5a-6); no step selected shows the Pipeline Input panel.
@@ -396,7 +415,7 @@ Condition-step actions (§5a-4) are drawn as real edges, not just labels: `loop_
 
 The library header's **Import** button (distinct from **Import CLI Session**, §11) reads a local JSON file and calls `pipelineStore.import(list)` → `importPipelines()` (`pipeline/store.ts`). Accepted shapes: a single exported pipeline object (`{ ...,  stages: [...] }`), an array of pipelines, `{ pipelines: [...] }`, or a harness store dump (`{ "mcp-pipelines": "<json-string>" }`, e.g. `testing/harness/store-dump.json`). **Id collision** — if an incoming pipeline's `id` already exists in the store, it's assigned a fresh `crypto.randomUUID()` instead of overwriting; the pipeline is otherwise imported as-is. A summary dialog reports how many pipelines were imported (or that none were found).
 
-The library itself was rebuilt in the councils-view **table layout** (expandable rows: name/status/stage-count/step-count/updated columns, expanding to description, step chips, working-dir/input-source meta, and action buttons) instead of the old card grid.
+The library itself uses an expandable-row **table layout** (name/status/stage-count/step-count/updated columns, expanding to description, step chips, working-dir/input-source meta, and action buttons) instead of a card grid — the shared `.council-table`/`.ct-*`/`.crd-*` styling now lives in `PipelineLibrary.css` (moved there when the standalone `CouncilLibrary` it originated in was deleted, §4e). Bridge pipelines (`source: 'council-workflow'` — migrated standalone councils and council workflows) are listed too; no filter hides them (§4e).
 
 ---
 
@@ -572,6 +591,7 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 21. **Script steps ran in the wrong directory**: `runScriptStep` always used the platform's working directory, so a script step couldn't see files a prior council step had just written to the pipeline's configured working directory. Fixed: `cwd = pipeline.settings.workingDirectory || platform.getWorkingDir()` (§5a-3).
 22. **`createCouncil()`'s field whitelist silently dropped `deliberation` fields**: `council/store.ts` `createCouncil()` builds the persisted `deliberation` object from an explicit list of named fields (not a spread of `params.deliberation`); `outputType`, `savedProblem`, and `evolveContext` were missing from that list, so `factory.ts` (and the pipeline executor) could pass them in but the STORED council always had `deliberation.outputType === undefined` at runtime. Consequence: `effectiveWrite` (§4a/§5a-1, CLAUDE.md rule 5) was permanently `false` for every pipeline-launched council regardless of the step's configured `outputType` — every pipeline worker ran in text mode, so a step with `outputType: 'directory'` emitted its files as ```filename: fenced text blocks instead of writing them (this made the earlier "executor forwards outputType" fix, §5a-1, inert). Fixed: added `outputType`, `savedProblem`, and `evolveContext` to the whitelist. Any NEW `DeliberationConfig` field must be added to this same whitelist or it will silently read as `undefined` downstream.
 23. **`createGitSnapshot` adopted a PARENT git repo**: it checked `git rev-parse --is-inside-work-tree`, which is `true` even when the working dir is merely NESTED inside another repo (e.g. an examples workspace living inside the kondi repo itself) — so `git add -A && git commit -m "kondi: pre-pipeline snapshot"` committed the PARENT project's entire tree into the parent's git history (observed: junk snapshot commits on the kondi repo's own main branch sweeping up unrelated uncommitted work). Same failure class as the CLI nearest-repo escape (gotcha 14). Fixed: it now compares `git rev-parse --show-toplevel` against the working dir (trailing-slash-normalized) and `git init`s the working dir as its own repo unless it is itself the top-level (§4b).
+24. **Migrated bound-council steps would have been blocked at launch**: when the standalone Councils UI was removed and every pre-existing council was migrated into a one-step bound pipeline (§4e), the step's own `councilSetup` is an intentionally empty shell (the council record is authoritative). Validating that shell with the ordinary `validateCouncilStep` logic would have reported "No personas configured" on EVERY migrated council/workflow and blocked it from ever running via Pipelines. Fixed pre-emptively (same commit as the migration): `validateCouncilStep` short-circuits to `validateBoundCouncil(councilId, configuredProviders)`, which validates the LIVE council's personas/providers instead (§5a-6).
 
 ---
 

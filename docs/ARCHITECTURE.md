@@ -101,7 +101,7 @@ For CLI LLM calls (`run_claude_streaming`), long prompts are piped via stdin to 
 
 ### Frontend Rendering
 
-React 19 with Vite 7 hot-reload in development. No client-side routing — the sidebar controls a single-page view switcher in `App.tsx`. State management uses React hooks (useState, useRef, useEffect, useMemo) and localStorage for persistence. `Sidebar.tsx` has a **Pipelines** section (expandable list synced from `pipelineStore`, tile-view + new-pipeline actions, plus a collapsed-mode nav button) alongside Council — the pipeline builder/library/graph views existed but had no sidebar entry point before this was added.
+React 19 with Vite 7 hot-reload in development. No client-side routing — the sidebar controls a single-page view switcher in `App.tsx`. State management uses React hooks (useState, useRef, useEffect, useMemo) and localStorage for persistence. `Sidebar.tsx` has a **Pipelines** section (expandable list synced from `pipelineStore`, tile-view + new-pipeline actions, plus a collapsed-mode nav button) — Pipelines is the sidebar's only top-level workflow entry point; there is no separate Council section (§6, "Councils Live Inside Pipelines"). Council Views (the diagram box above) is reached only as a drill-in from a pipeline step or a project's council list, never navigated to directly from the sidebar.
 
 ---
 
@@ -267,6 +267,18 @@ MCPClient ----HTTP----> kondi-mcp-proxy (localhost:PORT)
 ---
 
 ## 6. Council Orchestration Engine
+
+### UI Surface: Councils Live Inside Pipelines
+
+There is no standalone Councils screen. A council is the deliberation *engine* driving a pipeline step, not a parallel top-level concept in the UI — the sidebar has a single **Pipelines** entry point, and the council view (`DeliberationView`) is reached only by drilling into a step from a pipeline (or a project's council list); its Back action always returns to the pipeline surface.
+
+This is implemented as a **binding**, not a merge: the `Council` record (personas, ledger, deliberation state) remains its own persisted entity, unchanged in shape. A pipeline step opts into it via `CouncilStepConfig.boundCouncilId` — when set, the step's own `councilSetup` is an empty shell and the bound council is the authority for personas/task/config, both in the builder UI (`BoundCouncilStepPanel` replaces the normal step editor) and at validation time (`validateBoundCouncil` checks the live council, not the shell).
+
+Two council shapes predate the pipeline-only UI and both need a pipeline "home" to remain reachable:
+- A **standalone single council** gets a generated one-step pipeline (`pipeline/council-migration.ts`, `council-1s-<councilId>`) bound to it.
+- A **multi-step council workflow** (councils chained by `workflowId`, §"Multi-Step Council Workflows" below) already projects itself into a shadow pipeline (`workflow-runner.ts`'s `syncWorkflowPipeline`); that pipeline used to be hidden from pipeline listings and is now shown like any other.
+
+`migrateCouncilsToPipelines()` sweeps existing councils once at startup; `ensurePipelineForCouncil()` covers councils created afterward (chat-generated, or created directly from a project). Both are idempotent, so re-running the sweep (or creating the same council's home twice) is a no-op.
 
 ### Launch-Time Model Validation (`model-validation.ts`)
 
