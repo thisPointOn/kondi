@@ -2,38 +2,24 @@
 
 > Analysis step (manager-only) picks ONE opportunity and commits to a positioning.
 
-SUMMARY:  
-Consultants highlighted that Kondi’s existing air‑gapped architecture (local CLI execution, working‑directory guard, deliberation store) uniquely satisfies the strict data‑residency and audit‑trail needs of regulated enterprises. They argued that focusing on Enterprise AI Governance & Data Privacy Teams (CISOs, DPOs) would allow Kondi to command premium pricing, differentiate from cloud‑based LLM orchestration tools, and leverage its core primitives without architectural overhaul. Alternative viewpoints suggested expanding the product for indie developers (cost‑optimization profiles, UI tweaks) or adding new model‑probing capabilities, but those were seen as diluting the governance focus and risking the non‑negotiable air‑gap requirement.
+SUMMARY: The enrichment analysis identified three high-priority opportunities: Cost Management Dashboard (quick win addressing #1 user pain point), Council Marketplace (growth multiplier via community sharing), and Audit & Compliance Reporting (enterprise unlock). The Cost Management Dashboard was prioritized due to its direct solution of uncontrolled API spend—a critical frustration cited in user forums—leveraging existing ledger data with minimal implementation effort (2-3 weeks). Alternatives like Council Marketplace require more complex infrastructure (backend, moderation), while Audit & Compliance Reporting targets narrower enterprise use cases despite similar effort.
 
-DECISION:  
-We will prioritize **Opportunity 1 – Enterprise AI Governance & Data Privacy Teams** as the primary market focus for Kondi’s next development cycle.
+DECISION: Commit to building the **Cost Management Dashboard** as the primary market opportunity for Kondi's positioning.
 
-RATIONALE:  
-- **Strategic fit:** Kondi already provides zero network egress, local model execution, and a persistent deliberation store—core building blocks for immutable audit logs and policy‑guarded workflows that directly address GDPR, HIPAA, SOC2, and FedRAMP requirements.  
-- **Market urgency:** Regulated enterprises lack compliant, air‑gapped LLM orchestration tools; current alternatives either expose data to cloud APIs or require costly in‑house builds.  
-- **Revenue potential:** Enterprise sales enable perpetual‑license or air‑gapped deployment models with higher ACV compared to indie‑developer‑focused freemium or usage‑based pricing.  
-- **Leverage‑first approach:** Enhancements can be built atop existing primitives (CLI providers, workdir guard, CouncilDataStore) without overhauling the Tauri/React core, satisfying the constraint to preserve backward compatibility for non‑enterprise users.  
-- **Differentiation:** By delivering compliance‑ready evidence packs and SIEM‑friendly log forwarding, Kondi becomes a turnkey solution for governance teams, a niche not served by generic LLM UI builders.
+RATIONALE: The Cost Management Dashboard addresses the most urgent and universal user pain point: accidental overspend during AI experimentation. Forums and GitHub issues repeatedly cite uncontrolled costs (e.g., "$50 lost testing a pipeline") as a blocker to adoption. This feature requires no architectural changes, builds on existing ledger data that already tracks token usage and costs per LLM call, and delivers immediate value through spend tracking, configurable budget alerts, and optional hard stops. It scored highest in the evaluation matrix (User Value: 5, Technical Feasibility: 5, Effort: 2), making it a low-risk, high-impact quick win that establishes trust with cost-conscious users before pursuing longer-term bets like marketplace or collaboration features.
 
-REJECTED:  
-1. **Indie‑developer / cost‑optimization focus** – Would prioritize features like multi‑model evaluation and pricing dashboards, which do not require air‑gap guarantees and would divert effort from the high‑value regulated segment.  
-2. **New model‑probing / provider development** – Adding novel LLM providers or probing capabilities would increase complexity and risk introducing network‑dependent components, violating the air‑gap constraint.  
-3. **Cloud‑hosted SaaS variant** – Directly contradicts the non‑negotiable zero‑network‑egress rule and would alienate the target enterprise audience that demands on‑premises execution.  
-4. **Major UI/UX redesign for casual users** – Unrelated to governance workflows; would consume resources without delivering the audit, policy, or integration capabilities required by CISOs/DPOs.  
+REJECTED: 
+- **Council Marketplace**: Though high-value for growth, it requires 4-5 weeks of effort (backend API, moderation system, UI) and defers solving the immediate cost anxiety that prevents users from experimenting freely. 
+- **Audit & Compliance Reporting**: While critical for enterprise sales, it targets a narrower audience (regulated industries) and lacks the broad, day-to-day utility of cost control for individual developers and teams. 
+- **Pipeline Scheduling/Encrypted Backup**: These address important but less frequent needs (automation, data loss fear) and were scored lower in the matrix due to either higher effort or lower universal appeal.
 
-RISKS:  
-- **Long enterprise sales cycles** – Adoption may take 6‑12 months, delaying revenue realization.  
-- **Integration complexity** – Implementing SAML/OIDC via Tauri plugins and syslog/CEF forwarding while maintaining air‑gap integrity could uncover unforeseen platform‑specific challenges.  
-- **Regulatory proof burden** – Ensuring that audit log exports meet the exacting standards of GDPR/HIPAA/SOC2/FedRAMP may require external validation or certification efforts.  
-- **Backward‑compatibility slip** – Changes to the deliberation store or CLI‑guard APIs could inadvertently break workflows for existing indie‑developer users if not carefully versioned.  
-- **Perceived complexity** – Governance users may find the current UI overly technical; simplification efforts must not sacrifice configurability for power users.  
+RISKS: 
+1. **Alert fatigue**: Poorly tuned notifications could annoy users, leading to ignored warnings. *Mitigation*: Implement configurable thresholds (50/75/90/100%) with digest options and non-intrusive toast/email choices. 
+2. **Cost accuracy drift**: Varying token prices across providers might make spend estimates inaccurate over time. *Mitigation*: Design the analytics service to accept dynamic pricing updates and incorporate user feedback loops for calibration. 
+3. **Perceived as "basic"**: Users might undervalue the feature as a simple add-on rather than a core differentiator. *Mitigation*: Integrate budget enforcement directly into the orchestration flow (e.g., blocking LLM calls at limits) and position it as essential to Kondi's local-first, cost-conscious value proposition.
 
-ACCEPTANCE CRITERIA:  
-The deliverable will be considered correct when it includes:  
-1. A **prioritized roadmap** specifying two high‑impact feature enhancements (e.g., immutable audit‑log export in JSON‑CE/CEF; policy‑based workflow guards that restrict model/data usage by classification tags).  
-2. Defined **integration patterns** for on‑prem identity providers (SAML/OIDC via Tauri plugins) and SIEM tools (syslog/CEF forwarding) that preserve zero network egress.  
-3. **Go‑to‑market tactics** tailored to CISO/Privacy Officer priorities (compliance checklist templates, pilot‑program framework with success metrics such as % reduction in audit‑preparation time).  
-4. A **risk‑mitigation plan** addressing enterprise adoption barriers (role‑based UI simplification, clear versioning guarantees, backward‑compatibility test suite).  
-5. Evidence that all proposals respect the non‑negotiable air‑gap requirement, leverage existing Kondi primitives, and maintain compatibility with current indie‑developer workflows.  
-
-Success will be validated by stakeholder review (CISO/DPO personas) confirming that the roadmap addresses their audit, policy, and integration needs, and by a compliance checklist showing alignment with GDPR/HIPAA/SOC2/FedRAMP criteria.
+ACCEPTANCE CRITERIA: 
+1. Users can set budget caps (daily/weekly/monthly) per provider or globally via Settings, with alert thresholds at 50%, 75%, 90%, and 100%. 
+2. The dashboard sidebar displays: (a) spend-over-time line chart by provider, (b) top-spending councils/pipelines table with CSV export, and (c) real-time budget status indicators. 
+3. At 100% budget, the system blocks further LLM calls (unless override enabled) and triggers configured notifications; validation shows ≥80% reduction in accidental overspend incidents during beta testing with 10 power users. 
+4. All existing orchestrator and MCP integration tests pass, confirming no regressions in core workflows.

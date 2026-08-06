@@ -15,4 +15,5 @@ runs the tests.
 | 3 | Implementation | coding | Coding council — the worker is the real `claude` CLI writing files in the working dir; `node test.js` as the council's test command | `wordfreq.js` + `test.js` on disk, tests passing |
 | 4 | Test run | script | Executes `node test.js` — mechanical, no model judgment | `ALL TESTS PASS` + `SCRIPT-VERIFIED` |
 | 5 | Ship check | condition | Requires `ALL TESTS PASS`; otherwise loops back to Implementation once (feedback carried), then fails the run | continue |
-| 6 | Release notes | agent | Writes concise release notes from the verified state | <200-word notes: purpose, usage, test status |
+| 6 | Docs & code review | review | Review council — a CLI agent audits the shipped code against the spec | `README.md`, `docs/`, `review.md` in the working dir |
+| 7 | Release notes | agent | Writes concise release notes from the verified state | <200-word notes: purpose, usage, test status |

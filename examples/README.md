@@ -11,8 +11,8 @@ review, enrich, gate, script, and condition (with loops). Each folder holds:
 
 | Example | Step types exercised | Input source |
 |---|---|---|
-| 01 · Market Brief | enrich, analysis, review | **file** (the product README) |
-| 02 · Code Factory | code_planning, gate, coding, script, condition(loop), agent | text spec |
+| 01 · Market Brief | enrich, analysis, council | **file** (the product README) |
+| 02 · Code Factory | code_planning, gate, coding, script, condition(loop), review, agent | text spec |
 | 03 · Policy Debate | council (4 personas, 2 rounds), condition, agent | text question |
 | 04 · Content Refinery | agent(json), analysis ×2 (**parallel**), council, script, condition(loop) | **url** (live fetch) |
 

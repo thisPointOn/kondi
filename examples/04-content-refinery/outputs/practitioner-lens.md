@@ -2,28 +2,31 @@
 
 > Analysis (parallel): when should a team actually use this method?
 
-SUMMARY:
-No factual information was supplied via the shared context (the list_directory tool returned no data). Without concrete facts about the method being advised, we cannot derive specific, evidence‑based guidance on when to use or avoid it.
+SUMMARY: 
+- Consultant A argued that the Delphi method excels in forecasting scenarios where structured expert communication reduces dominance bias and leverages anonymity, directly aligning with its definition as a systematic, interactive forecasting technique. 
+- Consultant B cautioned that its iterative, time-intensive nature makes it unsuitable for urgent decisions or when rapid consensus is needed, as the process requires multiple rounds of feedback. 
+- Consultant C emphasized that the method's reliance on a panel of experts necessitates genuine expertise and geographical dispersion to justify its use; otherwise, biased or unqualified input undermines validity. 
+- Consultant D noted that for problems requiring empirical data or statistical analysis (rather than judgment), the Delphi method introduces unnecessary complexity compared to data-driven approaches.
 
-DECISION:
-We will not produce prescriptive “when to use / when to avoid” advice at this time. Instead, we will state that grounded guidance cannot be generated from the current input and recommend obtaining the necessary facts before proceeding.
+DECISION: 
+We will provide guidance that the Delphi method is worth using specifically for forecasting problems requiring expert judgment when: (1) time allows for iterative feedback rounds, (2) experts are geographically dispersed or prone to group bias in face-to-face settings, and (3) the problem lacks clear empirical data but benefits from synthesized expert opinion. It should be avoided for urgent decisions, non-forecasting contexts (e.g., operational execution), when expert quality is questionable, or when faster alternatives (e.g., statistical modeling, authority-based decisions) suffice.
 
-RATIONALE:
-The core requirement is that any guidance must be *grounded in the extracted facts*. Since the extracted facts are empty, any attempt to formulate usage recommendations would be speculative and would violate the grounding requirement. The most persuasive argument, therefore, is to acknowledge the lack of data and avoid issuing unfounded advice.
+RATIONALE: 
+The definition’s emphasis on forecasting as the method’s origin (Consultant A) is the strongest anchor, grounding its primary use case. Consultant B’s time constraint argument is persuasive because the "interactive" process inherently demands multiple rounds, making urgency a critical filter. Consultant C’s expertise and dispersion points directly address the method’s reliance on a "panel of experts" and its design to mitigate biases in distributed teams. Consultant D’s empirical data distinction is vital, as the method focuses on judgment, not data synthesis. Together, these arguments show the method’s value is context-dependent, not universal, and its definition implies specific suitability boundaries.
 
-REJECTED:
-- Providing generic, best‑practice guidance based on common knowledge or intuition.  
-  *Rejected*: Such guidance would not be grounded in the supplied facts and would fail to meet the objective’s requirement.
-- Assuming a default method (e.g., “advising working teams”) and giving generic steps.  
-  *Rejected*: Same reasoning—without factual support, the output would be unsubstantiated.
+REJECTED: 
+- Rejecting a blanket "use for any expert opinion" approach because the definition specifies forecasting, and applying it to non-forecasting problems (e.g., troubleshooting) misaligns with its core purpose (per Consultant D). 
+- Rejecting avoiding it entirely due to time costs because the definition highlights its strength in complex forecasting where alternatives like individual expert opinion lack structure to reduce bias (per Consultant A). 
+- Rejecting a sole focus on geographical dispersion because experts co-located but prone to dominance effects (e.g., hierarchical teams) still benefit from its anonymity (refining Consultant C’s point).
 
-RISKS:
-- **Misapplication risk**: If generic advice were given and later applied, teams might act on unsuitable recommendations.
-- **Credibility risk**: Offering advice without factual basis could undermine trust in the analysis process.
-- **Delay risk**: Insisting on obtaining facts first may pause immediate work, but this delay is preferable to acting on unfounded guidance.
+RISKS: 
+- Accepting the risk of misapplication to non-forecasting problems where the method may produce illusory consensus without factual basis (e.g., using it for medical diagnosis instead of clinical trials). 
+- Accepting the risk of underestimating expert commitment, leading to attrition in later rounds and weakened validity if panels are not carefully managed. 
+- Accepting the risk that time savings from avoiding meetings are offset by extended asynchronous rounds, potentially delaying decisions more than anticipated in low-connectivity environments.
 
-ACCEPTANCE CRITERIA:
-The deliverable will be considered correct when it:
-1. Explicitly states that no grounded guidance can be produced due to the absence of facts.
-2. Clearly recommends the next step: acquire the necessary factual information (e.g., by running the list_directory tool and reviewing its output) before attempting to formulate when‑to‑use/when‑to‑avoid guidance.
-3. Includes the structured sections SUMMARY, DECISION, RATIONALE, REJECTED, RISKS, and ACCEPTANCE CRITERIA as outlined above.
+ACCEPTANCE CRITERIA: 
+The guidance is correct if it: 
+- Explicitly ties the "when to use" criteria to the definition’s elements: forecasting (origin), expert panel (reliance), and interactive consensus-building (process). 
+- Clearly delineates avoidance scenarios based on practical constraints (time, expertise, problem type) that contradict the method’s inherent requirements. 
+- Avoids overgeneralization by specifying that the method’s value is conditional on problem forecasting nature and expert suitability, not merely the presence of experts. 
+- Matches the expected output format by delivering actionable, definition-grounded boundaries for use/avoidance.

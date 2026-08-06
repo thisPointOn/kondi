@@ -149,21 +149,23 @@ async function main() {
         councilSetup: {
           name: 'Positioning',
           personas: [persona('manager', 'Strategist', SUPER, {
+            suppressPersona: false,
             systemPrompt: 'You are a decisive product strategist. Choose exactly ONE opportunity from the input and commit. Structure: Decision, Rationale, Risks, Next Steps.',
             traits: ['decisive'],
           })],
           maxRounds: 1, maxRevisions: 0,
           expectedOutput: 'One chosen positioning with rationale, top 3 risks, and 3 next steps.',
         },
+        task: 'From the market opportunities in the input, choose exactly ONE and commit to it as the positioning. Do not discuss process — decide.',
         inputTemplate: '{{input}}',
         outputType: 'string',
       },
     }]);
     addLayer(pid, [{
       name: 'Brief writing',
-      description: 'Review council turns the decision into a polished one-page market brief (saved to disk).',
+      description: 'Council turns the decision into a polished one-page market brief (saved to disk).',
       config: {
-        type: 'review',
+        type: 'council',
         councilSetup: {
           name: 'Brief Council',
           personas: [
@@ -212,7 +214,10 @@ async function main() {
           name: 'Planning',
           personas: [
             persona('manager', 'Planning Lead', SUPER, { suppressPersona: false }),
-            persona('worker', 'Plan Author', SUPER),
+            // Code-flavored step types frame prompts around repo tools — the
+            // worker must actually HAVE them (a tool-less model once turned the
+            // list_directory tool description into a listDirectory library plan).
+            persona('worker', 'Plan Author', CLAUDE_CLI),
           ],
           maxRounds: 1, maxRevisions: 0,
           expectedOutput: 'A short implementation plan: file list, function breakdown, edge cases, and the test strategy.',
@@ -251,7 +256,10 @@ async function main() {
       description: 'Script step actually executes the test suite in the working directory.',
       config: {
         type: 'script',
-        command: 'node test.js && echo "SCRIPT-VERIFIED"',
+        // The coding merge lands final files at the workingDir root, but a
+        // worker may leave them in the .kondi/workspace scratch dir (rule 17)
+        // — run the tests wherever test.js actually is.
+        command: '[ -f test.js ] || cd .kondi/workspace; node test.js && echo "SCRIPT-VERIFIED"',
         inputTemplate: 'none',
         outputType: 'string',
       },
@@ -265,6 +273,26 @@ async function main() {
         inputTemplate: '{{input}}',
         trueAction: 'continue', falseAction: 'loop_to_stage',
         loopTargetStageId: codingLayer.id, maxLoops: 1, onLoopExhausted: 'fail',
+      },
+    }]);
+    addLayer(pid, [{
+      name: 'Docs & code review',
+      description: 'Review council: a CLI agent audits the shipped code against the spec and writes README.md, docs/, and review.md.',
+      config: {
+        type: 'review',
+        councilSetup: {
+          name: 'Review',
+          personas: [
+            persona('manager', 'Review Lead', SUPER, { suppressPersona: false }),
+            persona('worker', 'Auditor', CLAUDE_CLI, { saveOutput: true }),
+          ],
+          maxRounds: 1, maxRevisions: 0,
+          expectedOutput: 'README.md, a docs/ folder, and review.md exist in the working directory; review.md evaluates spec adherence and code quality.',
+        },
+        task: 'Review the wordfreq utility that was just implemented and tested against the original spec (in your input). Produce the documentation set.',
+        inputTemplate: '{{input}}',
+        includePipelineInput: true,
+        outputType: 'directory',
       },
     }]);
     addLayer(pid, [{
@@ -368,12 +396,17 @@ async function main() {
         type: 'agent',
         councilSetup: {
           name: 'Extractor',
+          // suppressPersona:false — a SUPPRESSED worker's custom systemPrompt is
+          // silently replaced by the minimal worker prompt, so the JSON contract
+          // must ride both the persona prompt AND the task.
           personas: [persona('worker', 'Extractor', SUPER, {
-            systemPrompt: 'You have NO tools. Do not emit tool calls. Read the input text and reply with STRICT JSON only, no prose: {"topic": string, "definition": string, "origin": string, "key_steps": string[], "criticisms": string[]}',
+            suppressPersona: false,
+            systemPrompt: 'You have NO tools. Do not emit tool calls. Read the input text and reply with STRICT JSON only, no prose.',
           })],
           maxRounds: 1, maxRevisions: 0,
           expectedOutput: 'Valid JSON with topic, definition, origin, key_steps[], criticisms[].',
         },
+        task: 'Reply with ONE strict JSON object and nothing else — no prose, no markdown: {"topic": string, "definition": string, "origin": string, "key_steps": string[], "criticisms": string[]}. Populate it from the input text, supplementing thin fields from your knowledge of the topic.',
         inputTemplate: '{{input}}',
         outputType: 'json',
       },

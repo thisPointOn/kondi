@@ -10,4 +10,4 @@ ground all analysis in the actual product.
 |---|---|---|---|---|
 | 1 | Opportunity mining | enrich | 3-persona council (lead, skeptic consultant, researcher) debates market opportunities found in the README | 4–6 structured opportunities: target user, pain point, why this product wins |
 | 2 | Positioning decision | analysis | Manager-only decide step: picks ONE opportunity and commits | Decision, rationale, top 3 risks, 3 next steps |
-| 3 | Brief writing | review | Editor + writer council produce the final document (saved to the working dir) | One-page markdown brief: headline positioning, target user, 3 key messages, competitive angle, first-90-days plan |
+| 3 | Brief writing | council | Editor + writer council produce the final document | One-page markdown brief: headline positioning, target user, 3 key messages, competitive angle, first-90-days plan |

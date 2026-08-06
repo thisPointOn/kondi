@@ -2,5 +2,5 @@
 
 > Script counts words mechanically — no trusting the model.
 
-LENGTH OK (385 words)
+LENGTH OK (446 words)
 
