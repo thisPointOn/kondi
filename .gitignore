@@ -29,3 +29,6 @@ TEST-runs/
 
 # Tauri sidecar build artifacts (built per-platform by src-tauri/build-guard.sh)
 mcp-connect-mvp/src-tauri/binaries/
+
+# Root-level npm junk (real deps live in mcp-connect-mvp/)
+/node_modules/

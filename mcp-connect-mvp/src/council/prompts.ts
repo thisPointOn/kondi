@@ -1019,8 +1019,12 @@ Be concise — 3-5 sentences max. Focus on actionable feedback, not style prefer
  * Worker execution - Section 9.7
  */
 export function buildWorkerExecutionPrompt(directive: string, permissions?: WorkerPermissions, stepType?: CouncilStepType): string {
-  if (stepType === 'agent' || stepType === 'analysis') {
-    const saveNote = permissions?.writePermissions && permissions?.workingDirectory
+  // Tool-exec framing ONLY when the worker actually has write/tool grants
+  // (rule 5: string/json output → no write grant). A tool-less agent told to
+  // "use your available tools" narrates fake tool calls instead of answering —
+  // it must fall through to the text-deliverable framing at the bottom.
+  if ((stepType === 'agent' || stepType === 'analysis') && permissions?.writePermissions) {
+    const saveNote = permissions?.workingDirectory
       ? `\nIf you need to save output to a file, use write_file to save to: ${permissions.workingDirectory}`
       : '';
     return `TASK:

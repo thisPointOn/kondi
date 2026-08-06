@@ -255,6 +255,14 @@ export class DeliberationOrchestrator {
     // Always read fresh from store to avoid stale React state
     council = councilStore.get(council.id) || council;
 
+    // Persist the raw problem: the worker's directive is a summary two hops
+    // removed from it (input → framing → decision → directive), so execution
+    // and revision re-attach this original source material (see groundInSource).
+    if (rawProblem?.trim() && council.deliberation) {
+      councilStore.setSavedProblem(council.id, rawProblem);
+      council = councilStore.get(council.id) || council;
+    }
+
     // Pre-flight check: log role assignments and personas for debugging
     const roleAssignments = council.deliberation?.roleAssignments || [];
     const consultantAssignments = roleAssignments.filter(r => r.role === 'consultant');
@@ -1517,6 +1525,24 @@ export class DeliberationOrchestrator {
       : directive;
   }
 
+  /**
+   * The manager's directive reaches the worker two lossy summarization hops
+   * away from the step's actual input (input → framing → decision → directive).
+   * When the directive drops details, a worker with nothing else to go on
+   * invents them (observed: a market brief contradicting the upstream
+   * positioning decision). Re-attach the original problem/input as
+   * authoritative source material so the deliverable stays grounded in it.
+   */
+  private groundInSource(council: Council, directiveContent: string): string {
+    const problem = council.deliberation?.savedProblem?.trim();
+    if (!problem) return directiveContent;
+    const MAX_SOURCE_CHARS = 24000;
+    const src = problem.length > MAX_SOURCE_CHARS
+      ? `${problem.slice(0, MAX_SOURCE_CHARS)}\n…[source material truncated]`
+      : problem;
+    return `${directiveContent}\n\n---\nORIGINAL TASK & SOURCE MATERIAL (authoritative — the directive above summarizes THIS; ground every claim and detail of your deliverable in it, and do not invent facts it does not support):\n${src}`;
+  }
+
   async executeWork(council: Council): Promise<LedgerEntry> {
     this.validatePhase(council, 'executing');
     const worker = this.getWorker(council);
@@ -1547,7 +1573,9 @@ export class DeliberationOrchestrator {
 
     // Subagent fan-out (provider-agnostic): if the worker has subagents, run them
     // first and fold their findings into the directive before the worker synthesizes.
-    const effectiveDirective = await this.runSubagents(council, worker, directive.content);
+    const effectiveDirective = await this.runSubagents(
+      council, worker, this.groundInSource(council, directive.content)
+    );
 
     const userMessage = buildWorkerExecutionPrompt(effectiveDirective, workerPermissions, stepType);
 
@@ -1821,7 +1849,7 @@ export class DeliberationOrchestrator {
       : worker.predisposition.systemPrompt;
 
     const userMessage = buildWorkerRevisionPrompt(
-      directive.content,
+      this.groundInSource(council, directive.content),
       previousOutput.content,
       revisionRequest.content,
       workerPermissions,
@@ -2499,7 +2527,13 @@ export class DeliberationOrchestrator {
     if (toolsOn) {
       let allowedTools: string[];
       if (workerToolPhases.includes(context)) {
-        allowedTools = stepType === 'code_planning' ? PLAN_TOOLS : FULL_TOOLS;
+        // Rule 5: a string/json-output step is a TEXT deliverable — the worker
+        // may still RESEARCH with tools, but advertising write_file for output
+        // it must emit as text makes weaker models roleplay the write.
+        const fileWriting = this.effectiveWrite(roleAssignment, council?.deliberation?.outputType);
+        allowedTools = stepType === 'code_planning'
+          ? PLAN_TOOLS
+          : fileWriting ? FULL_TOOLS : READ_ONLY_TOOLS;
       } else if (readOnlyToolPhases.includes(context)) {
         allowedTools = READ_ONLY_TOOLS;
       } else if (managerToolPhases.includes(context)) {

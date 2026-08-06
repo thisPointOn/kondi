@@ -198,7 +198,12 @@ export function createCouncil(params: {
       saveDeliberationMode: params.deliberation?.saveDeliberationMode ?? 'full',
       maxWordsPerResponse: params.deliberation?.maxWordsPerResponse,
       bootstrapContext: params.deliberation?.bootstrapContext,
+      savedProblem: params.deliberation?.savedProblem,
+      evolveContext: params.deliberation?.evolveContext,
       stepType: params.deliberation?.stepType,
+      // rule 5: effectiveWrite gates on this — dropping it here silently
+      // forced every pipeline worker into text mode regardless of step config
+      outputType: params.deliberation?.outputType,
       testCommand: params.deliberation?.testCommand,
       maxDebugCycles: params.deliberation?.maxDebugCycles,
       maxReviewCycles: params.deliberation?.maxReviewCycles,
@@ -838,6 +843,23 @@ export function setRoleAssignments(
 }
 
 /**
+ * Persist the raw problem/input the deliberation was started with, so later
+ * phases (worker execution/revision) can ground the deliverable in the
+ * original source material rather than only the manager's summarized directive.
+ */
+export function setSavedProblem(councilId: string, problem: string): Council | null {
+  const council = getCouncil(councilId);
+  if (!council || !council.deliberation) return null;
+
+  const updatedDeliberation: DeliberationConfig = {
+    ...council.deliberation,
+    savedProblem: problem,
+  };
+
+  return updateCouncil(councilId, { deliberation: updatedDeliberation });
+}
+
+/**
  * Add a pending patch to deliberation state
  */
 export function addPendingPatch(councilId: string, patchId: string): Council | null {
@@ -1147,6 +1169,12 @@ export class CouncilStore {
     assignments: DeliberationRoleAssignment[]
   ): Council | null {
     const council = setRoleAssignments(councilId, assignments);
+    if (council) this.notify();
+    return council;
+  }
+
+  setSavedProblem(councilId: string, problem: string): Council | null {
+    const council = setSavedProblem(councilId, problem);
     if (council) this.notify();
     return council;
   }
