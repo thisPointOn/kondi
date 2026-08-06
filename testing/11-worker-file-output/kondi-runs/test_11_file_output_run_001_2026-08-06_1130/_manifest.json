@@ -1,0 +1,14 @@
+{
+  "runNumber": 1,
+  "pipelineId": "257390df-7d66-40d7-a0e0-9a0526f07c77",
+  "pipelineName": "TEST 11 · file output",
+  "startedAt": "2026-08-06T15:30:44.404Z",
+  "completedAt": "2026-08-06T15:30:44.421Z",
+  "status": "completed",
+  "initialInput": "Write a two-line haiku about pipelines.",
+  "stageCount": 2,
+  "stepCount": 2,
+  "totalTokens": 0,
+  "totalDurationMs": 17,
+  "memoryUpdated": false
+}

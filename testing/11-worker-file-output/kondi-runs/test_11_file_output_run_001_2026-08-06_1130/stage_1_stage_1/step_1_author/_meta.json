@@ -1,0 +1,10 @@
+{
+  "stepId": "b288d286-f3f0-4f9d-8d67-8ee54d32011e",
+  "stepName": "author",
+  "stepType": "agent",
+  "stageIndex": 0,
+  "stepIndex": 0,
+  "status": "completed",
+  "outputType": "string",
+  "councilId": "f9046352-0908-46f3-a1d6-35402791fde8"
+}
