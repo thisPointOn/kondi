@@ -968,11 +968,15 @@ export class CodingOrchestrator {
     if (!workingDir || !this.config.runCommand) return null;
 
     try {
-      // Check if inside a git repo; if not, initialize one so snapshot/rollback
-      // AND the post-run "files produced" diff work (matches the CLI path, rule #15).
-      const check = await this.config.runCommand('git rev-parse --is-inside-work-tree', workingDir);
-      if (check.exit_code !== 0) {
-        console.log('[CodingOrchestrator] Working dir is not a git repo — initializing for snapshot + file tracking');
+      // The working dir must be its OWN repo root, not merely inside one:
+      // nearest-repo discovery otherwise adopts a PARENT project (e.g. a
+      // workspace nested in the user's repo) and `git add -A` snapshots the
+      // parent's ENTIRE tree into the parent's history. Same failure class as
+      // the CLI path's nearest-repo escape (rule #15) — init here too.
+      const top = await this.config.runCommand('git rev-parse --show-toplevel', workingDir);
+      const normalize = (p: string) => p.trim().replace(/\/+$/, '');
+      if (top.exit_code !== 0 || normalize(top.stdout) !== normalize(workingDir)) {
+        console.log('[CodingOrchestrator] Working dir is not its own git repo — initializing for snapshot + file tracking');
         const init = await this.config.runCommand('git init -q', workingDir);
         if (init.exit_code !== 0) return null;
         // git needs an identity to commit; set a local one if missing (harmless).
