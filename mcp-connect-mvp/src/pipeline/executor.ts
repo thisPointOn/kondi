@@ -953,7 +953,9 @@ export class PipelineExecutor {
     const escaped = inputContext.replace(/'/g, "'\\''");
     const command = `export KONDI_INPUT='${escaped}'\n${config.command}`;
 
-    const cwd = this.platform.getWorkingDir();
+    // Run in the pipeline's configured working directory (where council steps
+    // write their files); the platform dir is only a fallback.
+    const cwd = pipelineStore.get(pipelineId)?.settings.workingDirectory || this.platform.getWorkingDir();
     const result = await this.platform.runCommand(command, cwd);
 
     if (!result.success) {
@@ -1031,9 +1033,18 @@ export class PipelineExecutor {
           targetStageId: config.loopTargetStageId,
           fromStepId: step.id,
           fromStepName: step.name,
-          // What the condition evaluated (typically the judge's verdict) rides
-          // the back-edge so the target knows WHY it was sent back.
-          feedback: inputContext,
+          // The target must know WHY it was sent back. The evaluated input
+          // alone is NOT enough — it can look like success (e.g. a test run
+          // printing "✓ All tests passed!" while the gate demanded the exact
+          // string "ALL TESTS PASS"); a retry given only that input "fixes"
+          // the wrong things. Lead with the condition's verdict.
+          feedback:
+            `WHY THIS WAS SENT BACK: the condition "${step.name}" checked its input ` +
+            `(mode: ${config.mode}) against ${JSON.stringify(config.expression)} — the check ` +
+            `evaluated ${resultLabel}, which routed the flow back to this step. ` +
+            `Your output must make this check pass EXACTLY as specified ` +
+            `(e.g. for "contains", the input must literally contain that string).\n\n` +
+            `THE INPUT THE CONDITION EVALUATED:\n${inputContext}`,
           iteration: count + 1,
         };
         actionNote = `loop_to_stage → ${config.loopTargetStageId} (iteration ${count + 1}/${max})`;
