@@ -66,6 +66,9 @@ export interface StepArtifact {
     outputType?: OutputType; // what kind of data this artifact represents
     stepName?: string;     // human-readable name of the producing step
     stepType?: string;     // PipelineStepType value
+    /** Condition steps: the evaluation result ("TRUE ... → continue") — the
+     *  artifact content itself is the PASSED-THROUGH upstream data. */
+    conditionNote?: string;
   };
   createdAt: string;
 }

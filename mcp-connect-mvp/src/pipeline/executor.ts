@@ -623,7 +623,7 @@ export class PipelineExecutor {
       let artifact: StepArtifact;
 
       if (step.config.type === 'gate') {
-        artifact = await this.runGateStep(pipelineId, step);
+        artifact = await this.runGateStep(pipelineId, step, previousArtifacts);
       } else if (step.config.type === 'script') {
         artifact = await this.runScriptStep(pipelineId, step, previousArtifacts);
       } else if (step.config.type === 'condition') {
@@ -1053,11 +1053,20 @@ export class PipelineExecutor {
       }
     }
 
+    // Conditions are PASS-THROUGH nodes: control flow, not data producers.
+    // The artifact carries the evaluated input FORWARD so downstream steps see
+    // the real upstream data, not this step's bookkeeping (which lives in
+    // conditionNote for the UI). Without this, any step after a condition
+    // received "Condition evaluated: TRUE..." as its input.
     return {
       stepId: step.id,
-      content: `Condition evaluated: ${resultLabel} (mode: ${config.mode}, expression: "${config.expression}"). Action: ${actionNote}.`,
+      content: inputContext,
       artifactType: 'output',
-      metadata: { stepName: step.name, stepType: 'condition' },
+      metadata: {
+        stepName: step.name,
+        stepType: 'condition',
+        conditionNote: `${resultLabel} (mode: ${config.mode}, expression: "${config.expression}") → ${actionNote}`,
+      },
       createdAt: new Date().toISOString(),
     };
   }
@@ -1068,7 +1077,8 @@ export class PipelineExecutor {
 
   private async runGateStep(
     pipelineId: string,
-    step: PipelineStep
+    step: PipelineStep,
+    previousArtifacts: StepArtifact[]
   ): Promise<StepArtifact> {
     const config = step.config as GateStepConfig;
 
@@ -1084,10 +1094,13 @@ export class PipelineExecutor {
       throw new Error('Gate step rejected by user');
     }
 
+    // Gates are PASS-THROUGH nodes like conditions: the approved upstream data
+    // flows onward; the approval itself is metadata, not the payload.
     return {
       stepId: step.id,
-      content: 'Approved',
+      content: renderInputTemplate('{{input}}', previousArtifacts, this.memoryCtx),
       artifactType: 'approval',
+      metadata: { stepName: step.name, stepType: 'gate' },
       createdAt: new Date().toISOString(),
     };
   }
