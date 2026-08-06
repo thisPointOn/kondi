@@ -22,6 +22,7 @@ import type {
 } from '../../pipeline/types';
 import { isCouncilType } from '../../pipeline/types';
 import { INPUT_KEY } from '../../pipeline/step-validation';
+import { councilStore } from '../../council/store';
 import './PipelineGraphView.css';
 
 export function getStepIcon(type: StepConfig['type']): string {
@@ -42,7 +43,17 @@ export function getStepIcon(type: StepConfig['type']): string {
 
 export function getStepSummary(step: PipelineStep): string {
   if (isCouncilType(step.config.type)) {
-    const c = step.config as { councilSetup?: { personas: unknown[] } };
+    const c = step.config as { councilSetup?: { personas: unknown[] }; boundCouncilId?: string };
+    // Bound steps (migrated councils): the council record is the source of
+    // truth — read its live persona count, not the empty shell setup.
+    if (c.boundCouncilId) {
+      const bound = councilStore.get(c.boundCouncilId);
+      if (bound) {
+        const n = bound.personas.length;
+        return `council · ${n} persona${n !== 1 ? 's' : ''}`;
+      }
+      return 'bound council missing';
+    }
     if (c.councilSetup) {
       const count = c.councilSetup.personas.length;
       return `${count} persona${count !== 1 ? 's' : ''}`;

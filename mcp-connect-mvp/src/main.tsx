@@ -21,6 +21,10 @@ void (async () => {
   try {
     await initKondiPaths();
     await councilDataStore.hydrateFromDisk();
+    // Councils live INSIDE pipelines now — give any pre-existing standalone
+    // council/workflow a pipeline home so it stays reachable from the UI.
+    const { migrateCouncilsToPipelines } = await import('./pipeline/council-migration');
+    migrateCouncilsToPipelines();
   } catch (e) {
     console.warn('[startup] data init failed; continuing with localStorage:', e);
   } finally {

@@ -15,13 +15,44 @@ import type {
   GateStepConfig,
 } from './types';
 import { isCouncilType, isLightweightCouncilType } from './types';
+import { councilStore } from '../council/store';
 
 export const INPUT_KEY = '__input__';
+
+/** Validate a bound-council step against its live council record. */
+function validateBoundCouncil(
+  councilId: string,
+  configuredProviders?: Record<string, boolean>,
+): string[] {
+  const council = councilStore.get(councilId);
+  if (!council) return ['Bound council no longer exists'];
+
+  const problems: string[] = [];
+  if (council.personas.length === 0) problems.push('Bound council has no personas');
+  for (const p of council.personas) {
+    if (!p.model) problems.push(`Persona "${p.name}" has no model`);
+    if (!p.provider) {
+      problems.push(`Persona "${p.name}" has no provider`);
+    } else if (configuredProviders && p.provider !== 'router' && configuredProviders[p.provider] === false) {
+      problems.push(`Persona "${p.name}": provider "${p.provider}" is not configured`);
+    }
+  }
+  return problems;
+}
 
 function validateCouncilStep(
   config: CouncilStepConfig,
   configuredProviders?: Record<string, boolean>,
 ): string[] {
+  // Bound-council steps (migrated councils/workflows) keep their COUNCIL
+  // record as the source of truth for personas/task/expected output — the
+  // step's own councilSetup is an empty shell by design. Validate the bound
+  // council's personas instead of the shell (deep model/plan validation
+  // still happens at launch via validateCouncilModels).
+  if (config.boundCouncilId) {
+    return validateBoundCouncil(config.boundCouncilId, configuredProviders);
+  }
+
   const problems: string[] = [];
   const personas = config.councilSetup?.personas || [];
 

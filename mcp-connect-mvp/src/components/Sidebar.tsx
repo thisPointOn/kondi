@@ -27,14 +27,10 @@ interface SidebarProps {
   chats: SidebarChat[];
   /** Chat IDs that currently have in-flight LLM calls */
   chatsSending?: Record<string, boolean>;
-  /** Currently open council (when in council view) */
+  /** Currently open council (used only by the per-project item list) */
   currentCouncilId?: string | null;
-  /** Open a specific council */
+  /** Open a specific council's deliberation (from a project's item list) */
   onCouncilSelect?: (id: string) => void;
-  /** Show the tile/grid view of all councils */
-  onShowCouncilLibrary?: () => void;
-  /** Start a new council */
-  onNewCouncil?: () => void;
   /** Currently open pipeline (when in pipelines view) */
   currentPipelineId?: string | null;
   /** Open a specific pipeline (goes to its builder) */
@@ -67,7 +63,6 @@ const Sidebar: FC<SidebarProps> = ({
   chatsSending = {},
   currentCouncilId,
   onCouncilSelect,
-  onShowCouncilLibrary,
   currentPipelineId,
   onPipelineSelect,
   onShowPipelineLibrary,
@@ -81,7 +76,6 @@ const Sidebar: FC<SidebarProps> = ({
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [chatsExpanded, setChatsExpanded] = useState(false);
-  const [councilsExpanded, setCouncilsExpanded] = useState(false);
   const [councils, setCouncils] = useState<Council[]>([]);
   const projects = useProjects();
   const [projectsExpanded, setProjectsExpanded] = useState(true);
@@ -97,19 +91,21 @@ const Sidebar: FC<SidebarProps> = ({
     return n;
   });
 
-  // Keep the council list in sync with the store (new/deleted councils).
+  // Council list is only needed for the per-project item lookup now — the
+  // standalone Councils section is gone (councils live inside pipelines).
   useEffect(() => {
     const load = () => setCouncils(councilStore.getAll().filter((c) => !c.pipelineId && (!c.workflowId || (c.workflowOrder ?? 0) === 0)));
     load();
     return councilStore.subscribe(load);
   }, []);
 
-  // Keep the pipeline list in sync with the store.
+  // Keep the pipeline list in sync with the store. Bridge pipelines
+  // (source 'council-workflow') are shown too — they ARE the migrated
+  // councils/workflows, no longer hidden shadows.
   const [pipelinesExpanded, setPipelinesExpanded] = useState(false);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   useEffect(() => {
-    // Shadow pipelines (auto-generated from council workflows) stay hidden.
-    const load = () => setPipelines(pipelineStore.getAll().filter((p) => p.source !== 'council-workflow'));
+    const load = () => setPipelines(pipelineStore.getAll());
     load();
     return pipelineStore.subscribe(load);
   }, []);
@@ -375,58 +371,6 @@ const Sidebar: FC<SidebarProps> = ({
               ))}
               {pipelines.length === 0 && (
                 <div className="chat-item empty">No pipelines yet</div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {collapsed ? (
-        <button
-          className={`nav-btn ${currentView === 'council' ? 'active' : ''}`}
-          onClick={() => onViewChange('council')}
-          title="Council - Multi-Model Deliberation"
-        >
-          <Users size={18} />
-        </button>
-      ) : (
-        <div className="council-section">
-          <div className="section-header">
-            <button
-              className="section-header-toggle"
-              onClick={() => setCouncilsExpanded((p) => !p)}
-            >
-              <ChevronDown
-                size={16}
-                className="chevron"
-                style={{ transform: councilsExpanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}
-              />
-              <Users size={15} />
-              <span className="section-label">Council</span>
-            </button>
-            <button
-              className="section-header-action"
-              onClick={() => onShowCouncilLibrary?.()}
-              title="All councils (tile view)"
-            >
-              <LayoutGrid size={14} />
-            </button>
-          </div>
-
-          {councilsExpanded && (
-            <div className="chat-list">
-              {councils.map((c) => (
-                <button
-                  key={c.id}
-                  className={`chat-item ${c.id === currentCouncilId && currentView === 'council' ? 'active' : ''}`}
-                  onClick={() => { onCouncilSelect?.(c.id); onViewChange('council'); }}
-                  title={c.name}
-                >
-                  <span className="chat-item-title">{c.workflowName || c.name}</span>
-                </button>
-              ))}
-              {councils.length === 0 && (
-                <div className="chat-item empty">No councils yet</div>
               )}
             </div>
           )}

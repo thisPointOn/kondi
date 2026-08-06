@@ -183,6 +183,24 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
   };
 
   const handlePipelineRun = (id: string) => {
+    // Bound-council steps (migrated councils/workflows) skip the executor's
+    // council-creation path, so validate their models up front (rule 18:
+    // throw with a clear error, never substitute).
+    const pipeline = pipelineStore.get(id);
+    if (pipeline) {
+      try {
+        for (const stage of pipeline.stages) {
+          for (const step of stage.steps) {
+            const boundId = (step.config as { boundCouncilId?: string }).boundCouncilId;
+            const bound = boundId ? councilStore.get(boundId) : null;
+            if (bound) validateCouncilModels(bound, configuredProviders);
+          }
+        }
+      } catch (err) {
+        alert(err instanceof Error ? err.message : String(err));
+        return;
+      }
+    }
     const { executor } = createExecutor();
     runExecutor(executor, id);
   };

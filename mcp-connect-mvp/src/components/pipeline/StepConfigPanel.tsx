@@ -26,6 +26,7 @@ import { getModelsForPersonaSelector, resolveDefaultModel } from '../../config/m
 import { ROUTED_PROFILE_OPTIONS } from '../../router/profile-options';
 import type { ConfiguredProviders } from '../../hooks/useProviderConfig';
 import AddPersonaModal from '../council/AddPersonaModal';
+import { councilStore } from '../../council/store';
 import type { ConnectedServerInfo } from './PipelineBuilder';
 
 /** An available input step the current step can reference */
@@ -597,6 +598,98 @@ export function getDefaultConfigForType(type: PipelineStepType, avail?: Record<s
     case 'script': return defaultScriptConfig();
     case 'condition': return defaultConditionConfig();
   }
+}
+
+/**
+ * Panel for a BOUND-council step (a migrated council/workflow step): the
+ * council record is the source of truth for personas/task/config, so instead
+ * of the persona editor we show the live council summary and route editing to
+ * the council's own edit view (via the deliberation drill-in).
+ * Rendered by PipelineBuilder INSTEAD of StepConfigPanel for these steps —
+ * a separate component so the two panels never share a hook order.
+ */
+export function BoundCouncilStepPanel({
+  councilId,
+  problems,
+  onOpenCouncil,
+  onDelete,
+  onClose,
+}: {
+  councilId: string;
+  problems?: string[];
+  onOpenCouncil?: (councilId: string) => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  const [, force] = useState(0);
+  useEffect(() => councilStore.subscribe(() => force((n) => n + 1)), []);
+  const council = councilStore.get(councilId);
+
+  return (
+    <div className="step-config-panel">
+      <div className="config-panel-header">
+        <h3>Council Step</h3>
+        <button className="config-close-btn" onClick={onClose}>&times;</button>
+      </div>
+
+      {problems && problems.length > 0 && (
+        <div className="config-problems">
+          <div className="config-problems-title">⚠ Not ready to run</div>
+          <ul>
+            {problems.map((p, i) => (
+              <li key={i}>{p}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {!council ? (
+        <div className="config-section">
+          <p className="hint">The council this step was bound to no longer exists. Remove the step.</p>
+        </div>
+      ) : (
+        <>
+          <div className="config-section">
+            <div className="config-field">
+              <label>Council</label>
+              <div>{council.name}</div>
+            </div>
+            <div className="config-field">
+              <label>Personas</label>
+              <div>
+                {council.personas.map((p) => (
+                  <div key={p.id} style={{ fontSize: 13, opacity: 0.85 }}>
+                    {p.name} · {p.model}
+                  </div>
+                ))}
+                {council.personas.length === 0 && <div className="hint">None yet</div>}
+              </div>
+            </div>
+            {council.deliberation?.savedProblem && (
+              <div className="config-field">
+                <label>Task</label>
+                <div style={{ fontSize: 13, opacity: 0.85, whiteSpace: 'pre-wrap' }}>
+                  {council.deliberation.savedProblem.slice(0, 400)}
+                  {council.deliberation.savedProblem.length > 400 ? '…' : ''}
+                </div>
+              </div>
+            )}
+            <p className="hint">
+              This step runs the council above in place — its personas, task and
+              settings are edited on the council itself.
+            </p>
+            <button className="config-action-btn" onClick={() => onOpenCouncil?.(councilId)}>
+              ⚖ Open deliberation &amp; edit
+            </button>
+          </div>
+        </>
+      )}
+
+      <div className="config-section">
+        <button className="config-delete-btn" onClick={onDelete}>Remove step</button>
+      </div>
+    </div>
+  );
 }
 
 export default function StepConfigPanel({

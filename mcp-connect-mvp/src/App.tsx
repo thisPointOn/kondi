@@ -9,7 +9,8 @@ import ErrorBoundary from './components/ErrorBoundary';
 import ProjectView from './components/ProjectView';
 import { createDefaultCouncil } from './council/createDefaultCouncil';
 import { useActiveSetupSection } from './components/council/setupDetailStore';
-import { CouncilLibrary, CouncilView } from './components/council';
+import { CouncilView } from './components/council';
+import { ensurePipelineForCouncil } from './pipeline/council-migration';
 import NewChatDialog from './components/NewChatDialog';
 import PermissionDialog from './components/PermissionDialog';
 import SettingsModal from './components/SettingsModal';
@@ -79,7 +80,12 @@ function App() {
   useEffect(() => {
     const onRun = (e: Event) => {
       const id = (e as CustomEvent).detail?.councilId;
-      if (id) { council.setCurrentCouncilId(id); setCurrentView('council'); }
+      if (id) {
+        // Councils live inside pipelines — give chat-generated ones a home.
+        ensurePipelineForCouncil(id);
+        council.setCurrentCouncilId(id);
+        setCurrentView('council');
+      }
     };
     window.addEventListener(COUNCIL_RUN_EVENT, onRun);
     return () => window.removeEventListener(COUNCIL_RUN_EVENT, onRun);
@@ -103,8 +109,6 @@ function App() {
         chatsSending={chats.chatsSending}
         currentCouncilId={council.currentCouncilId}
         onCouncilSelect={(id) => { setCouncilFromPipeline(false); council.setCurrentCouncilId(id); setCurrentView('council'); }}
-        onNewCouncil={() => { council.setCurrentCouncilId(null); setCurrentView('council'); }}
-        onShowCouncilLibrary={() => { council.setCurrentCouncilId(null); setCurrentView('council'); }}
         currentProjectId={currentProjectId}
         onSelectProject={(id) => { setCurrentProjectId(id); setCurrentView('project'); }}
         currentPipelineId={pipeline.currentPipelineId}
@@ -133,6 +137,7 @@ function App() {
                 configuredProviders: providerConfig.configuredProviders,
                 workingDirectory: providerConfig.globalWorkingDirectory,
               });
+              ensurePipelineForCouncil(c.id);
               council.setCurrentCouncilId(c.id);
               setCurrentView('council');
               return c.id;
@@ -190,18 +195,16 @@ function App() {
               onPipelineCreate={pipeline.handlePipelineCreate}
             />
           )
-        ) : currentView === 'council' ? (
-          council.currentCouncilId ? (
+        ) : currentView === 'council' && council.currentCouncilId ? (
             <CouncilView
               councilId={council.currentCouncilId}
               onBack={() => {
-                if (councilFromPipeline) {
-                  // Came from the pipeline graph — return to the builder.
-                  setCouncilFromPipeline(false);
-                  setCurrentView('pipelines');
-                } else {
-                  council.setCurrentCouncilId(null);
-                }
+                // The council view is a drill-in now — Back always returns to
+                // the pipelines surface (builder if we came from one, else the
+                // library). There is no standalone council library anymore.
+                setCouncilFromPipeline(false);
+                council.setCurrentCouncilId(null);
+                setCurrentView('pipelines');
               }}
               onSelectCouncil={(id) => council.setCurrentCouncilId(id)}
               onGenerateTurn={council.onGenerateTurn}
@@ -218,14 +221,6 @@ function App() {
               configuredProviders={providerConfig.configuredProviders}
               thinkingPersonas={council.thinkingPersonas}
             />
-          ) : (
-            <CouncilLibrary
-              onCouncilSelect={(id) => council.setCurrentCouncilId(id)}
-              onCouncilCreate={(c) => council.setCurrentCouncilId(c.id)}
-              defaultWorkingDirectory={providerConfig.globalWorkingDirectory}
-              configuredProviders={providerConfig.configuredProviders}
-            />
-          )
         ) : (
           <ChatArea
             chatId={chats.currentChatId}

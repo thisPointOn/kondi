@@ -8,7 +8,7 @@ import type { Pipeline, PipelineStep, StepConfig, PipelineSchedule } from '../..
 import { pipelineStore } from '../../pipeline/store';
 import { buildScheduledOutputDir } from '../../pipeline/scheduler';
 import PipelineGraphView from './PipelineGraphView';
-import StepConfigPanel, { getDefaultConfigForType } from './StepConfigPanel';
+import StepConfigPanel, { getDefaultConfigForType, BoundCouncilStepPanel } from './StepConfigPanel';
 import { validatePipeline, INPUT_KEY } from '../../pipeline/step-validation';
 import './PipelineBuilder.css';
 
@@ -380,7 +380,15 @@ export default function PipelineBuilder({
       </div>
 
       {/* Side panel: selected step's config, or (graph mode) the pipeline input */}
-      {selectedStep ? (
+      {selectedStep && (selectedStep.step.config as { boundCouncilId?: string }).boundCouncilId ? (
+        <BoundCouncilStepPanel
+          councilId={(selectedStep.step.config as { boundCouncilId?: string }).boundCouncilId!}
+          problems={problems.get(selectedStep.step.id)}
+          onOpenCouncil={onOpenCouncil}
+          onDelete={handleRemoveStep}
+          onClose={() => setSelectedStepId(null)}
+        />
+      ) : selectedStep ? (
         <StepConfigPanel
           step={selectedStep.step}
           pipelineSettings={pipeline.settings}

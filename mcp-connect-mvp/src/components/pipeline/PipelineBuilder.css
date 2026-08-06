@@ -680,6 +680,25 @@
   margin-top: 1rem;
 }
 
+/* Primary action on the bound-council step panel (open deliberation/edit). */
+.config-action-btn {
+  width: 100%;
+  padding: 0.5rem;
+  background: var(--accent-subtle, #6366f115);
+  border: 1px solid var(--accent, #6366f1);
+  border-radius: 6px;
+  color: var(--accent, #6366f1);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  transition: all 0.15s;
+  margin-top: 0.5rem;
+}
+
+.config-action-btn:hover {
+  background: var(--accent, #6366f1);
+  color: #fff;
+}
+
 .config-delete-btn:hover {
   background: #dc262610;
 }

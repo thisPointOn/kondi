@@ -31,7 +31,9 @@ export default function PipelineLibrary({
 
   useEffect(() => {
     // Shadow pipelines (auto-generated from council workflows) stay hidden.
-    const load = () => setPipelines(pipelineStore.getAll().filter((p) => p.source !== 'council-workflow'));
+    // Bridge pipelines (source 'council-workflow') are shown — they ARE the
+    // migrated councils/workflows, no longer hidden behind a Councils section.
+    const load = () => setPipelines(pipelineStore.getAll());
     load();
     const unsubscribe = pipelineStore.subscribe(load);
     return unsubscribe;
