@@ -47,7 +47,12 @@ export function ensurePipelineForCouncil(councilId: string): string | null {
   if (!council) return null;
 
   // Pipeline-spawned councils are reached through their parent pipeline.
-  if (council.pipelineId && pipelineStore.get(council.pipelineId)) return council.pipelineId;
+  // If the parent pipeline was DELETED, the council is an orphaned internal
+  // artifact (e.g. "[Pipeline] Planning Council") — do NOT resurrect it as a
+  // top-level pipeline; it was never standalone user content.
+  if (council.pipelineId) {
+    return pipelineStore.get(council.pipelineId) ? council.pipelineId : null;
+  }
 
   // Workflow member: the shadow pipeline is the home for the whole chain.
   if (council.workflowId) {
@@ -102,6 +107,18 @@ export function ensurePipelineForCouncil(councilId: string): string | null {
  * Returns how many pipelines were created/synced.
  */
 export function migrateCouncilsToPipelines(): number {
+  // Repair pass: an earlier migration wrongly gave one-step homes to orphaned
+  // pipeline-internal councils (parent pipeline deleted). Remove those.
+  for (const p of pipelineStore.getAll()) {
+    if (!p.id.startsWith('council-1s-')) continue;
+    const councilId = p.id.slice('council-1s-'.length);
+    const c = councilStore.get(councilId);
+    if (!c || c.pipelineId) {
+      console.log(`[CouncilMigration] Removing wrongly-migrated orphan pipeline ${p.name}`);
+      pipelineStore.delete(p.id);
+    }
+  }
+
   let migrated = 0;
   for (const council of councilStore.getAll()) {
     if (hasPipelineHome(council)) continue;
