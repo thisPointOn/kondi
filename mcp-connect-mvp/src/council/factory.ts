@@ -39,6 +39,8 @@ export interface CouncilSetup {
   bootstrapContext?: boolean;         // Default: true when workingDirectory is set
   evolveContext?: boolean;            // Default: false — append findings/results to context each phase
   stepType?: 'council' | 'code_planning' | 'analysis' | 'agent' | 'coding' | 'review' | 'enrich';
+  /** What the step produces — drives effectiveWrite's file-writing worker mode (rule 5). */
+  outputType?: 'string' | 'file' | 'directory' | 'json';
   testCommand?: string;
   maxDebugCycles?: number;
   maxReviewCycles?: number;
@@ -153,6 +155,7 @@ export function createCouncilFromSetup(setup: CouncilSetup): Council {
       bootstrapContext,
       evolveContext: setup.evolveContext ?? false,
       stepType: setup.stepType,
+      outputType: setup.outputType,
       testCommand: setup.testCommand,
       maxDebugCycles: setup.maxDebugCycles ?? 5,
       maxReviewCycles: setup.maxReviewCycles ?? 2,

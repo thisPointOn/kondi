@@ -1,14 +1,14 @@
 {
-  "id": "4b8b09ba-398c-4f18-a896-e92105a5b1af",
+  "id": "ce9ac43b-990d-428f-90a2-b74ed5890901",
   "name": "EXAMPLE · Policy Debate",
   "initialInput": "Should a 40-person software company adopt a 4-day work week? Deliberate and produce a clear recommendation with conditions.",
   "stages": [
     {
-      "id": "60d3e5d7-29b5-4485-8312-901d48cdd1cc",
+      "id": "4a3ffb1c-e57d-457f-b87a-1c0a3b574142",
       "name": "Stage 1",
       "steps": [
         {
-          "id": "b8d0137f-e9dd-430f-9723-bb91a04c59a6",
+          "id": "d608992e-ccc5-4fc3-a60f-8f4f122ecfd6",
           "name": "Council deliberation",
           "config": {
             "type": "council",
@@ -67,31 +67,31 @@
           },
           "status": "completed",
           "description": "Full council: manager frames, two opposed consultants debate (2 rounds), worker synthesizes the recommendation.",
-          "startedAt": "2026-08-06T00:11:31.343Z",
+          "startedAt": "2026-08-06T00:41:10.091Z",
           "artifact": {
-            "stepId": "b8d0137f-e9dd-430f-9723-bb91a04c59a6",
-            "content": "**Limited‑Team 4‑Day‑Week Pilot – Work Directive**\n\nRECOMMENDATION\n\n**Title & Purpose**  \nLimited‑Team 4‑Day‑Week Pilot – Work Directive  \nTest a 32‑hour, 4‑day work week for 10 weeks while measuring impact on velocity, defect rate, employee wellbeing, and SLA compliance.\n\n**Scope**  \n- **Pilot population:** One cross‑functional product squad of ~8‑12 people (e.g., a feature team delivering a core product line) that performs typical development, testing, and delivery work.  \n- **Out of scope:** Support, sales, operations, or any role that cannot compress hours into Monday‑Thursday; those roles will receive equivalent flex‑days or compensated time‑off as noted in the risk mitigation table.\n\n**Timeline & Schedule**  \n- **Start date:** Monday 2 Nov 2025  \n- **Duration:** 10 weeks (≈2.5 months), running Monday‑Thursday, 8 hours/day (32 hours/week).  \n- **Protected Friday:** No regular work; optional work allowed only for emergencies and must be logged.  \n- **Key checkpoints:** End of week 2, week 5, and week 8 – brief pulse surveys & metric review; final review at week 10.\n\n**Baseline Data Collection (pre‑pilot)**  \n- **Metrics to capture over the 6‑sprint baseline:**  \n  - Average story points completed per sprint (velocity)  \n  - Defects found in production per sprint  \n  - eNPS from pulse survey  \n  - Overtime % of total logged hours  \n  - SLA compliance %  \n  - CSAT/NPS  \n  - % of employees logging any work on Friday  \n- **Source systems:**  \n  - Jira – story points & defect counts  \n  - HRIS – overtime hours  \n  - SurveyMonkey – eNPS pulse survey  \n  - Monitoring/dashboard – SLA compliance & CSAT/NPS  \n- **Baseline completion deadline:** EOD Friday 31 Oct 2025  \n- **Responsible:** Scrum Master + Data Analyst (joint ownership)\n\n**Success Criteria (Acceptance Criteria)**  \n1. Velocity change ≤ ±5 % vs. baseline.  \n2. Defect leakage change ≤ ±5 % vs. baseline.  \n3. eNPS increase ≥ 5 points.  \n4. Overtime ≤ 2 % of total logged hours.  \n5. SLA compliance ≥ 95 % and CSAT/NPS unchanged or improved.  \n6. ≤ 10 % of employees log any work on protected Friday.  \n\n*All six criteria must be met to proceed to the company‑wide phase; any failure triggers a rollback to the 5‑day week, a retrospective, and a decision on next steps.*\n\n**Mitigation Actions (aligned with the risk table)**  \n- **SLA compliance ≥ 95 % and CSAT/NPS unchanged or improved.**  \n- **Inequity risk:** Offer equivalent flex‑days or compensated time‑off for roles unable to compress hours; communicate plan transparently in kickoff meeting.  \n- **Scope creep / focus loss:** Keep sprint goals unchanged; monitor velocity; enforce Definition of Done; review sprint backlog at each planning.  \n- **Coordination loss:** Replace ad‑hoc chats with structured async updates (written stand‑ups, recorded demos); hold a weekly 30‑minute video sync for the squad.  \n- **Legal/compliance:** HR/legal review completed before start; confirm salaried exempt status or adjust pay to keep total compensation constant.  \n- **Trial fatigue:** Fixed 10‑week length; weekly pulse surveys; celebrate milestones (e.g., end‑of‑week 5 recognition).\n\n**Roles & Responsibilities**  \n- **Pilot Lead (e.g., Engineering Manager):** overall coordination, ensures schedule adherence, chairs weekly sync.  \n- **Scrum Master (per squad):** facilitates sprint ceremonies, tracks velocity/defect metrics, runs retrospectives.  \n- **Data Analyst:** extracts baseline and pilot metrics, prepares weekly metric dashboard.  \n- **HR Partner:** oversees legal/compliance check, manages flex‑day arrangements for excluded roles, runs eNPS surveys.  \n- **Product Owner:** prioritizes backlog, ensures sprint goals stay constant, communicates any client‑impact concerns.  \n- **Team Members:** log hours honestly, report any Friday work, complete pulse surveys, follow async communication norms.\n\n**Communication Plan**  \n- **Kickoff meeting (day 0):** present directive, answer questions, distribute calendar invites for protected Fridays.  \n- **Weekly async update:** written stand‑up posted in team channel by 10 am Monday; recorded demo shared Friday afternoon (optional).  \n- **Weekly 30‑minute video sync** (same day/time each week): review metrics, blockers, and any SLA incidents.  \n- **Bi‑weekly metric dashboard** shared with stakeholders (HR, legal, execs).  \n- **End‑of‑pilot review meeting:** present final metric comparison against criteria, decide on next phase.\n\n**Deliverables & Artefacts**  \n- Baseline metrics report (pre‑pilot).  \n- Weekly metrics snapshots (velocity, defects, overtime, SLA, Friday work %).  \n- Pulse survey results (weeks 2, 5, 8, 10).  \n- Final pilot report (including recommendation to proceed or rollback).  \n- Retrospective notes and action items (if rollback occurs).\n\n**Definition of “Done” for This Directive**  \nThe directive is considered complete when it contains all numbered sections above, is written in clear prose, and can be handed directly to the pilot lead for execution without further clarification.\n\n## COMPLETION SUMMARY\n**Status:** Complete  \n**Files/sections produced:**\n- Limited‑Team 4‑Day‑Week Pilot – Work Directive — full revised directive as requested  \n**What was built:** A self‑contained work directive that operationalizes the limited‑team 4‑day‑week pilot, including all required sections and revisions per feedback.  \n**What was revised:** Added “RECOMMENDATION” after the title; replaced the Success Criteria block with the exact six criteria; removed duplicate HR Partner line and duplicate weekly metric dashboard bullet; ensured the SLA compliance line in Mitigation Actions reads exactly “SLA compliance ≥ 95 % and CSAT/NPS unchanged or improved.”  \n**Known issues:** None",
+            "stepId": "d608992e-ccc5-4fc3-a60f-8f4f122ecfd6",
+            "content": "**4‑DAY WORK WEEK PILOT RECOMMENDATION**\n\nRecommendation: Adopt a 3‑month, company‑wide pilot of a 4‑day (32‑hour) work week at the same salary for volunteer teams, with the option to expand after evaluation.\n\nRationale: The pilot allows the company to test whether reduced hours can maintain client reliability while preserving economic viability, providing empirical data before any broader rollout. A time‑boxed pilot is preferable to immediate company‑wide change or maintaining the status‑quo because it limits risk and enables informed decision‑making based on measured outcomes.\n\nAcceptance Criteria:\n1. Delivery integrity: no missed committed delivery dates or SLA violations attributable to the schedule change.\n2. Financial neutrality: billable hours per employee have not declined by more than 10 % compared to baseline, or any decline is offset by measurable revenue gains or cost savings.\n3. Productivity stability: average story points or feature velocity per team within ±5 % of baseline, and defect rate has not increased.\n4. Employee well‑being: employee satisfaction (eNPS or survey score) shows a statistically significant improvement or at least no degradation.\n5. Client satisfaction: client‑feedback scores (NPS, post‑delivery surveys) remain unchanged or improve.\n\nRisk Mitigations:\n- SLA breach risk: teams must preserve output quality and client commitments; velocity and defect rates must stay within agreed thresholds.\n- Financial impact: ≤10 % billable‑hour tolerance; track revenue/cost offsets; adjust or halt pilot if exceeded.\n- Uneven adoption / morale: limit pilot to volunteer teams; monitor fairness with satisfaction surveys.\n- Measurement noise: use 3‑month horizon; aggregate multiple metrics (velocity, defect rate, output, well‑being, client satisfaction).",
             "artifactType": "output",
             "metadata": {
-              "councilId": "7fdcd2f5-84ed-4238-917e-4af955b628ea",
+              "councilId": "1ec80ac2-ff57-4abb-badb-ee802f092482",
               "outputType": "string",
               "stepName": "Council deliberation",
               "stepType": "council",
-              "outputId": "ed2d82ef-8d8b-4dca-b297-d3117a095481"
+              "outputId": "ecac33f2-86bb-4f07-8a0f-8a5496b859d2"
             },
-            "createdAt": "2026-08-06T00:19:30.005Z"
+            "createdAt": "2026-08-06T00:48:09.692Z"
           },
-          "completedAt": "2026-08-06T00:19:30.005Z"
+          "completedAt": "2026-08-06T00:48:09.692Z"
         }
       ],
       "executionMode": "sequential"
     },
     {
-      "id": "8c1f043f-7930-464f-97d8-24a51c2365ee",
+      "id": "e9a86707-4296-4105-bfe7-18a7c2166dcc",
       "name": "Stage 2",
       "steps": [
         {
-          "id": "eb249546-8504-4d4d-a4ed-bb1d054b3b1b",
+          "id": "e4d40733-deb7-4228-a3df-88840b043e91",
           "name": "Verdict guard",
           "config": {
             "type": "condition",
@@ -103,28 +103,29 @@
           },
           "status": "completed",
           "description": "Condition: the council output must contain an explicit RECOMMENDATION or the pipeline stops rather than shipping mush.",
-          "startedAt": "2026-08-06T00:19:30.006Z",
+          "startedAt": "2026-08-06T00:48:09.692Z",
           "artifact": {
-            "stepId": "eb249546-8504-4d4d-a4ed-bb1d054b3b1b",
-            "content": "Condition evaluated: TRUE (mode: contains, expression: \"RECOMMENDATION\"). Action: continue.",
+            "stepId": "e4d40733-deb7-4228-a3df-88840b043e91",
+            "content": "[Source: Council deliberation (council)]\n\n**4‑DAY WORK WEEK PILOT RECOMMENDATION**\n\nRecommendation: Adopt a 3‑month, company‑wide pilot of a 4‑day (32‑hour) work week at the same salary for volunteer teams, with the option to expand after evaluation.\n\nRationale: The pilot allows the company to test whether reduced hours can maintain client reliability while preserving economic viability, providing empirical data before any broader rollout. A time‑boxed pilot is preferable to immediate company‑wide change or maintaining the status‑quo because it limits risk and enables informed decision‑making based on measured outcomes.\n\nAcceptance Criteria:\n1. Delivery integrity: no missed committed delivery dates or SLA violations attributable to the schedule change.\n2. Financial neutrality: billable hours per employee have not declined by more than 10 % compared to baseline, or any decline is offset by measurable revenue gains or cost savings.\n3. Productivity stability: average story points or feature velocity per team within ±5 % of baseline, and defect rate has not increased.\n4. Employee well‑being: employee satisfaction (eNPS or survey score) shows a statistically significant improvement or at least no degradation.\n5. Client satisfaction: client‑feedback scores (NPS, post‑delivery surveys) remain unchanged or improve.\n\nRisk Mitigations:\n- SLA breach risk: teams must preserve output quality and client commitments; velocity and defect rates must stay within agreed thresholds.\n- Financial impact: ≤10 % billable‑hour tolerance; track revenue/cost offsets; adjust or halt pilot if exceeded.\n- Uneven adoption / morale: limit pilot to volunteer teams; monitor fairness with satisfaction surveys.\n- Measurement noise: use 3‑month horizon; aggregate multiple metrics (velocity, defect rate, output, well‑being, client satisfaction).",
             "artifactType": "output",
             "metadata": {
               "stepName": "Verdict guard",
-              "stepType": "condition"
+              "stepType": "condition",
+              "conditionNote": "TRUE (mode: contains, expression: \"RECOMMENDATION\") → continue"
             },
-            "createdAt": "2026-08-06T00:19:30.006Z"
+            "createdAt": "2026-08-06T00:48:09.693Z"
           },
-          "completedAt": "2026-08-06T00:19:30.006Z"
+          "completedAt": "2026-08-06T00:48:09.693Z"
         }
       ],
       "executionMode": "sequential"
     },
     {
-      "id": "28c84fad-e4d6-43b5-a0f9-3614b250bf43",
+      "id": "f23de1ec-f0cc-4eca-8bf0-c5a64b773a44",
       "name": "Stage 3",
       "steps": [
         {
-          "id": "c0106f38-1db7-4228-9de3-000814655b28",
+          "id": "cf07f7b3-a4d5-4460-97d1-c42d0493c1d4",
           "name": "Executive summary",
           "config": {
             "type": "agent",
@@ -152,21 +153,21 @@
           },
           "status": "completed",
           "description": "Agent compresses the deliberation into a one-paragraph executive summary + 5 bullet decisions.",
-          "startedAt": "2026-08-06T00:19:30.006Z",
+          "startedAt": "2026-08-06T00:48:09.693Z",
           "artifact": {
-            "stepId": "c0106f38-1db7-4228-9de3-000814655b28",
-            "content": "The deliberation confirms that the recommendation condition was satisfied, allowing the workflow to proceed uninterrupted while highlighting the need for continued monitoring of related criteria.\n\n- Verdict: Continue processing the recommendation.\n- Conditions: Evaluated TRUE; contains the expression “RECOMMENDATION”.\n- Top Risk: Potential ambiguity in interpreting future recommendation expressions.\n- Success Metric: 100% pass rate on condition evaluation for subsequent items.\n- Review Date: 2025-10-15",
+            "stepId": "cf07f7b3-a4d5-4460-97d1-c42d0493c1d4",
+            "content": "Adopt a 3‑month, company‑wide pilot of a 4‑day (32‑hour) work week for volunteer teams at unchanged salary, using the trial to empirically verify that reduced hours can preserve delivery reliability and economic viability before any broader rollout.  \n\n- **Verdict:** Approve the 4‑day work week pilot as recommended.  \n- **Conditions:** The pilot must meet all five acceptance criteria (delivery integrity, financial neutrality, productivity stability, employee well‑being, client satisfaction) and be limited to volunteer teams.  \n- **Top risk:** Potential SLA breaches that could jeopardize client commitments.  \n- **Success metric:** Demonstrated improvement in employee well‑being (eNPS or survey score) while billable‑hour decline stays ≤10 % and other key metrics remain within ±5 % of baseline.  \n- **Review date:** Evaluate results and decide on expansion after the 3‑month pilot (approximately 90 days from start).",
             "artifactType": "output",
             "metadata": {
-              "councilId": "5060d8a5-00a0-4c45-bfd8-aa459ea7e284",
+              "councilId": "51c0a773-415e-40ac-8db8-707966543585",
               "outputType": "string",
               "stepName": "Executive summary",
               "stepType": "agent",
-              "outputId": "d748d403-bb08-4039-94ae-7143ed4014ad"
+              "outputId": "b058d5d9-b823-4568-b1d2-06f1545de12a"
             },
-            "createdAt": "2026-08-06T00:19:34.644Z"
+            "createdAt": "2026-08-06T00:48:15.014Z"
           },
-          "completedAt": "2026-08-06T00:19:34.644Z"
+          "completedAt": "2026-08-06T00:48:15.014Z"
         }
       ],
       "executionMode": "sequential"
@@ -178,7 +179,7 @@
   },
   "status": "completed",
   "currentStageIndex": 3,
-  "createdAt": "2026-08-06T00:11:31.342Z",
-  "updatedAt": "2026-08-06T00:19:34.645Z",
+  "createdAt": "2026-08-06T00:41:10.089Z",
+  "updatedAt": "2026-08-06T00:48:15.015Z",
   "description": "A full multi-persona council debates a real policy question; a guard verifies a recommendation exists; an agent distills the executive summary."
 }

@@ -786,6 +786,10 @@ export class PipelineExecutor {
         saveDeliberation: true,
         saveDeliberationMode: 'full',
         stepType: config.type,
+        // Rule 5: the worker's file-writing mode is gated by the step's output
+        // type — without this, effectiveWrite always saw undefined and
+        // pipeline workers never got real file-writing prompts.
+        outputType: config.outputType,
         pipelinePrefix: '[Pipeline]',
         pipelineId: pipelineId,
       });

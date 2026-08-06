@@ -55,7 +55,9 @@ async function main() {
     const result = await callLLM({
       provider: p.provider, model: p.model,
       systemPrompt: invocation.systemPrompt, userMessage: invocation.userMessage,
-      skipTools: invocation.skipTools ?? p.provider !== 'anthropic-cli',
+      // API models here run WITHOUT tools always — a tool-less NIM worker
+      // offered tool definitions roleplays calls instead of answering.
+      skipTools: p.provider === 'anthropic-cli' ? (invocation.skipTools ?? false) : true,
       allowedTools: invocation.allowedTools,
       workingDir: invocation.workingDirectory,
       timeoutMs: p.provider === 'anthropic-cli' ? 1_200_000 : 240_000,
@@ -367,7 +369,7 @@ async function main() {
         councilSetup: {
           name: 'Extractor',
           personas: [persona('worker', 'Extractor', SUPER, {
-            systemPrompt: 'Extract facts as STRICT JSON only, no prose: {"topic": string, "definition": string, "origin": string, "key_steps": string[], "criticisms": string[]}',
+            systemPrompt: 'You have NO tools. Do not emit tool calls. Read the input text and reply with STRICT JSON only, no prose: {"topic": string, "definition": string, "origin": string, "key_steps": string[], "criticisms": string[]}',
           })],
           maxRounds: 1, maxRevisions: 0,
           expectedOutput: 'Valid JSON with topic, definition, origin, key_steps[], criticisms[].',

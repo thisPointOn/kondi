@@ -2,31 +2,38 @@
 
 > Analysis step (manager-only) picks ONE opportunity and commits to a positioning.
 
-**SUMMARY:**  
-The consultants reviewed the project structure and identified three main strategic directions: (1) deepening the core LLM orchestration capabilities, (2) investing heavily in a refined user‑experience/dashboard, and (3) leveraging the existing plugin registry to create an ecosystem of third‑party extensions. Opinions were split: the core‑focus group stressed stability and performance; the UX group argued that a polished interface would drive adoption; the ecosystem group highlighted the extensibility points already present in `src/plugins/registry.js` and the network‑effect potential of a marketplace.
+SUMMARY:  
+Consultants highlighted that Kondi’s existing air‑gapped architecture (local CLI execution, working‑directory guard, deliberation store) uniquely satisfies the strict data‑residency and audit‑trail needs of regulated enterprises. They argued that focusing on Enterprise AI Governance & Data Privacy Teams (CISOs, DPOs) would allow Kondi to command premium pricing, differentiate from cloud‑based LLM orchestration tools, and leverage its core primitives without architectural overhaul. Alternative viewpoints suggested expanding the product for indie developers (cost‑optimization profiles, UI tweaks) or adding new model‑probing capabilities, but those were seen as diluting the governance focus and risking the non‑negotiable air‑gap requirement.
 
-**DECISION:**  
-We will pursue the **plugin marketplace** opportunity – building a curated marketplace where developers can publish, discover, and install Kondi plugins that extend the orchestrator’s functionality (e.g., new LLM agents, data connectors, UI widgets).
+DECISION:  
+We will prioritize **Opportunity 1 – Enterprise AI Governance & Data Privacy Teams** as the primary market focus for Kondi’s next development cycle.
 
-**RATIONALE:**  
-- The plugin registry already exists (`src/plugins/registry.js`), indicating the architecture is designed for extensibility; investing here yields high leverage with relatively low engineering overhead.  
-- A marketplace creates a defensible network effect: more plugins attract more users, which in turn incentivizes more plugin authors.  
-- It addresses a clear gap identified in the enrichment doc: users want domain‑specific capabilities without forking the core product.  
-- Compared to a pure core‑performance push, the marketplace offers differentiated value that is harder for competitors to copy quickly.  
-- Compared to a UX‑first approach, the marketplace delivers tangible functional value that can be measured via adoption metrics, while a better UI can be iterated on later.
+RATIONALE:  
+- **Strategic fit:** Kondi already provides zero network egress, local model execution, and a persistent deliberation store—core building blocks for immutable audit logs and policy‑guarded workflows that directly address GDPR, HIPAA, SOC2, and FedRAMP requirements.  
+- **Market urgency:** Regulated enterprises lack compliant, air‑gapped LLM orchestration tools; current alternatives either expose data to cloud APIs or require costly in‑house builds.  
+- **Revenue potential:** Enterprise sales enable perpetual‑license or air‑gapped deployment models with higher ACV compared to indie‑developer‑focused freemium or usage‑based pricing.  
+- **Leverage‑first approach:** Enhancements can be built atop existing primitives (CLI providers, workdir guard, CouncilDataStore) without overhauling the Tauri/React core, satisfying the constraint to preserve backward compatibility for non‑enterprise users.  
+- **Differentiation:** By delivering compliance‑ready evidence packs and SIEM‑friendly log forwarding, Kondi becomes a turnkey solution for governance teams, a niche not served by generic LLM UI builders.
 
-**REJECTED ALTERNATIVES:**  
-1. **Core LLM orchestration enhancements** – Important but incremental; performance gains are quickly matched by competitors and do not create new revenue streams.  
-2. **Refined UI/dashboard** – Improves usability but does not unlock new capabilities; the current UI is sufficient for early adopters, and UI work can be deferred until the ecosystem proves demand.  
-3. **AI‑powered code‑generation feature** – Would require significant research investment and faces uncertain market fit; the plugin approach lets the community experiment with such features first.
+REJECTED:  
+1. **Indie‑developer / cost‑optimization focus** – Would prioritize features like multi‑model evaluation and pricing dashboards, which do not require air‑gap guarantees and would divert effort from the high‑value regulated segment.  
+2. **New model‑probing / provider development** – Adding novel LLM providers or probing capabilities would increase complexity and risk introducing network‑dependent components, violating the air‑gap constraint.  
+3. **Cloud‑hosted SaaS variant** – Directly contradicts the non‑negotiable zero‑network‑egress rule and would alienate the target enterprise audience that demands on‑premises execution.  
+4. **Major UI/UX redesign for casual users** – Unrelated to governance workflows; would consume resources without delivering the audit, policy, or integration capabilities required by CISOs/DPOs.  
 
-**RISKS:**  
-1. **Adoption risk** – Developers may not contribute plugins if incentives or visibility are insufficient.  
-2. **Quality & security risk** – Third‑party plugins could introduce bugs, performance issues, or security vulnerabilities that affect the core platform’s reputation.  
-3. **Governance overhead** – Curating, reviewing, and maintaining marketplace standards will require ongoing process and tooling investment.
+RISKS:  
+- **Long enterprise sales cycles** – Adoption may take 6‑12 months, delaying revenue realization.  
+- **Integration complexity** – Implementing SAML/OIDC via Tauri plugins and syslog/CEF forwarding while maintaining air‑gap integrity could uncover unforeseen platform‑specific challenges.  
+- **Regulatory proof burden** – Ensuring that audit log exports meet the exacting standards of GDPR/HIPAA/SOC2/FedRAMP may require external validation or certification efforts.  
+- **Backward‑compatibility slip** – Changes to the deliberation store or CLI‑guard APIs could inadvertently break workflows for existing indie‑developer users if not carefully versioned.  
+- **Perceived complexity** – Governance users may find the current UI overly technical; simplification efforts must not sacrifice configurability for power users.  
 
-**ACCEPTANCE CRITERIA (how we’ll know the work is correct):**  
-- **Launch metric:** Within 8 weeks, the marketplace hosts at least 10 vetted plugins from external contributors.  
-- **Engagement metric:** After launch, ≥30% of active Kondi installations have installed at least one third‑party plugin within the first month.  
-- **Quality metric:** No severity‑1 security or stability incidents attributed to marketplace plugins in the first 60 days post‑launch.  
-- **Revenue/feedback metric:** Collect qualitative feedback indicating that plugins enable users to accomplish tasks they could not before, and track any premium/plugin‑revenue generated (if monetization is pursued).
+ACCEPTANCE CRITERIA:  
+The deliverable will be considered correct when it includes:  
+1. A **prioritized roadmap** specifying two high‑impact feature enhancements (e.g., immutable audit‑log export in JSON‑CE/CEF; policy‑based workflow guards that restrict model/data usage by classification tags).  
+2. Defined **integration patterns** for on‑prem identity providers (SAML/OIDC via Tauri plugins) and SIEM tools (syslog/CEF forwarding) that preserve zero network egress.  
+3. **Go‑to‑market tactics** tailored to CISO/Privacy Officer priorities (compliance checklist templates, pilot‑program framework with success metrics such as % reduction in audit‑preparation time).  
+4. A **risk‑mitigation plan** addressing enterprise adoption barriers (role‑based UI simplification, clear versioning guarantees, backward‑compatibility test suite).  
+5. Evidence that all proposals respect the non‑negotiable air‑gap requirement, leverage existing Kondi primitives, and maintain compatibility with current indie‑developer workflows.  
+
+Success will be validated by stakeholder review (CISO/DPO personas) confirming that the roadmap addresses their audit, policy, and integration needs, and by a compliance checklist showing alignment with GDPR/HIPAA/SOC2/FedRAMP criteria.
