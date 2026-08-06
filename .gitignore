@@ -32,3 +32,4 @@ mcp-connect-mvp/src-tauri/binaries/
 
 # Root-level npm junk (real deps live in mcp-connect-mvp/)
 /node_modules/
+examples/*/workspace/
