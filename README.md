@@ -1,32 +1,45 @@
 # Kondi
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+<p align="center"><strong>Don't prompt a model. Convene a council.</strong></p>
 
-**Multi-agent deliberation and coding platform with MCP tool access.**
+<p align="center">
+  <a href="https://kondi.ai"><img src="https://img.shields.io/badge/site-kondi.ai-0E7266" alt="kondi.ai"></a>
+  <a href="https://github.com/thisPointOn/kondi/releases/latest"><img src="https://img.shields.io/github/v/release/thisPointOn/kondi?label=download&color=0E7266" alt="Download"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/thisPointOn/kondi/stargazers"><img src="https://img.shields.io/github/stars/thisPointOn/kondi?style=social" alt="Stars"></a>
+</p>
 
-Kondi assembles councils of AI agents — each with distinct roles, personalities, and model assignments — and orchestrates structured workflows between them. Every agent can use any [MCP](https://modelcontextprotocol.io/) server you connect, councils can mix models from different providers in the same session, and all decisions flow through a deterministic state machine with a full audit trail.
+<p align="center">
+  <img src="docs/media/demo.gif" alt="Kondi — build a pipeline where every step is a deliberating council of models" width="880">
+</p>
 
-Built on Tauri (Rust + React). Runs locally. Keys never leave your machine.
+**Kondi is a free, open-source desktop app for building multi-LLM workflow pipelines** — visual graphs where every step is a *deliberating council* of models from any provider (Claude, GPT, DeepSeek, NVIDIA NIM, and more), wired together with human gates, real script checks, and loops that carry feedback.
 
-> **💡 Try it for $0** — Kondi has first-class support for [NVIDIA NIM](https://build.nvidia.com), which currently gives away free developer credits for frontier open models (DeepSeek V4 Pro, GLM 5.2, Nemotron 3 Ultra 550B). One free API key — no credit card — runs an entire council: Nemotron plans, GLM codes, DeepSeek reviews. See [Run a council for free](#run-a-council-for-free-nvidia-nim).
+> **Single models are sycophantic. Councils are honest.**
 
----
+Chained prompts trust the previous step blindly, and one model mostly agrees with itself. A Kondi step runs a structured debate instead — a manager frames the problem, consultants argue it, a worker delivers, reviewers check — and the whole run is auditable, verified against reality (file output checked against `git`, not the model's prose), and **fails loudly instead of faking success**.
 
-## Why Kondi
+**Free · no account · no fees.** Bring your own API keys — or run an entire multi-model council for **$0** on [NVIDIA NIM free credits](#run-a-council-for-free-nvidia-nim).
 
-Most AI tools give you a single model behind a chat box. Kondi gives you a **boardroom**.
+<p align="center">
+  <a href="https://github.com/thisPointOn/kondi/releases/latest"><strong>⬇ Download for macOS / Windows / Linux</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://kondi.ai/#/examples"><strong>See it proven end-to-end →</strong></a>
+</p>
 
-- **Multi-model councils** — Put Claude, GPT, Gemini, DeepSeek, GLM, Nemotron, and Grok in the same deliberation. Each persona uses whatever model fits its role. A security-focused consultant on Claude Opus, a cost-optimized worker on Haiku, a creative wildcard on GPT-5.5 — all in the same workflow.
+## What makes it different
 
-- **Structured deliberation, not just chat** — Seven council modes (deliberation, debate, build, review, synthesis, socratic, freeform) with deterministic orchestration. The deliberation mode runs a full state machine: problem framing, independent analysis, interactive rounds, decision, directive, execution, and review. Every step is auditable.
+- **Councils, not single calls** — every step is a manager / consultants / worker / reviewer deliberation, and you pick which model plays each seat.
+- **Any provider in one graph** — Anthropic, OpenAI, DeepSeek, xAI, Z.AI, Moonshot, NVIDIA NIM, Ollama — per persona, per step. Even the `claude` and `codex` CLIs as tool-wielding coding workers.
+- **Control flow that argues back** — parallel branches with strict joins, human approval gates, shell-script checks, and conditions that loop back to an earlier step carrying *exactly why* it was sent back.
+- **Proof over plausibility** — script steps run your tests for real; a coding council's file output is verified against `git status`; a worker that only *narrates* success yields a **failed** council, not a fake one.
+- **Free & open source** — MIT-licensed, desktop, your keys. Run whole councils on free NVIDIA credits with no card.
 
-- **Real tool access** — Agents don't just talk about doing things. Through MCP, they read files, query databases, post to Slack, commit to Git, search the web, and call any API you connect. Nine built-in platform servers ship with 120+ tools ready to use.
+## See it proven, end to end
 
-- **Pipelines** — Chain councils into multi-stage workflows with gates for human approval. Research council feeds into coding orchestrator feeds into review council. Artifacts flow between stages with provenance tracking.
+Four showcase pipelines run with real models, **every step's output inspected and verdicted** — including the failures that became engine fixes. Step tables, real run excerpts, and honest verdicts:
 
-- **Local-first** — No cloud dependency. Your API keys, OAuth tokens, and conversation history stay on your machine. CLI providers (Claude Code, Codex, Gemini CLI) route through your existing subscriptions.
-
----
+**[kondi.ai/#/examples →](https://kondi.ai/#/examples)**
 
 ## Features at a Glance
 
@@ -386,11 +399,11 @@ Connect from the Services panel in the app.
 2. **Configure a provider** — Settings -> LLM Providers -> add an API key or sign in via CLI
 3. **Chat** — Start a conversation. Connected MCP tools execute inline.
 4. **Connect tools** — MCP Servers panel -> add servers or use built-ins
-5. **Create a council** — Sidebar -> Councils -> New Council
-6. **Add personas** — Pick from templates or create custom (minimum: 1 Manager + 1 Worker)
-7. **Define the task** — Problem statement, decision criteria, expected output
-8. **Run** — Launch the deliberation and watch the ledger fill in real-time
-9. **Build a pipeline** — Chain councils into multi-stage workflows with human gates
+5. **Build a pipeline** — Sidebar -> Pipelines -> New Pipeline. Every step is a council; drop steps on the graph.
+6. **Configure each step** — pick the step type, seat personas/models, set the task and expected output
+7. **Wire the flow** — add gates, script checks, and conditions that loop back with feedback
+8. **Run** — launch it and watch each council deliberate in the ledger, then the verified results
+9. **Import the examples** — one click, from the Pipelines library (see [kondi.ai/#/examples](https://kondi.ai/#/examples))
 
 ---
 
