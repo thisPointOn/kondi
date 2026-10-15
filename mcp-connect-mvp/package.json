@@ -16,7 +16,8 @@
     "dev:server": "node server/index.js",
     "test": "vitest run",
     "council": "npx tsx cli/run-council.ts",
-    "pipeline": "npx tsx cli/run-pipeline.ts"
+    "pipeline": "npx tsx cli/run-pipeline.ts",
+    "improve": "npx tsx cli/improve.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.3",

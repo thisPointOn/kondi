@@ -1,0 +1,78 @@
+/**
+ * RunMetricsStrip — follows the PipelineResultsView design language
+ * (bg-secondary panels, small grey meta, pill badges).
+ */
+
+.run-metrics-strip {
+  background: var(--bg-secondary, #1a1a1a);
+  border: 1px solid var(--border-color, #2a2a2a);
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.rms-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary, #888);
+}
+.rms-header.clickable { cursor: pointer; user-select: none; }
+.rms-chevron { color: var(--text-secondary, #888); width: 0.8rem; }
+.rms-title { font-weight: 600; color: var(--text-primary, #e5e5e5); font-size: 0.8rem; }
+.rms-runid { margin-left: auto; font-size: 0.68rem; opacity: 0.8; }
+
+.rms-metric { font-size: 0.72rem; color: var(--text-secondary, #9a9a9a); white-space: nowrap; }
+.rms-metric.trend { color: #a78bfa; }
+
+.rms-pill {
+  font-size: 0.66rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 9999px;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+.rms-pill.status.completed { background: #8b5cf620; color: #a78bfa; }
+.rms-pill.status.failed { background: #dc262620; color: #ef4444; }
+.rms-pill.status.skipped { background: #3b82f620; color: #60a5fa; }
+.rms-pill.status.pending, .rms-pill.status.running { background: #f59e0b20; color: #f59e0b; }
+.rms-pill.flag { background: #f59e0b1a; color: #f59e0b; border: 1px solid #f59e0b40; }
+.rms-pill.flag.honest_failure, .rms-pill.flag.step_failed, .rms-pill.flag.tests_failed { background: #dc26261a; color: #ef4444; border-color: #ef444440; }
+
+.rms-trend { display: inline-flex; align-items: center; gap: 0.4rem; }
+.rms-spark rect.ok { fill: #8b5cf6; opacity: 0.75; }
+.rms-spark rect.fail { fill: #ef4444; opacity: 0.85; }
+
+.rms-body { display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.55rem; }
+
+.rms-step {
+  border-left: 2px solid var(--border-color, #2a2a2a);
+  padding: 0.3rem 0.6rem;
+  border-radius: 4px;
+  background: var(--bg-tertiary, #1d1d1d);
+}
+.rms-step.completed { border-left-color: #8b5cf6; }
+.rms-step.failed { border-left-color: #ef4444; }
+.rms-step.skipped { border-left-color: #60a5fa; }
+.rms-step.flagged { background: #f59e0b0a; }
+
+.rms-step-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+.rms-step-name { font-size: 0.78rem; color: var(--text-primary, #e5e5e5); font-weight: 500; }
+
+.rms-step-sub { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.3rem; align-items: center; }
+.rms-seat {
+  font-size: 0.68rem;
+  color: var(--text-secondary, #9a9a9a);
+  background: var(--bg-secondary, #1a1a1a);
+  border: 1px solid var(--border-color, #2a2a2a);
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  white-space: nowrap;
+}
+.rms-seat em { font-style: normal; opacity: 0.7; margin-right: 0.15rem; }
+.rms-seat code { font-family: ui-monospace, monospace; font-size: 0.65rem; color: #cbd5e1; }
+.rms-seat .err { color: #ef4444; font-weight: 600; }
+
+.rms-foot { font-size: 0.66rem; color: var(--text-secondary, #777); margin-top: 0.3rem; }

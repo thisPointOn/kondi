@@ -66,6 +66,11 @@ export interface CallerResult {
   content: string;
   tokensUsed: number;
   latencyMs: number;
+  /** Concrete provider/model that answered (passed through from simpleCompletion). */
+  provider?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 /** Options accepted by all callLLM variants */

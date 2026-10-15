@@ -29,6 +29,9 @@ const KEYS = {
   plan: (id: string) => `plan-${id}`,
   directive: (id: string) => `directive-${id}`,
   outputs: (id: string) => `outputs-${id}`,
+  // Self-improvement loop (src/improve/)
+  stepInput: (id: string) => `step-input-${id}`,
+  improve: (pid: string) => `improve-${pid}`,
 };
 
 interface ExportExecutionInfo {
@@ -109,8 +112,10 @@ export function exportSession(
       const planRaw = storage.getItem(KEYS.plan(councilId));
       const directiveRaw = storage.getItem(KEYS.directive(councilId));
       const outputsRaw = storage.getItem(KEYS.outputs(councilId));
+      const stepInputRaw = storage.getItem(KEYS.stepInput(councilId));
 
       councilData[councilId] = {
+        stepInput: stepInputRaw ? JSON.parse(stepInputRaw) : null,
         ledgerIndex: ledgerIndex,
         ledgerChunks,
         context: contextRaw ? JSON.parse(contextRaw) : null,
@@ -127,6 +132,19 @@ export function exportSession(
     // Override pipeline.status with the definitive execution outcome —
     // the executor's store update and the export can race, so trust
     // the explicitly-passed execution status.
+    // 5b. Self-improvement state + retained scorecards
+    let improve: KondiSession['improve'];
+    try {
+      const improveRaw = storage.getItem(KEYS.improve(pipelineId));
+      const state = improveRaw ? JSON.parse(improveRaw) : null;
+      const scorecards: any[] = [];
+      for (const key of (state?.scorecardIds || []) as string[]) {
+        const raw = storage.getItem(key);
+        if (raw) scorecards.push(JSON.parse(raw));
+      }
+      if (state || scorecards.length) improve = { state, scorecards };
+    } catch { /* optional */ }
+
     const session: KondiSession = {
       version: 1,
       exportedAt: new Date().toISOString(),
@@ -135,6 +153,7 @@ export function exportSession(
       councils,
       councilData,
       execution,
+      improve,
     };
 
     // 6. Write to sessions directory

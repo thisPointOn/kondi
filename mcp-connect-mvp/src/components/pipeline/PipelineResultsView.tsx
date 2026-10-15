@@ -13,6 +13,7 @@ import { pipelineStore } from '../../pipeline/store';
 import type { Pipeline, PipelineStep, StepArtifact, CouncilStepConfig } from '../../pipeline/types';
 import { isCouncilType } from '../../pipeline/types';
 import { getStepIcon } from './PipelineGraphView';
+import RunMetricsStrip from './RunMetricsStrip';
 import './PipelineResultsView.css';
 
 function fmtDuration(start?: string, end?: string): string | null {
@@ -138,6 +139,7 @@ export default function PipelineResultsView({
       </div>
 
       <div className="results-scroll">
+        <RunMetricsStrip pipelineId={pipeline.id} />
         {pipeline.stages.map((stage, i) => {
           const produced = stage.steps.filter((s) => s.artifact);
           const nextStage = pipeline.stages[i + 1];

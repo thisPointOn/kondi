@@ -151,6 +151,8 @@ async function callOpenAICompatible(
     content,
     tokensUsed: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0),
     latencyMs: Date.now() - start,
+    inputTokens: usage.prompt_tokens || 0,
+    outputTokens: usage.completion_tokens || 0,
   };
 }
 
@@ -209,6 +211,8 @@ async function callAnthropicAPI(
     latencyMs: Date.now() - start,
     cacheRead,
     cacheCreation,
+    inputTokens: usage.input_tokens || 0,
+    outputTokens: usage.output_tokens || 0,
   };
 }
 
@@ -252,13 +256,27 @@ async function callGeminiAPI(
     content,
     tokensUsed: (usage.promptTokenCount || 0) + (usage.candidatesTokenCount || 0),
     latencyMs: Date.now() - start,
+    inputTokens: usage.promptTokenCount || 0,
+    outputTokens: usage.candidatesTokenCount || 0,
   };
 }
 
 /**
- * Unified LLM caller for CLI. Routes by provider ID.
+ * Unified LLM caller for CLI. Routes by provider ID. Stamps the CONCRETE
+ * provider/model that answered onto the result (routed `route:*` models
+ * resolve per call) so the ledger can attribute cost/quality correctly.
  */
 export async function callLLM(opts: CallLLMOpts): Promise<CallerResult> {
+  const resolved = await dispatchLLM(opts);
+  return {
+    ...resolved.result,
+    provider: resolved.result.provider || resolved.provider,
+    model: resolved.result.model || resolved.model,
+  };
+}
+
+async function dispatchLLM(opts: CallLLMOpts): Promise<{ provider: string; model: string; result: CallerResult }> {
+  const wrap = (provider: string, model: string) => async (p: Promise<CallerResult>) => ({ provider, model, result: await p });
   let provider = opts.provider || 'anthropic-cli';
   // Provider-aware fallback: openai-cli's default is '' (let codex pick its
   // account model) — it must NOT fall through to a Claude model, which codex
@@ -277,10 +295,10 @@ export async function callLLM(opts: CallLLMOpts): Promise<CallerResult> {
 
   // CLI binary providers
   if (provider === 'anthropic-cli') {
-    return callClaude({ ...opts, model });
+    return wrap(provider, model)(callClaude({ ...opts, model }));
   }
   if (provider === 'openai-cli') {
-    return callCodex({ ...opts, model });
+    return wrap(provider, model)(callCodex({ ...opts, model }));
   }
 
   // API key providers — require env vars
@@ -293,34 +311,34 @@ export async function callLLM(opts: CallLLMOpts): Promise<CallerResult> {
   }
 
   if (provider === 'anthropic-api') {
-    return callAnthropicAPI(apiKey, model, opts.systemPrompt, opts.userMessage);
+    return wrap(provider, model)(callAnthropicAPI(apiKey, model, opts.systemPrompt, opts.userMessage));
   }
   if (provider === 'openai-api') {
-    return callOpenAICompatible('https://api.openai.com/v1', apiKey, model, opts.systemPrompt, opts.userMessage);
+    return wrap(provider, model)(callOpenAICompatible('https://api.openai.com/v1', apiKey, model, opts.systemPrompt, opts.userMessage));
   }
   if (provider === 'deepseek') {
-    return callOpenAICompatible('https://api.deepseek.com/v1', apiKey, model, opts.systemPrompt, opts.userMessage);
+    return wrap(provider, model)(callOpenAICompatible('https://api.deepseek.com/v1', apiKey, model, opts.systemPrompt, opts.userMessage));
   }
   if (provider === 'xai') {
-    return callOpenAICompatible('https://api.x.ai/v1', apiKey, model, opts.systemPrompt, opts.userMessage);
+    return wrap(provider, model)(callOpenAICompatible('https://api.x.ai/v1', apiKey, model, opts.systemPrompt, opts.userMessage));
   }
   if (provider === 'zai') {
-    return callOpenAICompatible('https://api.z.ai/api/coding/paas/v4', apiKey, model, opts.systemPrompt, opts.userMessage);
+    return wrap(provider, model)(callOpenAICompatible('https://api.z.ai/api/coding/paas/v4', apiKey, model, opts.systemPrompt, opts.userMessage));
   }
   if (provider === 'moonshot') {
-    return callOpenAICompatible('https://api.moonshot.ai/v1', apiKey, model, opts.systemPrompt, opts.userMessage);
+    return wrap(provider, model)(callOpenAICompatible('https://api.moonshot.ai/v1', apiKey, model, opts.systemPrompt, opts.userMessage));
   }
   if (provider === 'nvidia-router') {
-    return callOpenAICompatible(process.env.NVIDIA_ROUTER_URL || 'https://integrate.api.nvidia.com/v1', apiKey, model, opts.systemPrompt, opts.userMessage);
+    return wrap(provider, model)(callOpenAICompatible(process.env.NVIDIA_ROUTER_URL || 'https://integrate.api.nvidia.com/v1', apiKey, model, opts.systemPrompt, opts.userMessage));
   }
   if (provider === 'google') {
-    return callGeminiAPI(apiKey, model, opts.systemPrompt, opts.userMessage);
+    return wrap(provider, model)(callGeminiAPI(apiKey, model, opts.systemPrompt, opts.userMessage));
   }
   if (provider === 'ollama') {
-    return callOpenAICompatible('http://localhost:11434/v1', 'ollama', model, opts.systemPrompt, opts.userMessage);
+    return wrap(provider, model)(callOpenAICompatible('http://localhost:11434/v1', 'ollama', model, opts.systemPrompt, opts.userMessage));
   }
 
   // Fallback: try Claude CLI
   console.warn(`[CLI] Unknown provider "${provider}", falling back to Claude CLI`);
-  return callClaude({ ...opts, model });
+  return wrap(provider, model)(callClaude({ ...opts, model }));
 }

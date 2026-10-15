@@ -33,6 +33,9 @@ import { kondiPath } from '../services/kondiPaths';
 const DISK_KEY_PREFIXES = [
   'mcp-councils', 'ledger-', 'context', 'decision-', 'plan-', 'directive-',
   'outputs-', 'mcp-pipelines', 'pipeline', 'council', 'session',
+  // Self-improvement loop (src/improve/): per-pipeline state, per-run scorecards,
+  // per-council step input records.
+  'improve-', 'scorecard-', 'step-input-',
 ];
 function isCouncilDataKey(key: string): boolean {
   return DISK_KEY_PREFIXES.some((p) => key.startsWith(p));

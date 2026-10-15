@@ -638,6 +638,18 @@ export interface LedgerEntry {
   tokensUsed?: number;
   latencyMs?: number;
   error?: string;
+
+  // ---- Per-call metadata (self-improvement loop; lifted from structured.callMeta) ----
+  /** CONCRETE model used for this call (routed personas resolve per call). */
+  model?: string;
+  /** CONCRETE provider used for this call. */
+  provider?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  /** 1 = first try; N = N-1 transient/timeout retries before success. */
+  attempts?: number;
+  /** Persona was configured with a `route:<profile>` pseudo-model. */
+  routed?: boolean;
 }
 
 /**

@@ -131,13 +131,15 @@ export async function callCodex(opts: {
         }
       }
 
-      const { text, tokensUsed, sessionId } = parseCodexJsonOutput(rawStdout);
+      const { text, tokensUsed, sessionId, inputTokens, outputTokens } = parseCodexJsonOutput(rawStdout);
 
       resolve({
         content: text,
         tokensUsed,
         latencyMs,
         sessionId,
+        inputTokens,
+        outputTokens,
       });
     });
 

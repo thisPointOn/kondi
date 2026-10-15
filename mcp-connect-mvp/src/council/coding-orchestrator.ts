@@ -47,6 +47,8 @@ import {
 } from './prompts';
 
 import { bootstrapDirectoryContext } from './context-bootstrap';
+import { isRoutedModel } from '../router/profile-options';
+import { formatLessonsBlock } from '../improve/lessons';
 import { detectTestCommand } from '../pipeline/test-detect';
 import { detectBuildCommand } from '../pipeline/build-detect';
 import { detectInstallCommand } from '../pipeline/install-detect';
@@ -66,6 +68,11 @@ export interface AgentResponse {
   tokensUsed: number;
   latencyMs: number;
   structured?: Record<string, unknown>;
+  /** Concrete model/provider actually used (invokers fill these when known). */
+  model?: string;
+  provider?: string;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 export type AgentInvoker = (invocation: AgentInvocation, persona: Persona) => Promise<AgentResponse>;
@@ -80,6 +87,8 @@ export interface CodingOrchestratorConfig {
   onAgentThinkingStart?: (persona: Persona, startedAt: number) => void;
   onAgentThinkingEnd?: (persona: Persona) => void;
   onAgentTimeout?: (persona: Persona, context: string, elapsedMs: number) => void;
+  /** Self-improvement lessons (role → lines) appended to every persona's user message. */
+  lessons?: Partial<Record<'all' | DeliberationRole, string[]>>;
 }
 
 // ============================================================================
@@ -406,7 +415,8 @@ export class CodingOrchestrator {
     // Create ledger entry
     this.createEntry(
       council.id, 'manager', manager.id, 'decomposition', 'decomposing',
-      response.content, response.tokensUsed, response.latencyMs
+      response.content, response.tokensUsed, response.latencyMs,
+      undefined, undefined, response.structured
     );
 
     console.log(`[CodingOrchestrator] Decomposed into ${decomposition.modules.length} module(s):`,
@@ -446,7 +456,8 @@ export class CodingOrchestrator {
         );
         this.createEntry(
           council.id, 'consultant', consultant.id, 'analysis', 'decomposing',
-          response.content, response.tokensUsed, response.latencyMs
+          response.content, response.tokensUsed, response.latencyMs,
+          undefined, undefined, response.structured
         );
         if (response.content?.trim()) advices.push(`### ${consultant.name}\n${response.content.trim()}`);
       } catch (err) {
@@ -547,7 +558,8 @@ export class CodingOrchestrator {
           'module_output',
           'implementing',
           `[Module: ${module.name}]\n\n${response.content}`,
-          response.tokensUsed, response.latencyMs
+          response.tokensUsed, response.latencyMs,
+          undefined, undefined, { ...response.structured, module: module.name }
         );
 
         // Evolve context with module implementation
@@ -611,10 +623,19 @@ export class CodingOrchestrator {
     // Parse review verdict
     const verdict = this.parseReviewVerdict(response.content);
 
-    // Create ledger entry
+    // Create ledger entry — the parsed verdict (incl. issue severities) rides
+    // `structured` so the self-improvement loop can read it without regexing prose.
     this.createEntry(
       council.id, 'reviewer', reviewer.id, 'code_review', 'code_reviewing',
-      response.content, response.tokensUsed, response.latencyMs
+      response.content, response.tokensUsed, response.latencyMs,
+      undefined, undefined,
+      {
+        ...response.structured,
+        verdict: verdict.verdict,
+        issueCounts: verdict.issues.reduce<Record<string, number>>((acc, i) => {
+          acc[i.severity] = (acc[i.severity] || 0) + 1; return acc;
+        }, {}),
+      }
     );
 
     // Evolve context with review findings
@@ -653,7 +674,8 @@ export class CodingOrchestrator {
       this.createEntry(
         council.id, 'manager', manager.id, 'test_result', 'testing',
         `Test command: ${testCommand}\nExit code: ${result.exit_code}\n\n${output}`,
-        0, 0
+        0, 0,
+        undefined, undefined, { exitCode: result.exit_code, testCommand }
       );
 
       return {
@@ -668,7 +690,8 @@ export class CodingOrchestrator {
       this.createEntry(
         council.id, 'manager', manager.id, 'test_result', 'testing',
         `Test command failed: ${testCommand}\nError: ${errMsg}`,
-        0, 0
+        0, 0,
+        undefined, undefined, { exitCode: -1, testCommand, error: errMsg }
       );
 
       return { passed: false, output: errMsg };
@@ -724,7 +747,8 @@ export class CodingOrchestrator {
         this.createEntry(
           council.id, 'worker', worker.id, 'debug_fix', 'debugging',
           `[Module: ${module.name}]\n\n${response.content}`,
-          response.tokensUsed, response.latencyMs
+          response.tokensUsed, response.latencyMs,
+          undefined, undefined, { ...response.structured, module: module.name }
         );
       }
 
@@ -761,7 +785,8 @@ export class CodingOrchestrator {
 
       this.createEntry(
         council.id, 'worker', debugger_.id, 'debug_fix', 'debugging',
-        response.content, response.tokensUsed, response.latencyMs
+        response.content, response.tokensUsed, response.latencyMs,
+        undefined, undefined, response.structured
       );
     }
   }
@@ -1101,6 +1126,12 @@ export class CodingOrchestrator {
       };
     }
 
+    // Self-improvement lessons: role-scoped notes distilled from earlier runs.
+    const lessonsBlock = formatLessonsBlock(this.config.lessons, roleAssignment?.role || persona.preferredDeliberationRole);
+    if (lessonsBlock) {
+      invocation = { ...invocation, userMessage: invocation.userMessage + lessonsBlock };
+    }
+
     // Thread working directory from council so each invocation uses its own dir
     const councilDir = council?.deliberation?.workingDirectory;
     if (councilDir) {
@@ -1117,6 +1148,19 @@ export class CodingOrchestrator {
         this.config.onAgentThinkingStart?.(persona, Date.now());
         const response = await this.config.invokeAgent(invocation, persona);
         this.config.onAgentThinkingEnd?.(persona);
+        // Per-call metadata for the ledger (self-improvement loop) — mirrors
+        // DeliberationOrchestrator.invokeAgentSafe.
+        response.structured = {
+          ...response.structured,
+          callMeta: {
+            model: response.model || persona.model,
+            provider: response.provider || persona.provider,
+            inputTokens: response.inputTokens,
+            outputTokens: response.outputTokens,
+            attempts: attempt + 1,
+            routed: isRoutedModel(persona.provider, persona.model),
+          },
+        };
         return response;
       } catch (error) {
         this.config.onAgentThinkingEnd?.(persona);
@@ -1154,7 +1198,12 @@ export class CodingOrchestrator {
     latencyMs: number,
     artifactRefs?: ArtifactRef[],
     roundNumber?: number,
+    structured?: Record<string, unknown>,
   ): LedgerEntry {
+    // Lift per-call metadata (attached by invokeAgentSafe) to top-level fields.
+    const meta = (structured?.callMeta || {}) as {
+      model?: string; provider?: string; inputTokens?: number; outputTokens?: number; attempts?: number; routed?: boolean;
+    };
     const entry: LedgerEntry = {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
@@ -1167,6 +1216,13 @@ export class CodingOrchestrator {
       latencyMs,
       artifactRefs,
       roundNumber,
+      structured,
+      ...(meta.model ? { model: meta.model } : {}),
+      ...(meta.provider ? { provider: meta.provider } : {}),
+      ...(meta.inputTokens != null ? { inputTokens: meta.inputTokens } : {}),
+      ...(meta.outputTokens != null ? { outputTokens: meta.outputTokens } : {}),
+      ...(meta.attempts != null ? { attempts: meta.attempts } : {}),
+      ...(meta.routed != null ? { routed: meta.routed } : {}),
     };
 
     ledgerStore.append(councilId, entry);

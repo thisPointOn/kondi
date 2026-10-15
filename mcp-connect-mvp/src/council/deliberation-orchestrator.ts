@@ -67,6 +67,8 @@ import {
 import { bootstrapDirectoryContext } from './context-bootstrap';
 import { buildContextInspection } from './context-inspection';
 import type { ContextInspection } from './types';
+import { isRoutedModel } from '../router/profile-options';
+import { formatLessonsBlock } from '../improve/lessons';
 
 import {
   buildManagerFramingPrompt,
@@ -112,6 +114,11 @@ export interface AgentResponse {
   tokensUsed: number;
   latencyMs: number;
   structured?: Record<string, unknown>;
+  /** Concrete model/provider actually used (invokers fill these when known). */
+  model?: string;
+  provider?: string;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 export type AgentInvoker = (invocation: AgentInvocation, persona: Persona) => Promise<AgentResponse>;
@@ -132,6 +139,10 @@ export interface OrchestratorConfig {
   onAgentThinkingEnd?: (persona: Persona) => void;
   /** Called when an agent times out (before retry). Enables UI timeout warnings. */
   onAgentTimeout?: (persona: Persona, context: string, elapsedMs: number) => void;
+  /** Self-improvement lessons (role → lines) appended to every persona's user
+   *  message. Supplied per run by the pipeline executor; no council field needed
+   *  (so bound councils are never mutated per run). */
+  lessons?: Partial<Record<'all' | DeliberationRole, string[]>>;
 }
 
 // ============================================================================
@@ -1504,7 +1515,8 @@ export class DeliberationOrchestrator {
           this.createEntry(
             council.id, 'worker', persona.id, 'analysis', 'executing',
             `[Subagent: ${sub.name} · ${sub.provider}/${sub.model}]\n${content || '(no output)'}`,
-            resp.tokensUsed || 0, resp.latencyMs || 0
+            resp.tokensUsed || 0, resp.latencyMs || 0,
+            undefined, undefined, resp.structured
           );
           return content ? `### ${sub.name} (${sub.provider}/${sub.model})\n${content}` : '';
         } catch (err) {
@@ -2566,6 +2578,12 @@ export class DeliberationOrchestrator {
       };
     }
 
+    // Self-improvement lessons: role-scoped notes distilled from earlier runs.
+    const lessonsBlock = formatLessonsBlock(this.config.lessons, roleAssignment?.role || persona.preferredDeliberationRole);
+    if (lessonsBlock) {
+      invocation = { ...invocation, userMessage: invocation.userMessage + lessonsBlock };
+    }
+
     // Thread working directory from council so each invocation uses its own dir
     const councilDir = council?.deliberation?.workingDirectory;
     if (councilDir) {
@@ -2646,8 +2664,19 @@ export class DeliberationOrchestrator {
         this.config.onAgentThinkingEnd?.(persona);
         const callDuration = ((Date.now() - startedAt) / 1000).toFixed(1);
         console.log(`[Orchestrator:Call] ${persona.name} (${context}) completed in ${callDuration}s — ${response.tokensUsed} tokens`);
-        // Attach context inspection to the response
-        response.structured = { ...response.structured, contextInspection: inspection };
+        // Attach context inspection + per-call metadata (concrete model, token
+        // split, attempts) to the response; createEntry lifts callMeta into the
+        // ledger entry so the self-improvement loop can attribute cost/quality
+        // to the model that ACTUALLY answered (routed personas resolve per call).
+        const callMeta = {
+          model: response.model || persona.model,
+          provider: response.provider || persona.provider,
+          inputTokens: response.inputTokens,
+          outputTokens: response.outputTokens,
+          attempts: attempt + 1,
+          routed: isRoutedModel(persona.provider, persona.model),
+        };
+        response.structured = { ...response.structured, contextInspection: inspection, callMeta };
         return response;
       } catch (error) {
         this.config.onAgentThinkingEnd?.(persona);
@@ -2803,6 +2832,11 @@ export class DeliberationOrchestrator {
     // Clean JSON artifacts from LLM responses before storing
     const cleanedContent = this.cleanLLMResponse(content);
 
+    // Lift per-call metadata (attached by invokeAgentSafe) to top-level fields.
+    const meta = (structured?.callMeta || {}) as {
+      model?: string; provider?: string; inputTokens?: number; outputTokens?: number; attempts?: number; routed?: boolean;
+    };
+
     const entry: LedgerEntry = {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
@@ -2818,6 +2852,12 @@ export class DeliberationOrchestrator {
       referencedEntries,
       reviewOutcome,
       structured,
+      ...(meta.model ? { model: meta.model } : {}),
+      ...(meta.provider ? { provider: meta.provider } : {}),
+      ...(meta.inputTokens != null ? { inputTokens: meta.inputTokens } : {}),
+      ...(meta.outputTokens != null ? { outputTokens: meta.outputTokens } : {}),
+      ...(meta.attempts != null ? { attempts: meta.attempts } : {}),
+      ...(meta.routed != null ? { routed: meta.routed } : {}),
     };
 
     // Use ledgerStore.append to notify subscribers (enables real-time UI updates)

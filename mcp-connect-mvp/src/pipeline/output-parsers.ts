@@ -9,6 +9,9 @@ export interface ParsedOutput {
   text: string;
   tokensUsed: number;
   sessionId?: string;
+  /** Real usage split from the CLI's stream events (0 when not reported). */
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 /**
@@ -92,7 +95,7 @@ export function parseStreamJsonOutput(rawOutput: string): ParsedOutput {
   }
 
   const text = parts.length > 0 ? parts.join('').trim() : rawOutput;
-  return { text, tokensUsed: inputTokens + outputTokens, sessionId };
+  return { text, tokensUsed: inputTokens + outputTokens, sessionId, inputTokens, outputTokens };
 }
 
 /**
@@ -142,5 +145,5 @@ export function parseCodexJsonOutput(rawOutput: string): ParsedOutput {
   }
 
   const text = textChunks.join('\n').trim() || rawOutput;
-  return { text, tokensUsed: inputTokens + outputTokens, sessionId };
+  return { text, tokensUsed: inputTokens + outputTokens, sessionId, inputTokens, outputTokens };
 }

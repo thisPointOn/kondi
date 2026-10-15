@@ -23,12 +23,15 @@ ${C.bold}${C.cyan}Kondi${C.reset} — Multi-LLM Council Platform
 ${C.bold}Commands:${C.reset}
   council     Run a council deliberation
   pipeline    Run a pipeline from JSON
+  improve     Retrospect on a pipeline's recent runs and apply recipe improvements
 
 ${C.bold}Usage:${C.reset}
   kondi council --task "Review this code" --working-dir ./myapp
   kondi council --config council.json
   kondi council exported-council.json
   kondi pipeline pipeline.json --working-dir ./project
+  kondi pipeline pipeline.json --improve
+  kondi improve pipeline.json --runs 3 --write-back
 
 ${C.bold}Options:${C.reset}
   --help, -h       Show help (use "kondi council --help" for subcommand help)
@@ -69,6 +72,9 @@ async function main() {
       break;
     case 'pipeline':
       await import('./run-pipeline');
+      break;
+    case 'improve':
+      await import('./improve');
       break;
     default:
       console.error(`Unknown command: ${subcommand}`);

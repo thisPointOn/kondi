@@ -52,6 +52,11 @@ export interface CallerResult {
   sessionId?: string;
   cacheRead?: number;
   cacheCreation?: number;
+  /** Concrete provider/model that answered (stamped by callLLM after routing). */
+  provider?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 /**
@@ -168,13 +173,15 @@ export async function callClaude(opts: {
         return;
       }
 
-      const { text, tokensUsed, sessionId } = parseStreamJsonOutput(rawStdout);
+      const { text, tokensUsed, sessionId, inputTokens, outputTokens } = parseStreamJsonOutput(rawStdout);
 
       resolve({
         content: text,
         tokensUsed,
         latencyMs,
         sessionId,
+        inputTokens,
+        outputTokens,
       });
     });
 

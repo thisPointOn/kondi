@@ -17,6 +17,7 @@ Technical documentation of Kondi's design, data flow, and internal systems.
 9. [CLI Pipeline Runner](#9-cli-pipeline-runner)
 10. [Built-in MCP Servers](#10-built-in-mcp-servers)
 11. [Design Decisions](#11-design-decisions)
+12. [Self-Improvement Loop](#12-self-improvement-loop)
 
 ---
 
@@ -732,3 +733,41 @@ Pipelines need to pass context between steps without coupling step implementatio
 ### Why Quota Recovery?
 
 localStorage's ~5 MB limit is a hard constraint. Multi-council sessions with detailed ledgers can hit it quickly. Rather than failing opaquely, Kondi proactively manages storage by cleaning up old data. This keeps the app functional during long sessions without requiring user intervention.
+
+---
+
+## 12. Self-Improvement Loop
+
+Kondi can measure every pipeline run and, optionally, learn from it. The subsystem lives in `mcp-connect-mvp/src/improve/` and is specified in detail in SPEC.md §4f; this section explains the shape and the reasons.
+
+### Two layers
+
+```
+PipelineExecutor (every completed/failed run)
+  |-- finishRunHook
+  |     |-- buildRunScorecard  (from council ledgers; no LLM)  --> improve store, _scorecard.json, scorecards JSONL
+  |     '-- if selfImprove.enabled --> runImprovementCycle
+  |                                      retrospective council --> proposals (+ lessons)
+  |                                      optional eval (replay + judge)
+  |                                      auto-apply  OR  queue for approval
+  '-- next run: lessons bundle --> orchestrators --> every persona prompt
+```
+
+1. **Measurement is always on** and costs no model calls. Each ledger entry now records the concrete model, token split, retry count, and whether the persona was routed, so a scorecard can attribute cost, latency, revisions and errors to a specific seat and model even when a `route:*` persona resolved to different models per call. Scorecards also give users trends without enabling anything else.
+2. **Improvement is opt-in** per pipeline (`Pipeline.settings.selfImprove`). After a run, a retrospective reads the scorecard plus ledger evidence and proposes concrete, cited recipe edits and distilled lessons.
+
+### Why these choices
+
+- **The retrospective is an ordinary council.** It reuses the factory, orchestrator, ledger and drill-in view, so a user can open the retrospective and read the reasoning. It is tagged with the pipeline id so it has a home and never appears as an orphan, and old ones are pruned.
+- **Replay never uses a second executor.** To score a proposal, the affected step is re-run on its recorded input (captured per step as a `StepInputRecord`) using the factory plus the deliberation orchestrator directly, tool-less and without a working directory. A second `PipelineExecutor` would create run directories, library entries, memory entries and file writes; going straight to the orchestrator keeps evaluation side-effect free. A blind, position-swapped judge compares the old and new outputs so position bias cancels out; disagreement is neutral. Steps that cannot be replayed safely (coding steps, bound councils) fall back to a cheaper judge-only rating.
+- **Approval never blocks a run.** In manual mode, proposals simply wait in the Improvements panel (or CLI review); the run and the CLI process finish normally, and unattended or scheduled runs can never approve anything. In auto mode the mode is re-read at the moment of each apply, so a user can switch back to manual while a cycle is in flight.
+- **Edits are guarded against drift.** Each proposal pins the hash of the thing it changes. Applying refuses if the target moved, except when the exact field still holds the value the proposal was computed from (so several proposals from one retrospective can all land). The post-apply hash lets revert refuse rather than clobber later edits. Unbound steps are re-validated by the builder's own validator before saving; bound councils go through the council store's schema validation.
+- **Lessons live at the orchestrator level.** Lessons are short operating notes, not recipe edits. They are appended to each persona's prompt at call time, role-scoped, rather than written into step or council definitions. That makes them work uniformly for bound councils (whose records must not be mutated per run) and keeps them cheap to mute or revert. They are also mirrored to the memory directory as a superset of the existing patterns file, so the existing memory template keeps working.
+
+### Surfaces
+
+The GUI exposes a run-metrics strip in the results view and an Improvements panel in the builder. The CLI exposes `kondi improve` and `kondi pipeline --improve`. All of them share the same cycle and apply code; only the LLM invoker and platform adapter differ.
+
+### Current limits
+
+Coding steps and bound councils are judge-only. Model-swap proposals are off by default and do not yet re-run launch-time model validation. Router-profile and structural proposals are parsed but not applicable yet.

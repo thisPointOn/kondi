@@ -37,8 +37,17 @@ import type { MCPTool } from '../types/mcp';
 import { verifyRequiredTools } from '../utils/filterTools';
 
 import type { MemoryContext } from './memory-store';
-import { buildMemoryContext, appendEntry, getNextRunNumber } from './memory-store';
+import { buildMemoryContext, appendEntry, getNextRunNumber, getScorecardsFilePath } from './memory-store';
 import { sanitizeFolderName } from './run-output';
+// Self-improvement loop: step-input capture + per-run scorecards (always on;
+// the LLM retrospective is a separate, opt-in cycle).
+import { saveStepInput, getStepInput, formatStepInputMarkdown } from '../improve/step-input';
+import { buildRunScorecard, summarizeCouncilUsage, scorecardJsonlLine } from '../improve/run-metrics';
+import { improveStore } from '../improve/store';
+import { newRunId } from '../improve/hash';
+import { buildLessonBundle } from '../improve/lessons';
+import { runImprovementCycle, liveSettings } from '../improve/cycle';
+import type { RunScorecard, ImproveEvent } from '../improve/types';
 import {
   buildRunDirName,
   getRunsBaseDir,
@@ -70,6 +79,10 @@ export interface PipelineExecutorCallbacks {
   onCouncilCreated?: (stepId: string, councilId: string) => void;
   onAgentThinkingStart?: (persona: Persona, startedAt: number, prompt?: string) => void;
   onAgentThinkingEnd?: (persona: Persona) => void;
+  /** Self-improvement loop progress (scorecard saved, proposals queued/applied, errors). Logging only. */
+  onImprovementEvent?: (event: ImproveEvent) => void;
+  /** Which providers are configured — lets auto-applied proposals be validated like the builder does. */
+  getConfiguredProviders?: () => Record<string, boolean> | undefined;
 }
 
 // ============================================================================
@@ -216,6 +229,9 @@ export class PipelineExecutor {
   private currentRunNumber = 0;
   /** Pipeline start timestamp */
   private runStartedAt: string | null = null;
+  /** Self-improvement run id — independent of run numbering (which only
+   *  advances when memory/output isolation are on). Keys the scorecard. */
+  private runId = '';
   /** Body of the 'url' input source, fetched once at run start. */
   private resolvedUrlInput: string | null = null;
 
@@ -247,6 +263,7 @@ export class PipelineExecutor {
     this.currentRunDir = null;
     this.currentRunNumber = 0;
     this.runStartedAt = new Date().toISOString();
+    this.runId = newRunId();
     this.resolvedUrlInput = null;
     pipelineStore.setPipelineStatus(pipelineId, 'running');
 
@@ -420,10 +437,13 @@ export class PipelineExecutor {
             }
           }
 
+          // Self-improvement: build + persist this run's scorecard (never throws)
+          const scorecardPath = await this.finishRunHook(pipelineId, 'completed');
+
           // Write run manifest
           if (this.currentRunDir) {
             try {
-              await this.writeManifest(completedPipeline, 'completed', memoryUpdated);
+              await this.writeManifest(completedPipeline, 'completed', memoryUpdated, scorecardPath);
             } catch (err) {
               console.warn('[PipelineExecutor] Failed to write run manifest:', err);
             }
@@ -447,12 +467,15 @@ export class PipelineExecutor {
       console.error('[PipelineExecutor] Pipeline failed:', message);
       pipelineStore.setPipelineStatus(pipelineId, 'failed');
 
+      // Self-improvement: a FAILED run is the most valuable scorecard of all.
+      const scorecardPath = await this.finishRunHook(pipelineId, 'failed');
+
       // Write failed manifest if we have a run directory
       if (this.currentRunDir) {
         const failedPipeline = pipelineStore.get(pipelineId);
         if (failedPipeline) {
           try {
-            await this.writeManifest(failedPipeline, 'failed', false);
+            await this.writeManifest(failedPipeline, 'failed', false, scorecardPath);
           } catch { /* best effort */ }
         }
       }
@@ -661,6 +684,12 @@ export class PipelineExecutor {
             };
             const outputPath = await writeStepOutput(this.platform, stepDir, artifact, meta);
             console.log(`[PipelineExecutor] Step output: ${outputPath}`);
+            // Self-improvement: the step's exact input beside its output.
+            const inputRecord = artifact.metadata?.councilId ? getStepInput(artifact.metadata.councilId) : null;
+            if (inputRecord) {
+              try { await this.platform.writeFile(`${stepDir}/_input.md`, formatStepInputMarkdown(inputRecord)); }
+              catch (err) { console.warn('[PipelineExecutor] Failed to write _input.md:', err); }
+            }
             // Update artifact metadata to point to the isolated output file
             artifact.metadata = { ...artifact.metadata, outputPath };
             pipelineStore.setStepArtifact(pipelineId, step.id, artifact);
@@ -738,7 +767,22 @@ export class PipelineExecutor {
       }
       const chain = getWorkflowCouncils(bound.id);
       const idx = chain.findIndex((c) => c.id === bound.id);
-      rawProblem = composeStepProblem(bound, chain.slice(0, Math.max(idx, 0)));
+      const priorCouncils = chain.slice(0, Math.max(idx, 0));
+      rawProblem = composeStepProblem(bound, priorCouncils);
+
+      // Self-improvement: record exactly what this step received so it can be
+      // replayed in isolation. Bound councils keep their id across runs, so the
+      // record is overwritten per run (the latest run is what replay wants).
+      saveStepInput({
+        pipelineId, stepId: step.id, councilId: bound.id, runId: this.runId,
+        kind: 'bound', stepType: config.type,
+        outputType: bound.deliberation?.outputType || 'string',
+        task: bound.deliberation?.savedProblem || bound.topic,
+        inputTemplate: bound.deliberation?.inputTemplate || '{{input}}',
+        priorCouncilIds: priorCouncils.map((c) => c.id),
+        rawProblem,
+        recordedAt: new Date().toISOString(),
+      });
 
       if (this.callbacks.getAvailableTools) {
         const promptText = [
@@ -798,6 +842,31 @@ export class PipelineExecutor {
     stepCtx.councilId = council.id;
     this.callbacks.onCouncilCreated?.(step.id, council.id);
 
+    // Self-improvement: record the resolved input for unbound steps (the
+    // council id is only known once the council exists).
+    if (!config.boundCouncilId) {
+      saveStepInput({
+        pipelineId, stepId: step.id, councilId: council.id, runId: this.runId,
+        kind: 'unbound', stepType: config.type,
+        outputType: config.outputType || 'string',
+        task: config.task,
+        inputTemplate: config.inputTemplate,
+        pipelineInput: config.includePipelineInput ? (pipelineStore.get(pipelineId)?.initialInput || '') : undefined,
+        inputContext: renderInputTemplate(config.inputTemplate, previousArtifacts, this.memoryCtx),
+        previousArtifactStepIds: previousArtifacts.map((a) => a.stepId),
+        rawProblem,
+        recordedAt: new Date().toISOString(),
+      });
+    }
+
+    // Self-improvement lessons for this step (role-scoped notes from earlier
+    // runs), injected at call time by the orchestrators. Independent of the
+    // memory feature and of whether the retrospective is currently enabled.
+    const improveSettings = liveSettings(pipelineId);
+    const lessons = improveSettings.lessons.enabled
+      ? buildLessonBundle(improveStore.get(pipelineId), step.id, improveSettings.lessons.maxChars)
+      : undefined;
+
     // Branch: coding steps use CodingOrchestrator, planning uses DeliberationOrchestrator
     const orchestratorCallbacks = {
       invokeAgent: this.callbacks.invokeAgent,
@@ -807,6 +876,7 @@ export class PipelineExecutor {
         console.error(`[Pipeline:Council] Error in ${ctx}:`, err),
       onAgentThinkingStart: this.callbacks.onAgentThinkingStart,
       onAgentThinkingEnd: this.callbacks.onAgentThinkingEnd,
+      lessons,
     };
 
     if (config.type === 'coding') {
@@ -826,7 +896,14 @@ export class PipelineExecutor {
     let workerOutputPath: string | undefined;
     const completedCouncil = councilStore.get(council.id);
     if (completedCouncil) {
-      const summary = buildAbbreviatedSummary(completedCouncil);
+      // The coding orchestrator writes an HONEST completion summary (FAILED /
+      // files produced / warnings — rule 17). Never overwrite it; append the
+      // abbreviated deliberation summary below it instead.
+      const abbreviated = buildAbbreviatedSummary(completedCouncil);
+      const existing = completedCouncil.deliberationState?.completionSummary?.trim();
+      const summary = existing && config.type === 'coding'
+        ? `${existing}\n\n---\n\n${abbreviated}`
+        : abbreviated;
       councilStore.updateDeliberationState(council.id, { completionSummary: summary });
 
       // Save deliberation output to working directory
@@ -869,6 +946,8 @@ export class PipelineExecutor {
     const updatedCouncil = councilStore.get(council.id);
     let content = '';
     let artifactType: StepArtifact['artifactType'] = 'output';
+    // Real usage from the ledger (was never set before → manifest totals were 0).
+    const usage = summarizeCouncilUsage(council.id);
     const metadata: StepArtifact['metadata'] = {
       councilId: council.id,
       outputPath: workerOutputPath,
@@ -876,6 +955,10 @@ export class PipelineExecutor {
       outputType: (config.boundCouncilId ? council.deliberation?.outputType : config.outputType) || 'string',
       stepName: step.name,
       stepType: config.type,
+      tokensUsed: usage.tokens,
+      models: usage.models,
+      model: usage.models.length === 1 ? usage.models[0] : undefined,
+      costUsd: usage.costUsd,
     };
 
     if (config.type === 'analysis') {
@@ -1168,7 +1251,8 @@ export class PipelineExecutor {
   private async writeManifest(
     pipeline: Pipeline,
     status: 'completed' | 'failed',
-    memoryUpdated: boolean
+    memoryUpdated: boolean,
+    scorecardPath?: string
   ): Promise<void> {
     if (!this.currentRunDir) return;
 
@@ -1191,9 +1275,92 @@ export class PipelineExecutor {
       totalTokens,
       totalDurationMs: Date.now() - startMs,
       memoryUpdated,
+      runId: this.runId || undefined,
+      scorecardPath,
     };
 
     await writeRunManifest(this.platform, this.currentRunDir, manifest);
+  }
+
+  // --------------------------------------------------------------------------
+  // Self-Improvement: post-run hook
+  // --------------------------------------------------------------------------
+
+  /**
+   * Build this run's scorecard from the council ledgers and persist it to the
+   * improve store (always), to `<runDir>/_scorecard.json` and to
+   * `<wd>/.kondi/memory/<pid>_scorecards.jsonl` (when a working dir exists).
+   * Runs for completed AND failed runs, never for aborted ones, and NEVER
+   * throws — the run's status is already final by the time this executes.
+   * Returns the on-disk scorecard path when one was written.
+   */
+  private async finishRunHook(pipelineId: string, status: 'completed' | 'failed'): Promise<string | undefined> {
+    if (this.aborted) return undefined;
+    let card: RunScorecard;
+    try {
+      const pipeline = pipelineStore.get(pipelineId);
+      if (!pipeline) return undefined;
+      card = buildRunScorecard({
+        pipeline,
+        runId: this.runId || newRunId(),
+        status,
+        startedAt: this.runStartedAt || new Date().toISOString(),
+        runNumber: this.currentRunNumber || undefined,
+        loopCounts: this.loopCounts,
+      });
+      improveStore.saveScorecard(card);
+      this.callbacks.onLog?.(
+        `Scorecard: ${card.steps.length} steps · ${card.totalTokens.toLocaleString()} tokens · ` +
+        `$${card.totalCostUsd.toFixed(4)} · ${card.steps.filter((s) => s.flags.length).length} flagged`
+      );
+    } catch (err) {
+      console.warn('[PipelineExecutor] Failed to build scorecard:', err);
+      return undefined;
+    }
+
+    let scorecardPath: string | undefined;
+    if (this.currentRunDir) {
+      try {
+        scorecardPath = `${this.currentRunDir}/_scorecard.json`;
+        await this.platform.writeFile(scorecardPath, JSON.stringify(card, null, 2));
+      } catch (err) {
+        scorecardPath = undefined;
+        console.warn('[PipelineExecutor] Failed to write _scorecard.json:', err);
+      }
+    }
+    const workingDir = pipelineStore.get(pipelineId)?.settings.workingDirectory;
+    if (workingDir) {
+      try {
+        const file = getScorecardsFilePath(workingDir, pipelineId);
+        const existing = this.platform.readFile ? (await this.platform.readFile(file)) || '' : '';
+        const body = existing ? `${existing.replace(/\n?$/, '\n')}${scorecardJsonlLine(card)}\n` : `${scorecardJsonlLine(card)}\n`;
+        await this.platform.writeFile(file, body);
+      } catch (err) {
+        console.warn('[PipelineExecutor] Failed to append scorecards JSONL:', err);
+      }
+    }
+
+    // Opt-in retrospective → proposals → (auto-apply | queue). Awaited so the
+    // CLI process doesn't exit mid-cycle; the run status is already final and
+    // the cycle never throws. Manual mode just queues — nothing blocks here.
+    if (liveSettings(pipelineId).enabled && !this.aborted) {
+      try {
+        const emit = (e: ImproveEvent) => { try { this.callbacks.onImprovementEvent?.(e); } catch { /* ignore */ } };
+        emit({ type: 'scorecard', pipelineId, runId: card.runId });
+        await runImprovementCycle(pipelineId, { trigger: 'post-run' }, {
+          invokeAgent: this.callbacks.invokeAgent,
+          onAgentThinkingStart: this.callbacks.onAgentThinkingStart,
+          onAgentThinkingEnd: this.callbacks.onAgentThinkingEnd,
+          onLog: (m) => { console.log(`[PipelineExecutor] ${m}`); this.callbacks.onLog?.(m); },
+          platform: this.platform,
+          configuredProviders: this.callbacks.getConfiguredProviders?.(),
+          onEvent: emit,
+        });
+      } catch (err) {
+        console.warn('[PipelineExecutor] Improvement cycle failed:', err);
+      }
+    }
+    return scorecardPath;
   }
 
   // --------------------------------------------------------------------------

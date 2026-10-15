@@ -182,6 +182,7 @@ function App() {
               onBack={pipeline.handlePipelineBack}
               onViewResults={pipeline.handlePipelineViewResults}
               onRun={pipeline.handlePipelineRun}
+              improve={pipeline.improveActions}
               onOpenCouncil={(councilId) => {
                 requestCouncilView(councilId);
                 council.setCurrentCouncilId(councilId);

@@ -1,0 +1,94 @@
+/**
+ * ImprovementsPanel — lives in the builder's side-panel slot (.step-config-panel).
+ */
+
+.improvements-panel h3 { margin: 0; font-size: 0.95rem; color: var(--text-primary, #e5e5e5); }
+
+.imp-settings {
+  display: flex; flex-direction: column; gap: 0.5rem;
+  padding: 0.6rem 0.7rem; margin: 0.6rem 0 0.8rem;
+  background: var(--bg-tertiary, #1d1d1d);
+  border: 1px solid var(--border-color, #2a2a2a);
+  border-radius: 8px;
+  font-size: 0.75rem; color: var(--text-secondary, #9a9a9a);
+}
+.imp-toggle { display: flex; align-items: center; gap: 0.5rem; color: var(--text-primary, #e5e5e5); font-size: 0.8rem; }
+.imp-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+.imp-label { min-width: 5.5rem; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.8; }
+.imp-hint { font-size: 0.68rem; color: var(--text-secondary, #777); }
+.imp-inline { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.72rem; }
+.imp-inline input[type="number"] { width: 3.2rem; padding: 0.1rem 0.3rem; font-size: 0.72rem; background: var(--bg-secondary, #1a1a1a); color: var(--text-primary, #e5e5e5); border: 1px solid var(--border-color, #2a2a2a); border-radius: 4px; }
+.imp-row select { font-size: 0.72rem; max-width: 14rem; padding: 0.15rem 0.3rem; background: var(--bg-secondary, #1a1a1a); color: var(--text-primary, #e5e5e5); border: 1px solid var(--border-color, #2a2a2a); border-radius: 4px; }
+.imp-scope { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+.imp-seg { display: inline-flex; border: 1px solid var(--border-color, #2a2a2a); border-radius: 6px; overflow: hidden; }
+.imp-seg button { padding: 0.15rem 0.6rem; font-size: 0.72rem; background: transparent; color: var(--text-secondary, #999); border: none; cursor: pointer; }
+.imp-seg button.on { background: #8b5cf630; color: #c4b5fd; }
+
+.imp-section { margin-top: 0.8rem; }
+.imp-section-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.4rem; }
+.imp-section-head.clickable { cursor: pointer; user-select: none; }
+.imp-section-title { font-size: 0.78rem; font-weight: 600; color: var(--text-primary, #e5e5e5); }
+.imp-empty { font-size: 0.72rem; color: var(--text-secondary, #777); padding: 0.4rem 0; }
+.imp-retro-row { display: flex; align-items: center; gap: 0.6rem; }
+
+.imp-btn {
+  padding: 0.22rem 0.6rem; font-size: 0.72rem; border-radius: 6px; cursor: pointer;
+  background: var(--bg-tertiary, #1d1d1d); color: var(--text-primary, #e5e5e5);
+  border: 1px solid var(--border-color, #2a2a2a);
+}
+.imp-btn:hover { background: var(--bg-hover, #333); }
+.imp-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.imp-btn.primary { color: #c4b5fd; border-color: #8b5cf660; }
+.imp-btn.apply { color: #4ade80; border-color: #16a34a60; }
+.imp-btn.reject { color: #fca5a5; border-color: #dc262650; }
+.imp-btn.revert { color: #fcd34d; border-color: #f59e0b50; }
+.imp-link { background: none; border: none; color: #60a5fa; font-size: 0.68rem; cursor: pointer; padding: 0; }
+.imp-link:hover { text-decoration: underline; }
+
+.imp-proposal {
+  border: 1px solid var(--border-color, #2a2a2a); border-left-width: 3px; border-radius: 6px;
+  background: var(--bg-tertiary, #1d1d1d); margin-bottom: 0.4rem;
+}
+.imp-proposal.proposed, .imp-proposal.approved, .imp-proposal.evaluating { border-left-color: #8b5cf6; }
+.imp-proposal.applied { border-left-color: #16a34a; }
+.imp-proposal.rejected, .imp-proposal.invalid, .imp-proposal.stale { border-left-color: #6b7280; opacity: 0.85; }
+.imp-proposal.reverted { border-left-color: #f59e0b; }
+.imp-proposal-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; padding: 0.4rem 0.55rem; font-size: 0.72rem; }
+.imp-proposal-head.clickable { cursor: pointer; user-select: none; }
+.imp-chevron { color: var(--text-secondary, #888); width: 0.7rem; }
+.imp-target { color: var(--text-primary, #e5e5e5); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-proposal-body { padding: 0 0.55rem 0.55rem; display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.72rem; }
+.imp-rationale { color: var(--text-primary, #d4d4d8); }
+.imp-effect { color: var(--text-secondary, #9a9a9a); font-style: italic; }
+.imp-reason { color: #fca5a5; }
+.imp-meta { display: flex; flex-wrap: wrap; gap: 0.6rem; font-size: 0.66rem; color: var(--text-secondary, #777); align-items: center; }
+.imp-actions { display: flex; gap: 0.4rem; }
+
+.imp-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+.imp-diff-col { min-width: 0; }
+.imp-diff-label { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.15rem; }
+.imp-diff-col.before .imp-diff-label { color: #fca5a5; }
+.imp-diff-col.after .imp-diff-label { color: #4ade80; }
+.imp-diff pre {
+  margin: 0; padding: 0.35rem 0.45rem; max-height: 180px; overflow: auto;
+  font-size: 0.66rem; white-space: pre-wrap; word-break: break-word;
+  background: var(--bg-secondary, #141414); border: 1px solid var(--border-color, #2a2a2a); border-radius: 4px;
+  color: var(--text-primary, #d4d4d8);
+}
+.imp-diff-col.before pre { border-color: #dc262630; }
+.imp-diff-col.after pre { border-color: #16a34a30; }
+
+.imp-pill { font-size: 0.62rem; padding: 0.08rem 0.4rem; border-radius: 9999px; white-space: nowrap; }
+.imp-pill.kind { background: #3b82f620; color: #93c5fd; }
+.imp-pill.kind.lesson { background: #f59e0b20; color: #fcd34d; }
+.imp-pill.status.proposed, .imp-pill.status.approved, .imp-pill.status.evaluating { background: #8b5cf620; color: #c4b5fd; }
+.imp-pill.status.applied { background: #16a34a20; color: #4ade80; }
+.imp-pill.status.rejected, .imp-pill.status.invalid, .imp-pill.status.stale { background: #6b728020; color: #9ca3af; }
+.imp-pill.status.reverted { background: #f59e0b20; color: #fcd34d; }
+.imp-pill.score { background: #0ea5e920; color: #7dd3fc; }
+.imp-pill.scope { background: #6366f120; color: #a5b4fc; }
+
+.imp-lesson { display: flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; padding: 0.25rem 0; color: var(--text-primary, #d4d4d8); }
+.imp-lesson-text { flex: 1; }
+.imp-lesson-preview { color: var(--text-primary, #d4d4d8); }

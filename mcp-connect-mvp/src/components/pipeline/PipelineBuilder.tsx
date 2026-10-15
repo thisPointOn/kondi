@@ -9,6 +9,8 @@ import { pipelineStore } from '../../pipeline/store';
 import { buildScheduledOutputDir } from '../../pipeline/scheduler';
 import PipelineGraphView from './PipelineGraphView';
 import StepConfigPanel, { getDefaultConfigForType, BoundCouncilStepPanel } from './StepConfigPanel';
+import ImprovementsPanel, { type ImproveActions } from './ImprovementsPanel';
+import { useImproveStore } from '../../hooks/useImproveStore';
 import { validatePipeline, INPUT_KEY } from '../../pipeline/step-validation';
 import './PipelineBuilder.css';
 
@@ -30,6 +32,8 @@ interface PipelineBuilderProps extends PipelineBuilderPropsExtra {
   onBack: () => void;
   onRun: (pipelineId: string) => void;
   onViewResults: (pipelineId: string) => void;
+  /** Self-improvement actions (retrospect now / apply / revert) — from usePipeline. */
+  improve?: ImproveActions;
 }
 
 export default function PipelineBuilder({
@@ -40,10 +44,15 @@ export default function PipelineBuilder({
   onRun,
   onViewResults,
   onOpenCouncil,
+  improve,
 }: PipelineBuilderProps) {
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [confirmingReset, setConfirmingReset] = useState(false);
+  // Self-improvement side panel (proposals, lessons, settings).
+  const [improveOpen, setImproveOpen] = useState(false);
+  const { state: improveState } = useImproveStore(pipelineId);
+  const pendingProposals = (improveState?.proposals || []).filter((p) => p.status === 'proposed' || p.status === 'approved').length;
   // Pipeline details (name/description/working dir/schedule) are hidden
   // behind the Details toggle.
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -215,6 +224,13 @@ export default function PipelineBuilder({
             >
               ⚙ Details {detailsOpen ? '▾' : '▸'}
             </button>
+            <button
+              className={`builder-details-btn builder-improve-btn ${improveOpen ? 'open' : ''}`}
+              onClick={() => { setImproveOpen((v) => !v); setSelectedStepId(null); setInputSelected(false); }}
+              title="Self-improvement — scorecards, retrospective proposals, lessons"
+            >
+              ✦ Improve{pendingProposals > 0 ? ` (${pendingProposals})` : ''}
+            </button>
           </div>
           <div className="builder-header-actions">
             {isRunning && (
@@ -365,8 +381,8 @@ export default function PipelineBuilder({
           pipeline={pipeline}
           selectedStepId={selectedStepId}
           inputSelected={inputSelected && !selectedStepId}
-          onStepSelect={(id) => { setInputSelected(false); setSelectedStepId(id); }}
-          onSelectInput={() => { setSelectedStepId(null); setInputSelected(true); }}
+          onStepSelect={(id) => { setInputSelected(false); setImproveOpen(false); setSelectedStepId(id); }}
+          onSelectInput={() => { setSelectedStepId(null); setImproveOpen(false); setInputSelected(true); }}
           onAddStep={handleGraphAddStep}
           onRemoveStep={handleGraphRemoveStep}
           onAddSibling={handleAddSibling}
@@ -379,8 +395,16 @@ export default function PipelineBuilder({
         />
       </div>
 
-      {/* Side panel: selected step's config, or (graph mode) the pipeline input */}
-      {selectedStep && (selectedStep.step.config as { boundCouncilId?: string }).boundCouncilId ? (
+      {/* Side panel: self-improvement, selected step's config, or the pipeline input */}
+      {improveOpen && !selectedStep ? (
+        <ImprovementsPanel
+          pipelineId={pipelineId}
+          configuredProviders={configuredProviders}
+          improve={improve}
+          onOpenCouncil={onOpenCouncil}
+          onClose={() => setImproveOpen(false)}
+        />
+      ) : selectedStep && (selectedStep.step.config as { boundCouncilId?: string }).boundCouncilId ? (
         <BoundCouncilStepPanel
           councilId={(selectedStep.step.config as { boundCouncilId?: string }).boundCouncilId!}
           problems={problems.get(selectedStep.step.id)}

@@ -39,6 +39,9 @@ import { recordModelCallFailure, recordModelCallSuccess } from './modelProbe';
 export interface ChatResult {
   message: Message;
   toolCalls: ToolCall[];
+  /** The CONCRETE provider/model that served this call (routed `route:*`
+   *  models resolve per call). Set by chatCompletion after dispatch. */
+  resolved?: { provider: string; model: string };
 }
 
 /** Input for full chat path (multi-turn with tool loop) */
@@ -85,6 +88,14 @@ export interface SimpleCompletionResult {
   content: string;
   tokensUsed: number;
   latencyMs: number;
+  /** Concrete provider/model that answered (routed models resolve per call). */
+  provider?: string;
+  model?: string;
+  /** Real usage when the client reported it; otherwise a chars/4 estimate. */
+  inputTokens?: number;
+  outputTokens?: number;
+  /** True when inputTokens/outputTokens came from the provider, not an estimate. */
+  usageReported?: boolean;
 }
 
 // ============================================================================
@@ -251,6 +262,7 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
   try {
     const result = await dispatch();
     recordModelCallSuccess(model);
+    result.resolved = { provider: prov, model };
     return result;
   } catch (err) {
     recordModelCallFailure(model, prov, err);
@@ -292,12 +304,21 @@ export async function simpleCompletion(params: SimpleCompletionParams): Promise<
   });
 
   const latencyMs = Date.now() - startTime;
-  const inputTokens = estimateTokens(params.systemPrompt + params.userMessage);
-  const outputTokens = estimateTokens(result.message.content);
+  // Prefer the provider-reported usage (API clients fill message.usage); fall
+  // back to a chars/4 estimate when absent or all-zero (CLI clients report 0).
+  const usage = result.message.usage;
+  const reported = !!usage && ((usage.inputTokens || 0) > 0 || (usage.outputTokens || 0) > 0);
+  const inputTokens = reported ? (usage!.inputTokens || 0) : estimateTokens(params.systemPrompt + params.userMessage);
+  const outputTokens = reported ? (usage!.outputTokens || 0) : estimateTokens(result.message.content);
 
   return {
     content: result.message.content,
     tokensUsed: inputTokens + outputTokens,
     latencyMs,
+    provider: result.resolved?.provider,
+    model: result.resolved?.model,
+    inputTokens,
+    outputTokens,
+    usageReported: reported,
   };
 }

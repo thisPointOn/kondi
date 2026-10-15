@@ -14,6 +14,9 @@ import { startScheduler } from '../pipeline/scheduler';
 import type { MCPTool } from '../types/mcp';
 import type { Persona } from '../council/types';
 import { invoke } from '@tauri-apps/api/core';
+import { runImprovementCycle } from '../improve/cycle';
+import { applyProposal, revertProposal } from '../improve/apply';
+import type { ImproveActions } from '../components/pipeline/ImprovementsPanel';
 
 interface UsePipelineParams {
   availableTools: Map<string, { serverId: string; tools: MCPTool[] }>;
@@ -75,17 +78,32 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
    * @param background - If true, uses no-op UI callbacks so the run doesn't
    *                     interfere with the foreground pipeline's state.
    */
-  const createExecutor = (
-    background = false,
-    overrides?: Partial<PipelineExecutorCallbacks>,
-  ): { executor: PipelineExecutor; platform: PlatformAdapter } => {
-    if (!background) {
-      const resolverMap = new Map<string, (approved: boolean) => void>();
-      setGateResolvers(resolverMap);
-    }
+  /** The GUI's LLM invoker — shared by pipeline runs and the self-improvement
+   *  retrospective so both dispatch through llm-router with MCP tools. */
+  const makeInvokeAgent = (): PipelineExecutorCallbacks['invokeAgent'] => async (invocation, persona) => {
+    const filteredTools = invocation.skipTools
+      ? undefined
+      : filterToolsByServerIds(availableTools, invocation.allowedServerIds);
+    const result = await callLLM({
+      model: persona.model,
+      provider: persona.provider,
+      systemPrompt: invocation.systemPrompt,
+      userMessage: invocation.userMessage,
+      skipTools: invocation.skipTools,
+      allowedTools: invocation.allowedTools,
+      temperature: persona.temperature,
+      availableTools: filteredTools,
+      timeoutMs: invocation.timeoutMs, // set by invokeAgentSafe based on role
+      workingDirectory: invocation.workingDirectory,
+      routePhase: roleToPhase(persona.preferredDeliberationRole || 'worker'),
+    });
+    return result;
+  };
 
+  /** The Tauri-backed platform adapter (files, commands, URL fetch). */
+  const makePlatform = (): PlatformAdapter => {
     let platformWorkingDir = '';
-    const tauriPlatform: PlatformAdapter = {
+    return {
       writeFile: (path, content) => invoke('write_local_file', { path, content }),
       readFile: (path) => invoke<string>('read_local_file', { path }).catch(() => null),
       runCommand: (cmd, cwd) => invoke('run_command', { command: cmd, workingDir: cwd }),
@@ -104,28 +122,58 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
         return res.body;
       },
     };
+  };
+
+  /** Self-improvement actions for the Improvements panel (on-demand retro,
+   *  apply, revert). They reuse the same invoker/platform as a run. */
+  const improveActions: ImproveActions = {
+    retrospect: async (pipelineId, runs) => {
+      const platform = makePlatform();
+      platform.setWorkingDir(pipelineStore.get(pipelineId)?.settings.workingDirectory || '');
+      try {
+        await runImprovementCycle(pipelineId, { trigger: 'manual', runs }, {
+          invokeAgent: makeInvokeAgent(),
+          platform,
+          configuredProviders,
+          onLog: (m) => console.log(`[Improve] ${m}`),
+          onAgentThinkingStart: (persona: Persona, startedAt: number) => {
+            setThinkingPersonas(prev => [
+              ...prev.filter(p => p.id !== persona.id),
+              { ...persona, thinkingStartedAt: startedAt } as Persona & { thinkingStartedAt: number },
+            ]);
+          },
+          onAgentThinkingEnd: (persona) => setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id)),
+        });
+      } finally {
+        setThinkingPersonas([]);
+      }
+    },
+    apply: (pipelineId, proposalId) => {
+      const platform = makePlatform();
+      return applyProposal(pipelineId, proposalId, 'user', { platform, configuredProviders });
+    },
+    revert: (pipelineId, proposalId) => {
+      const platform = makePlatform();
+      return revertProposal(pipelineId, proposalId, 'user', { platform, configuredProviders });
+    },
+  };
+
+  const createExecutor = (
+    background = false,
+    overrides?: Partial<PipelineExecutorCallbacks>,
+  ): { executor: PipelineExecutor; platform: PlatformAdapter } => {
+    if (!background) {
+      const resolverMap = new Map<string, (approved: boolean) => void>();
+      setGateResolvers(resolverMap);
+    }
+
+    const tauriPlatform: PlatformAdapter = makePlatform();
 
     const executor = new PipelineExecutor({
-      invokeAgent: async (invocation, persona) => {
-        const filteredTools = invocation.skipTools
-          ? undefined
-          : filterToolsByServerIds(availableTools, invocation.allowedServerIds);
-        const result = await callLLM({
-          model: persona.model,
-          provider: persona.provider,
-          systemPrompt: invocation.systemPrompt,
-          userMessage: invocation.userMessage,
-          skipTools: invocation.skipTools,
-          allowedTools: invocation.allowedTools,
-          temperature: persona.temperature,
-          availableTools: filteredTools,
-          timeoutMs: invocation.timeoutMs, // set by invokeAgentSafe based on role
-          workingDirectory: invocation.workingDirectory,
-          routePhase: roleToPhase(persona.preferredDeliberationRole || 'worker'),
-        });
-        return result;
-      },
+      invokeAgent: makeInvokeAgent(),
       getAvailableTools: () => availableTools,
+      getConfiguredProviders: () => configuredProviders,
+      onImprovementEvent: (e) => console.log('[Improve]', e),
       onStageStart: (idx) => console.log(`[Pipeline] Stage ${idx} started`),
       onStageComplete: (idx) => console.log(`[Pipeline] Stage ${idx} completed`),
       onStepStart: (stepId) => console.log(`[Pipeline] Step ${stepId} started`),
@@ -347,5 +395,6 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
     handlePipelineRun,
     handleRetryStep,
     runCouncilWorkflow,
+    improveActions,
   } as const;
 }

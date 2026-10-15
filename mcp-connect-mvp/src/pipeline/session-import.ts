@@ -180,6 +180,22 @@ export async function importCliSession(filePath: string): Promise<string> {
     if (cdata.outputs.length > 0) {
       councilDataStore.setItem(`outputs-${councilId}`, JSON.stringify(cdata.outputs));
     }
+    // Self-improvement: the step's resolved input (enables replay of CLI runs)
+    if (cdata.stepInput) {
+      councilDataStore.setItem(`step-input-${councilId}`, JSON.stringify(cdata.stepInput));
+    }
+  }
+
+  // 3b. Self-improvement state + scorecards (keys match src/improve/store.ts)
+  if (session.improve) {
+    for (const card of session.improve.scorecards || []) {
+      if (card?.pipelineId && card?.runId) {
+        councilDataStore.setItem(`scorecard-${card.pipelineId}-${card.runId}`, JSON.stringify(card));
+      }
+    }
+    if (session.improve.state?.pipelineId) {
+      councilDataStore.setItem(`improve-${session.improve.state.pipelineId}`, JSON.stringify(session.improve.state));
+    }
   }
 
   // 4. Trigger store notification so GUI refreshes

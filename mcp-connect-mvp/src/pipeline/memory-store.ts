@@ -139,14 +139,37 @@ export function formatEntryCapture(entry: MemoryEntry, stepName: string): string
 // Run Numbering
 // ============================================================================
 
+export function getScorecardsFilePath(workingDir: string, pipelineId: string): string {
+  return `${getMemoryDir(workingDir)}/${pipelineId}_scorecards.jsonl`;
+}
+
+/**
+ * Next run number = 1 + the highest run number seen in EITHER the memory
+ * JSONL (only written when maintainMemory is on) OR the scorecards JSONL
+ * (written for every run with a working directory). Without the second
+ * source every run was `run_001` whenever memory was off.
+ */
 export async function getNextRunNumber(
   platform: PlatformAdapter,
   workingDir: string,
   pipelineId: string
 ): Promise<number> {
   const entries = await readAllEntries(platform, workingDir, pipelineId);
-  if (entries.length === 0) return 1;
-  const maxRun = Math.max(...entries.map((e) => e.runNumber));
+  let maxRun = entries.length > 0 ? Math.max(...entries.map((e) => e.runNumber)) : 0;
+  if (platform.readFile) {
+    try {
+      const raw = await platform.readFile(getScorecardsFilePath(workingDir, pipelineId));
+      if (raw) {
+        for (const line of raw.split('\n')) {
+          if (!line.trim()) continue;
+          try {
+            const n = (JSON.parse(line) as { runNumber?: number }).runNumber;
+            if (typeof n === 'number' && n > maxRun) maxRun = n;
+          } catch { /* skip bad line */ }
+        }
+      }
+    } catch { /* no scorecards yet */ }
+  }
   return maxRun + 1;
 }
 

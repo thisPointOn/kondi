@@ -3,6 +3,9 @@
  * Councils as Workflow Steps — ordered stages with parallel steps
  */
 
+import type { SelfImproveSettings } from '../improve/types';
+export type { SelfImproveSettings } from '../improve/types';
+
 // ============================================================================
 // Step & Pipeline Status
 // ============================================================================
@@ -62,6 +65,10 @@ export interface StepArtifact {
     outputId?: string;
     model?: string;
     tokensUsed?: number;
+    /** Concrete models that answered in this step's council (from the ledger). */
+    models?: string[];
+    /** Estimated USD cost of the step's council (from the ledger). */
+    costUsd?: number;
     outputPath?: string;   // file path where output was saved (planning/coding steps)
     outputType?: OutputType; // what kind of data this artifact represents
     stepName?: string;     // human-readable name of the producing step
@@ -114,6 +121,10 @@ export interface RunManifest {
   totalDurationMs: number;
   /** Whether memory was updated from this run */
   memoryUpdated: boolean;
+  /** Self-improvement run id (matches `_scorecard.json` and the improve store). */
+  runId?: string;
+  /** Path of the per-run scorecard, when written. */
+  scorecardPath?: string;
 }
 
 /** Step metadata written to _meta.json */
@@ -399,6 +410,9 @@ export interface Pipeline {
     failurePolicy: 'stop' | 'skip_step';
     schedule?: PipelineSchedule;
     outputConfig?: PipelineOutputConfig;
+    /** Self-improvement loop (see `src/improve/`). Absent = disabled; scorecards
+     *  are still built for every run. */
+    selfImprove?: SelfImproveSettings;
   };
   status: PipelineStatus;
   currentStageIndex: number;
@@ -424,6 +438,8 @@ export interface KondiSessionCouncilData {
   plan: any | null;
   directive: any | null;
   outputs: any[];
+  /** Self-improvement: the step's resolved input record (`step-input-<id>`). */
+  stepInput?: any | null;
 }
 
 export interface KondiSession {
@@ -433,6 +449,8 @@ export interface KondiSession {
   pipeline: Pipeline;
   councils: any[];
   councilData: Record<string, KondiSessionCouncilData>;
+  /** Self-improvement: per-pipeline state + retained scorecards (`improve-<pid>`, `scorecard-<pid>-<runId>`). */
+  improve?: { state: any | null; scorecards: any[] };
   execution: {
     status: 'completed' | 'failed';
     startedAt: string;

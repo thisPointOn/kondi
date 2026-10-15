@@ -29,6 +29,7 @@ Builds are currently **unsigned**, so those warnings are expected and harmless. 
 11. [CLI Pipeline Runner](#11-cli-pipeline-runner)
 12. [Search Service](#12-search-service)
 13. [Settings and Configuration](#13-settings-and-configuration)
+14. [Self-Improvement](#14-self-improvement)
 
 ---
 
@@ -821,6 +822,8 @@ npx tsx cli/run-pipeline.ts <pipeline.json> [--working-dir <path>] [--model <mod
 | `--working-dir <path>` | Override the working directory for all steps |
 | `--model <model>` | Override the default model for all LLM calls |
 | `--dry-run` | Validate the pipeline without executing |
+| `--improve` | After the run, review suggested pipeline improvements (see section 14) |
+| `--auto-approve` | With `--improve`: apply suggestions without asking |
 
 ### How It Works
 
@@ -904,6 +907,56 @@ All council, pipeline, ledger, and context data routes through an in-memory `Cou
 ### Quota Recovery
 
 The in-memory `CouncilDataStore` prevents localStorage's ~5 MB limit from crashing pipelines. After each pipeline step completes, `stripCompletedCouncil()` trims only the localStorage copy of council metadata to keep the cache small. The authoritative data remains accessible in memory for the rest of the session.
+
+## 14. Self-Improvement
+
+Kondi can score every pipeline run and, if you opt in, suggest improvements to the pipeline itself. Technical details are in `docs/SPEC.md` section 4f.
+
+### Run metrics (always on)
+
+After every completed or failed run, Kondi records a scorecard: tokens, estimated cost, duration, revisions, review outcomes, errors and per-step flags such as "revise loop" or "tool narration". The latest scorecard and a trend across runs appear in the strip at the top of the pipeline results view. Each run folder also gets `_scorecard.json`, and each step gets an `_input.md` showing exactly what it received. No model calls are used for this.
+
+### Turning on suggestions
+
+1. Open the pipeline in the builder and click **Improve** in the header (it shows the number of pending proposals).
+2. Tick **Enable**. Choose a mode:
+   - **Manual** (default): suggestions wait in the panel for you. Runs are never held up.
+   - **Auto**: suggestions are applied automatically. You can switch back to manual at any time, even mid-run.
+3. Choose which kinds of change are allowed (prompts, tasks, settings; models, router and structure are off by default), the retrospective model, and optionally a scoring mode:
+   - **none**: just queue suggestions.
+   - **judge only**: a model rates each suggestion on the evidence (cheap).
+   - **replay + judge**: the step is re-run with the change on its recorded input and a blind judge compares old vs new. Coding steps and steps backed by a saved council are rated judge-only.
+4. Run the pipeline. When it finishes, a retrospective council reviews the run.
+
+### Reviewing proposals
+
+Each proposal shows the target step and persona, the before and after text, the reasoning, the evidence, and a score if scoring was on. You can **approve**, **reject**, **apply**, and later **revert**. A proposal is marked stale if the thing it changes was edited since, and invalid if applying it would break the step. Use **open retrospective** to read the council that produced it.
+
+### Retrospect now
+
+Click **Retrospect now** to review the last few runs on demand without waiting for another run.
+
+### Lessons
+
+Besides edits, the retrospective can propose short **lessons** (for example "always include a test plan"). Once applied they are added to the prompts of the relevant roles on later runs. The panel lists lessons in effect; click **mute** to stop one.
+
+### Command line
+
+```bash
+# review recent runs of a pipeline and approve proposals one by one
+npx tsx cli/improve.ts pipeline.json --runs 3 --write-back
+
+# options: --eval none|judge|replay, --retro-model <provider/model>, --deep,
+#          --auto-approve, --write-back [file], --status
+kondi improve pipeline.json --status
+
+# retrospect right after a run
+kondi pipeline pipeline.json --improve [--auto-approve]
+```
+
+Applied changes stay in the CLI's state unless you pass `--write-back`, which writes the updated pipeline JSON.
+
+---
 
 ---
 

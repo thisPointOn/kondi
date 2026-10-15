@@ -3,7 +3,7 @@
 > Machine-readable living spec. Single source of truth for current types, defaults, keys, and flags.
 > For architectural rationale and deep "why" explanations, see `ARCHITECTURE.md`.
 >
-> **Last updated:** 2026-08-06
+> **Last updated:** 2026-10-15
 
 ---
 
@@ -34,6 +34,8 @@ mcp-connect-mvp/
       input-template.ts          # Shared {{input}}/{{file}} template rendering (§5a-2)
       output-parsers.ts          # isOpenAIModel(), stream-json parsing
       council-migration.ts       # Gives every council a pipeline home (§4e)
+      memory-store.ts            # Run memory + scorecards JSONL paths, getNextRunNumber
+    improve/                     # Self-improvement loop (§4f): types, hash, step-input, store, run-metrics, lessons, mutate, retrospective, apply, eval, cycle
     council/
       types.ts                   # Phases, entry types, roles, modes, artifacts
       factory.ts                 # createCouncilFromSetup() — default values
@@ -67,6 +69,7 @@ mcp-connect-mvp/
     node-platform.ts             # Node.js PlatformAdapter (fs, child_process)
     localStorage-shim.ts         # In-memory Storage polyfill for CLI
     session-export.ts            # Export CLI session for GUI import
+    improve.ts / improve-cli.ts  # `kondi improve` retrospective CLI + shared review helpers (§4f)
   kondi-mcp-proxy/src/           # Node.js MCP proxy process
 docs/
   ARCHITECTURE.md                # Deep architectural rationale (24KB)
@@ -134,7 +137,7 @@ The `nvidia` profile is single-provider (`allowedProviders: ['nvidia-router']`),
 - **Phase hint** (`routePhase`, type `LedgerPhase`): threaded from call sites. Council role → phase via `roleToPhase()`: manager→`dispatch`, consultant→`discuss`, worker→`execute`, reviewer→`reflect`; chat defaults to `discuss`. Persona role read from `persona.preferredDeliberationRole`.
 - **Tiers** (in `router/index.ts`): profile pin (`rolePinning[phase]`) → intent classifier (cheap LLM picks per phase) → rule fallback (capability/cost heuristics). The learned NN tier from kondi-chat is **not** ported (needs offline-trained weights).
 - **Files**: `router/{types,registry,profiles,rules,intent-router,index}.ts` (core), `router/profile-options.ts` (pure helpers, CLI/selector-safe), `router/resolve.ts` (webview resolution via simpleCompletion + auth-profiles). CLI routing lives in `cli/llm-caller.ts` (own resolution, classifier recurses through the CLI caller).
-- **Cost**: `services/cost.ts` estimates per-entry/total USD from ledger `tokensUsed` + `getModelCostRates` (blended rate; routed entries are approximate since the concrete model isn't recorded on the ledger). Shown in `DeliberationView` agent breakdown.
+- **Cost**: `services/cost.ts` estimates per-entry/total USD from ledger `tokensUsed` + `getModelCostRates` (blended rate; `LedgerEntry.model` now records the CONCRETE model per call — routed `route:*` personas resolve per call — and scorecards use the precise input/output split when `inputTokens`/`outputTokens` are present, §4f). Shown in `DeliberationView` agent breakdown.
 
 ---
 
@@ -217,6 +220,57 @@ There is no standalone Councils UI: no sidebar section, no council tile/grid lib
 - **Builder UI**: `PipelineBuilder` renders `StepConfigPanel.tsx`'s exported `BoundCouncilStepPanel` INSTEAD OF the normal `StepConfigPanel` whenever `step.config.boundCouncilId` is set (a separate component, so the two panels' hook order can never mix). It shows the bound council's live name/personas/task (subscribed to `councilStore`) and an "Open deliberation & edit" button (`onOpenCouncil`) that routes to the council's own editor; persona editing happens there, not in the pipeline step config. `PipelineGraphView.getStepSummary()` likewise reads the bound council's LIVE persona count for bound steps (not the empty shell's `councilSetup.personas`).
 - **Validation**: `pipeline/step-validation.ts`'s `validateCouncilStep` short-circuits to `validateBoundCouncil(councilId, configuredProviders)` when `boundCouncilId` is set — checking the live council's personas (missing model/provider, unconfigured provider) instead of the empty shell, which would otherwise wrongly report "No personas configured" and block every migrated pipeline from running (§5a-6).
 - **Launch-time model validation**: bound steps skip the executor's normal council-creation path, so `usePipeline.ts`'s `handlePipelineRun` walks every stage/step up front and calls `validateCouncilModels(bound, configuredProviders)` (§3d) for each `boundCouncilId` found — same throw-never-substitute semantics as any other council launch — before creating the executor and running.
+
+### 4f. Self-Improvement Loop (`src/improve/`)
+
+Two layers: **measurement (always on, no LLM)** and **the improvement cycle (opt-in, `Pipeline.settings.selfImprove`)**. No new step type, phase, or ledger entry type is introduced (CLAUDE.md rule 1 unaffected).
+
+**Ledger additions.** `LedgerEntry` (`council/types.ts`) gained optional `model, provider, inputTokens, outputTokens, attempts, routed` — the CONCRETE model used per call (routed personas resolve per call). Both orchestrators' `invokeAgentSafe` attach `response.structured.callMeta` (`CallMeta`, `improve/types.ts`) and `createEntry` lifts it. `AgentResponse`/`CallerResult`/`SimpleCompletionResult` carry `provider/model/inputTokens/outputTokens`; GUI `simpleCompletion` prefers provider-reported usage (`usageReported`) over the chars/4 estimate; `chatCompletion` sets `ChatResult.resolved`; CLI `callLLM` stamps resolved provider/model via `dispatchLLM`. Coding orchestrator `createEntry` takes `structured`: `code_review` entries carry `verdict` + `issueCounts`, `test_result` entries carry `exitCode`.
+
+**Manifest/artifact fields.** `StepArtifact.metadata.tokensUsed/models/costUsd` are now set from the ledger (manifest totals used to be 0). `RunManifest.runId` / `scorecardPath` (`pipeline/types.ts`). The executor no longer overwrites the coding orchestrator's honest `completionSummary` (§4b); it appends the abbreviated summary below it.
+
+**Scorecards.** `PipelineExecutor.finishRunHook` runs after every `completed` and `failed` run (not aborted): `buildRunScorecard` (`run-metrics.ts`) → `improveStore.saveScorecard` + `<runDir>/_scorecard.json` + append to `<wd>/.kondi/memory/<pipelineId>_scorecards.jsonl` (`getScorecardsFilePath`). `runId` (`newRunId()`: `<ISO>-<8 hex>`) is independent of run numbering; `getNextRunNumber` also reads the scorecards JSONL so runs number correctly when memory is off. `RunScorecard` = `{version:1, runId, pipelineId, pipelineName, runNumber?, startedAt, completedAt, status, totalTokens, totalCostUsd, totalDurationMs, steps: StepScore[], recipeHash}`; `StepScore` has tokens/cost/rounds/revisions/`reviewOutcomes`/`firstTryAccept`/`errors`/`terminalPhase`/`testResults`/`seats: SeatMetrics[]` and mechanical `flags` (`revise_loop, max_revisions_hit, re_deliberated, empty_output, tool_narration, json_invalid, consultant_errors, retries, honest_failure, tests_failed, step_failed`). `aggregateAcrossRuns` yields `RunAggregate` (per-step `StepTrend`, per-run series). `RunMetricsStrip` (top of `PipelineResultsView`) shows the latest scorecard + cross-run trend.
+
+**Step input capture.** The executor saves a `StepInputRecord` per council step (bound and unbound; `kind: 'unbound' | 'bound'`; key `step-input-<councilId>`) holding the exact `rawProblem` the orchestrator received plus task/template/rendered input, and writes `_input.md` beside `output.md`.
+
+**Settings (`SelfImproveSettings`, defaults `DEFAULT_SELF_IMPROVE` in `improve/types.ts`; merge with `withSelfImproveDefaults`).**
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `enabled` | `false` | Run the cycle after each run |
+| `mode` | `'manual'` | `manual` queues; `auto` applies. Re-read live at hook time and before each apply |
+| `scope` | prompts/tasks/settings `true`; models/router/structure `false` | Which proposal kinds the retro may emit (`allowedKinds`) |
+| `evalMode` | `'none'` | `none` \| `judge-only` \| `replay` |
+| `retro` | `{provider:'router', model:'route:balanced'}` (+ `deep?`) | Retrospective model; `deep` adds manager + 2 consultants |
+| `judge` | unset (= retro model) | Judge model |
+| `autoApplyMinScore` | `0.7` | Auto mode applies only if `score.total >=` this (when an eval ran) |
+| `maxProposalsPerRun` | `5` | Cap on retro proposals |
+| `maxRetainedRetros` | `20` | `[Improve]` councils kept before `pruneImproveCouncils` |
+| `lessons` | `{enabled:true, maxChars:2000}` | Lesson injection toggle + character budget |
+
+**Cycle (`cycle.ts` `runImprovementCycle(pipelineId, {trigger:'post-run'|'manual', runs?, settingsOverride?}, deps)`).** Post-run reviews the last 1 scorecard, manual the last 5 (CLI `--runs` default 3); post-run is skipped when disabled. Never throws, never alters run status (failures → `error` `ImproveEvent`). Steps: `runRetrospective` → proposals + `lessonsAsProposals` saved via `improveStore.addProposals` → if `evalMode !== 'none'`, `evaluateProposals` → decide. **Manual mode is non-blocking** (queued; run/CLI complete). **Auto mode** loops proposals, re-reading `mode` before each `applyProposal(..., 'auto')`, skipping proposals below `autoApplyMinScore`. Finally `pruneImproveCouncils`.
+
+**Retrospective (`retrospective.ts`).** An ordinary council: `createCouncilFromSetup` with `pipelinePrefix '[Improve]'`, `pipelineId` set (rule 21 home), `stepType 'council'`, `outputType 'json'`, `maxRounds 0` (1 when `deep`), `maxRevisions 0`, `saveDeliberation false`, `bootstrapContext false`. Because the orchestrator works from the raw problem, the instruction (`buildRetroTask`) is joined into the raw problem with the evidence bundle (`buildRetroBundle`: recipe, latest scorecard, cross-run trends, lessons in effect, recent proposal history, ledger evidence, allowed kinds; capped at 24,000 chars). Output `{proposals:[], lessons:[]}` is parsed by `parseProposalSet`, which resolves each target against the LIVE pipeline and drops unknown kinds/steps/personas, no-op changes, and duplicates.
+
+**Proposal (`Proposal`).** `{id, pipelineId, runId, retroCouncilId, kind, target, before, after, rationale, expectedEffect, evidence{stepIds, ledgerEntryIds?, metrics?, quotes?}, configHash, appliedConfigHash?, score?, status, reason?, createdAt, decidedAt?, appliedAt?, revertedAt?}`. Kinds: `persona_prompt, focus_area, worker_prompt, step_task, expected_output, decision_criteria, council_setting, lesson, model_swap, router_profile, structure`. Status: `proposed, evaluating, approved, rejected, applied, reverted, stale, invalid`. `target` = `{stepId, stepName, bound?{councilId, personaId?}, persona?{index,name,role}, path?}` — unbound personas have no stable id so index + name are both checked at apply time; bound councils target by `councilId`/`personaId`. `council_setting` paths: `maxRounds, maxRevisions, maxDebugCycles, maxReviewCycles, testCommand, expectedOutput, decisionCriteria` (integers bounds-checked).
+
+**Apply / revert (`apply.ts`, `mutate.ts`).** `approveProposal`/`rejectProposal`/`applyProposal(pipelineId, id, by: 'user'|'auto'|'cli', {platform, configuredProviders})`/`revertProposal`. Unbound: deep-clone config → `applyToConfig` → `validateStep` (only NEW problems block → `invalid`) → `pipelineStore.updateStepConfig`. Bound: `applyToCouncil` → `councilStore.updatePersona/setRoleAssignments/setSavedProblem/update`; a Zod throw → `rejected` with the reason. **Staleness:** `configHash` (step config hash or `boundCouncilHash`) must match, OR (`isApplicable` rebase) the exact field must still equal the proposal's `before` — so sibling proposals from one retro don't stale each other; otherwise `stale`. `appliedConfigHash` is recorded after apply; revert refuses if the target hash moved. `worker_prompt` requires `## COMPLETION SUMMARY` (`COMPLETION_SUMMARY_RE`) and sets `suppressPersona:false` in the same write; revert restores both. Every apply/revert appends a `ChangelogEntry`. `router_profile` and `structure` are parsed but `applyProposal` marks them `invalid`.
+
+**Lessons (`lessons.ts`).** `Lesson {id,text,scope:'all'|SeatRole,stepId?,source,createdAt,confirmations,active}`. Applying a `lesson` proposal upserts into `improve-<pid>` (re-learning an identical text bumps `confirmations`); revert deactivates; the panel can mute. At step launch the executor builds `OrchestratorConfig.lessons` via `buildLessonBundle(state, stepId, maxChars)` (active, global-or-this-step, most-confirmed/newest first, role-grouped, char-capped); both orchestrators append `formatLessonsBlock` (`LESSONS FROM PREVIOUS RUNS …`) to each persona's user message immediately after the word-limit injection, filtered by that persona's role. `writePatterns` mirrors lessons to `<wd>/.kondi/memory/<pid>_patterns.json` as a SUPERSET `{patterns: string[], lessons: Lesson[], updatedAt}` so `{{memory.patterns}}` still works.
+
+**Eval (`eval.ts`).** `replay`: `replayStep` builds a council from the mutated step config (tool-less, no working dir, `[Improve]`-tagged, `pipelineId` set) and runs `DeliberationOrchestrator` DIRECTLY on the recorded input — never a second `PipelineExecutor`. If the proposal changed `task`, the recorded parts are re-joined around the new task; changing `inputTemplate` is not supported (no such proposal kind). Judge: worker-only `[Improve] Judge` council, blind, position-swapped (baseline=A/candidate=B then swapped); disagreement → 0.5. `ProposalScore.total = 0.7·judge + 0.3·mechanical` (mechanical = revisions, first-try accept, flags, cost ratio, JSON validity vs baseline). `judge-only` rates the proposal on evidence alone. Replayable = unbound, non-coding, `outputType` string/json, with a recorded input; everything else (coding steps, bound councils) falls back to `judge-only` (v1).
+
+**Storage.** councilDataStore key prefixes `improve-` (`ImproveState {version:1, pipelineId, proposals, lessons, changelog, scorecardIds}`), `scorecard-<pid>-<runId>` (`RunScorecard`), `step-input-<councilId>` (`StepInputRecord`) — registered in `storage-cleanup.ts`. Window event `kondi-improve-updated` (`KONDI_IMPROVE_EVENT`); `useImproveStore(pipelineId)` subscribes. Session export/import carry them (`KondiSession.improve = {state, scorecards}`, `KondiSessionCouncilData.stepInput`).
+
+**UI.** `ImprovementsPanel` (builder header "✦ Improve (N pending)", side-panel slot): settings (enable, manual/auto, eval mode, retro/judge model, scope, limits), proposal queue with before/after, evidence and "open retrospective", approve/reject/apply/revert, "Retrospect now", lessons in effect (mute), history. `usePipeline` exposes `improveActions` (retrospect / apply / revert) sharing `makeInvokeAgent()`/`makePlatform()` with runs. `PipelineExecutorCallbacks` gained `onImprovementEvent` and `getConfiguredProviders`.
+
+**CLI.** `npx tsx cli/improve.ts <pipeline.json|id> [--runs N] [--eval none|judge|replay] [--retro-model prov/model] [--deep] [--auto-approve] [--write-back [file]] [--status]` (also `kondi improve`, npm script `improve`); `--eval judge` = `judge-only`. `kondi pipeline … --improve [--auto-approve]` (§7) enables the cycle for that run (manual mode reviews interactively; `--auto-approve` sets mode `auto`). Applied changes live in CLI state unless `--write-back`.
+
+**Tests.** `vitest.config.ts` + `tests/setup/browser-shims.ts`; `tests/improve/*.test.ts` (64 tests) document exact behaviour.
+
+**Known limits.** Bound-council and coding steps are judge-only (no replay). `model_swap` is gated off by default (`scope.models`) and does not yet run launch-time `validateCouncilModels` (§3d). `router_profile`/`structure` kinds are parsed but not applicable. Replay of an `inputTemplate` change is unsupported.
+
+---
 
 ---
 
@@ -447,6 +501,8 @@ Entry point: `npx tsx cli/run-pipeline.ts <pipeline.json> [options]`
 | `--model <model>` | Override model for all LLM steps |
 | `--name <name>` | Select pipeline by name (multi-pipeline files) |
 | `--dry-run` | Print structure without executing |
+| `--improve` | After the run, retrospect and review proposals interactively (enables `selfImprove`, manual mode; §4f) |
+| `--auto-approve` | With `--improve`: mode `auto` — apply proposals without asking |
 
 ### Routing
 `callLLM()` checks `isOpenAIModel(model)`:
@@ -546,6 +602,9 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 | `outputs-{councilId}` | council/context-store.ts | OutputArtifact[] |
 | `ledger-index-{councilId}` | council/ledger-store.ts | LedgerIndex |
 | `ledger-chunk-{councilId}-{n}` | council/ledger-store.ts | LedgerEntry[] (chunked) |
+| `improve-{pipelineId}` | improve/store.ts | ImproveState (proposals, lessons, changelog, scorecard index) |
+| `scorecard-{pipelineId}-{runId}` | improve/store.ts | RunScorecard (capped 50/pipeline) |
+| `step-input-{councilId}` | improve/step-input.ts | StepInputRecord (replay input) |
 
 ### Storage Architecture (`council/storage-cleanup.ts`)
 

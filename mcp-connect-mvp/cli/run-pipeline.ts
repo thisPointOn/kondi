@@ -28,6 +28,9 @@ import { ensureWorkdirGitInit } from './workdir-isolate';
 import { roleToPhase } from '../src/router/profile-options';
 import { createNodePlatform } from './node-platform';
 import { exportSession } from './session-export';
+import { improveStore } from '../src/improve/store';
+import { withSelfImproveDefaults } from '../src/improve/types';
+import { reviewProposals, printImproveState } from './improve-cli';
 
 // ── ANSI colors ──
 const C = {
@@ -92,6 +95,8 @@ function parseArgs() {
   let model: string | null = null;
   let pipelineName: string | null = null;
   let dryRun = false;
+  let improve = false;
+  let autoApprove = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--working-dir' && args[i + 1]) {
@@ -102,6 +107,10 @@ function parseArgs() {
       pipelineName = args[++i];
     } else if (args[i] === '--dry-run') {
       dryRun = true;
+    } else if (args[i] === '--improve') {
+      improve = true;
+    } else if (args[i] === '--auto-approve') {
+      autoApprove = true;
     } else if (args[i] === '--help' || args[i] === '-h') {
       console.log(`
 ${C.bold}Kondi CLI Pipeline Runner${C.reset}
@@ -114,6 +123,9 @@ Options:
   --model <model>        Override the model for all LLM steps
   --name <name>          Select pipeline by name (when file contains multiple)
   --dry-run              Print pipeline structure without running
+  --improve              After the run, retrospect on it and review proposed recipe
+                         improvements interactively (self-improvement loop)
+  --auto-approve         With --improve: apply every proposal without asking
   --help                 Show this help
 
 Accepts two JSON formats:
@@ -137,7 +149,7 @@ Output:
     process.exit(1);
   }
 
-  return { pipelineFile, workingDir, model, pipelineName, dryRun };
+  return { pipelineFile, workingDir, model, pipelineName, dryRun, improve, autoApprove };
 }
 
 // ── Load pipeline JSON ──
@@ -455,8 +467,18 @@ function formatDuration(ms: number): string {
 
 // ── Main ──
 async function main() {
-  const { pipelineFile, workingDir, model, pipelineName, dryRun } = parseArgs();
+  const { pipelineFile, workingDir, model, pipelineName, dryRun, improve, autoApprove } = parseArgs();
   const pipeline = loadPipeline(pipelineFile, workingDir, model, pipelineName);
+
+  // --improve: turn the post-run retrospective on for this run. Manual mode
+  // queues proposals (reviewed interactively below); --auto-approve applies them.
+  if (improve) {
+    pipeline.settings.selfImprove = {
+      ...withSelfImproveDefaults(pipeline.settings.selfImprove),
+      enabled: true,
+      mode: autoApprove ? 'auto' : 'manual',
+    };
+  }
 
   printPipelineStructure(pipeline);
 
@@ -482,11 +504,11 @@ async function main() {
       }
     }
   } else {
-    // Manually write into localStorage since create() generates a new id
-    const data = JSON.parse(storage.getItem('mcp-pipelines') || '{"version":5,"pipelines":[],"lastUpdated":""}');
-    data.pipelines.push(pipeline);
-    data.lastUpdated = new Date().toISOString();
-    storage.setItem('mcp-pipelines', JSON.stringify(data));
+    // Import keeps the file's id (no collision — we just checked). Going through
+    // the store matters: it writes via councilDataStore's in-memory cache, which
+    // a raw storage.setItem bypasses once the key has been read (the executor
+    // then saw "Pipeline not found" whenever the CLI state already had pipelines).
+    pipelineStore.import([pipeline]);
   }
 
   // Resolve and validate working dir
@@ -647,6 +669,12 @@ async function main() {
 
     onGateWaiting: promptGate,
 
+    onImprovementEvent: (e) => {
+      if (e.type === 'proposals') log(C.magenta, 'Improve', `${e.count} proposal(s) from the retrospective`);
+      else if (e.type === 'applied') log(C.green, 'Improve', `applied ${e.proposalId}`);
+      else if (e.type === 'error') log(C.red, 'Improve', e.message);
+    },
+
     onCouncilCreated: (stepId, councilId) => {
       log(C.blue, 'Council', `Created ${councilId} for step ${stepId}`);
       // Record council ID in execution log
@@ -692,6 +720,18 @@ async function main() {
 
     // Save execution report
     saveExecutionReport(pipeline, effectiveWorkingDir, startTime, 'completed');
+
+    // --improve (manual mode): the executor's post-run hook already ran the
+    // retrospective and queued proposals — review them now, on the terminal.
+    if (improve && !autoApprove) {
+      const pending = improveStore.get(pipeline.id).proposals.filter((p) => p.status === 'proposed');
+      await reviewProposals(pipeline.id, pending, { platform });
+      if (pending.length) {
+        console.log(`${C.dim}Applied changes live in the CLI state; run "kondi improve ${pipelineFile} --status" to inspect, or re-run with --improve again.${C.reset}`);
+      }
+    } else if (improve) {
+      printImproveState(pipeline.id);
+    }
 
     // Export session for GUI import
     exportSession(pipeline.id, storage, {
