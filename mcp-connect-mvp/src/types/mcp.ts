@@ -74,6 +74,35 @@ export interface Message {
   attachments?: MessageAttachment[];
   /** Token usage from the API response (assistant messages only) */
   usage?: MessageUsage;
+  /** A council escalated from this chat — live status card (see services/councilRunService). */
+  councilRun?: CouncilRunCard;
+}
+
+export type CouncilRunStatus = 'generating' | 'running' | 'done' | 'failed' | 'cancelled';
+
+export interface CouncilRunResult {
+  status: 'done' | 'failed' | 'cancelled';
+  phase?: string;
+  output?: string;
+  decision?: string;
+  metadata?: { branch?: string; patchPath?: string; filesChanged?: string[]; councilId?: string };
+}
+
+/** Live state of a council escalated from a chat (rendered by CouncilRunCard). */
+export interface CouncilRunCard {
+  status: CouncilRunStatus;
+  task: string;
+  councilId?: string;
+  councilName?: string;
+  pipelineId?: string;
+  phase?: string;
+  thinking: string[];
+  /** Last ~1200 chars of streamed text / tool calls. */
+  tail?: string;
+  startedAt: number;
+  finishedAt?: number;
+  error?: string;
+  result?: CouncilRunResult;
 }
 
 export type CollaborationMode = 'single' | 'collaborate' | 'debate';

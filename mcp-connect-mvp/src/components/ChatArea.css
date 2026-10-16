@@ -1371,3 +1371,53 @@
 .tools-combo-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: #777; margin-bottom: 2px; }
 .tools-combo-detail pre { margin: 0; padding: 8px; background: #111; border: 1px solid #1f1f1f; border-radius: 6px; font-family: 'SF Mono', Monaco, monospace; font-size: 11.5px; max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #cbd5e1; }
 .tools-combo-section.error pre { color: #f87171; border-color: rgba(248,113,113,0.3); }
+
+/* ── Chat → council escalation ───────────────────────────────────────────── */
+.escalate-btn {
+  position: absolute;
+  right: 42px;
+  top: 6px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #333);
+  background: transparent;
+  color: var(--text-secondary, #999);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.escalate-btn:hover { color: #8b5cf6; border-color: #8b5cf680; }
+.escalate-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.council-run-card {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #8b5cf640;
+  border-radius: 10px;
+  background: #8b5cf608;
+  font-size: 0.78rem;
+}
+.council-run-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.council-run-dot { width: 8px; height: 8px; border-radius: 50%; background: #8b5cf6; }
+.council-run-dot.running, .council-run-dot.generating { animation: councilPulse 1.2s ease-in-out infinite; }
+.council-run-dot.done { background: #16a34a; }
+.council-run-dot.failed { background: #dc2626; }
+.council-run-dot.cancelled { background: #9ca3af; }
+@keyframes councilPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.council-run-title { font-weight: 600; }
+.council-run-status { color: var(--text-secondary, #999); text-transform: capitalize; }
+.council-run-elapsed { color: var(--text-tertiary, #777); font-variant-numeric: tabular-nums; margin-left: auto; }
+.council-run-open {
+  border: 1px solid #8b5cf680; background: transparent; color: #8b5cf6;
+  border-radius: 6px; padding: 0.2rem 0.5rem; cursor: pointer; font-size: 0.72rem;
+}
+.council-run-open:hover { background: #8b5cf615; }
+.council-run-thinking { margin-top: 0.35rem; color: var(--text-secondary, #999); font-style: italic; }
+.council-run-tail {
+  margin: 0.35rem 0 0; max-height: 6rem; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.7rem; line-height: 1.35;
+  color: var(--text-secondary, #999); background: var(--bg-tertiary, #121212); border-radius: 6px; padding: 0.4rem 0.5rem;
+}
+.council-run-meta { margin-top: 0.35rem; color: var(--text-secondary, #999); }
+.council-run-meta code { font-size: 0.7rem; }

@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { getToolTimeoutMs } from './localTools';
 import { throwIfAborted } from '../agent-runtime/signals';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
@@ -341,7 +342,7 @@ export class OpenAIClient {
             toolCall.status = 'running';
             console.log('[OpenAI] Calling tool:', toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);
 
-            const TOOL_CALL_TIMEOUT = 300_000; // 5 min per tool call
+            const TOOL_CALL_TIMEOUT = getToolTimeoutMs(toolInfo.tool.name); // per tool (convene_council runs for minutes)
             const toolPromise = toolInfo.serverId === LOCAL_SERVER_ID
               ? localToolsService.callTool(toolInfo.tool.name, toolCall.arguments, workingDirectory)
               : mcpClient.callTool(toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);

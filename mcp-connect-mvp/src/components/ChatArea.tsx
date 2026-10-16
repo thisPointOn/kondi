@@ -9,10 +9,13 @@ import { open as tauriOpen, ask } from '@tauri-apps/plugin-dialog';
 import type { MCPServer, MCPTool, Message, ToolCall } from '../types/mcp';
 import { chatCompletion, simpleCompletion } from '../services/llm-router';
 import FirstRunSetup from './FirstRunSetup';
-import { isCouncilCreationRequest, generateCouncilSetup } from '../council/chat-council-gen';
-import { createCouncilFromSetup } from '../council/factory';
-import { requestCouncilRun } from './council/councilCreateSignal';
-import { LOCAL_TOOLS, LOCAL_SERVER_ID, localToolsService } from '../services/localTools';
+import { isCouncilCreationRequest } from '../council/chat-council-gen';
+import { escalate as escalateToCouncil, renderCardMarkdown, activeEscalation } from '../services/councilRunService';
+import type { CouncilRunCard as CouncilRunCardData } from '../services/councilRunService';
+import type { CouncilStepKind } from '../council/chat-council-gen';
+import { chatActivity } from '../services/chatActivity';
+import CouncilRunCard from './CouncilRunCard';
+import { LOCAL_TOOLS, LOCAL_SERVER_ID, CHAT_ONLY_TOOLS, localToolsService } from '../services/localTools';
 import {
   ANTHROPIC_CLI_MODELS,
   ANTHROPIC_API_MODELS,
@@ -568,6 +571,8 @@ interface ChatAreaProps {
   onSendingChange?: (sending: boolean) => void;
   /** Per-chat update — writes messages to a specific chatId (survives chat switches) */
   onChatUpdate?: (chatId: string, messages: Message[]) => void;
+  /** Patch one message in place (functional; safe from stale closures) — used by the council card. */
+  onChatMessagePatch?: (chatId: string, messageId: string, patch: Partial<Message>) => void;
   onDeleteChat?: (id: string) => void;
   /** Per-chat sending state callbacks (pinned to chatId, survives chat switches) */
   onChatSendingChange?: (chatId: string, sending: boolean) => void;
@@ -627,6 +632,7 @@ const ChatArea: FC<ChatAreaProps> = ({
   sending: sendingProp,
   onSendingChange,
   onChatUpdate,
+  onChatMessagePatch,
   onDeleteChat,
   onChatSendingChange,
   onChatActiveProviderChange,
@@ -1069,7 +1075,14 @@ const ChatArea: FC<ChatAreaProps> = ({
       },
     });
     const sendMessages = compressed.messages;
-    const sendTools = compressed.tools || availableTools;
+    // Chat-only tools (convene_council) ride on the local-tools entry HERE only —
+    // never through useServers, so council workers can never recurse into councils.
+    const baseTools = compressed.tools || availableTools;
+    const sendTools: typeof baseTools = new Map(baseTools);
+    if (sendTools.has(LOCAL_SERVER_ID)) {
+      const local = sendTools.get(LOCAL_SERVER_ID)!;
+      sendTools.set(LOCAL_SERVER_ID, { ...local, tools: [...local.tools, ...CHAT_ONLY_TOOLS.filter((t) => !local.tools.some((x) => x.name === t.name))] });
+    }
     const sendSystem = compressed.systemPrompt;
 
     // Snapshot the exact context being sent so the Workspace → Context panel
@@ -1092,6 +1105,16 @@ const ChatArea: FC<ChatAreaProps> = ({
     });
 
     let streamAcc = '';
+    // The chat-only tool handler for THIS call: a council convened by the model
+    // runs through the same escalation path as the ⚖ button (card in the chat).
+    const chatIdForTools = chatId;
+    localToolsService.setChatToolHandler(async (name, args) => {
+      if (name !== 'convene_council' || !chatIdForTools) throw new Error(`Unknown chat tool ${name}`);
+      const task = String(args.task || '').trim();
+      if (!task) throw new Error('convene_council needs a task');
+      const result = await escalateFromChat(chatIdForTools, msgs, task, { kind: args.kind as CouncilStepKind | undefined, focus: typeof args.focus === 'string' ? args.focus : undefined });
+      return `Council ${result.status}${result.phase ? ` (${result.phase})` : ''}.\n\n${result.output || result.decision || '(no output)'}`;
+    });
     // Idle watchdog. Some streaming endpoints (notably GLM/z.ai) occasionally HANG —
     // no tokens, no completion, no error — so the promise never settles and the UI
     // spins forever. If nothing arrives for IDLE_TIMEOUT_MS (reset on every token),
@@ -1107,6 +1130,10 @@ const ChatArea: FC<ChatAreaProps> = ({
     const IDLE_TIMEOUT_MS = isCliProvider ? 660_000 : 90_000;
     let lastActivity = Date.now();
     let timedOut = false;
+    // Long non-streaming work (a council escalated from this chat, a slow tool)
+    // reports progress through chatActivity so a HEALTHY multi-minute run is not
+    // mistaken for a hung request.
+    const unsubActivity = chatActivity.subscribe(() => { lastActivity = Date.now(); });
     let stopWatchdog: () => void = () => {};
     // Render throttle. The naive path calls onStreamText on EVERY token, and each
     // call rebuilds the whole message list + re-renders the app — O(messages) per
@@ -1156,7 +1183,7 @@ const ChatArea: FC<ChatAreaProps> = ({
       onToken: onStreamText
         ? (delta: string) => { if (timedOut) return; lastActivity = Date.now(); streamAcc += delta; scheduleEmit(); }
         : undefined,
-    }).finally(() => { stopWatchdog(); flushEmit(); });
+    }).finally(() => { stopWatchdog(); flushEmit(); unsubActivity(); localToolsService.setChatToolHandler(null); });
     const result = await Promise.race([call, watchdog]);
     message = result.message;
     toolCalls = result.toolCalls;
@@ -1248,6 +1275,67 @@ const ChatArea: FC<ChatAreaProps> = ({
     return () => window.removeEventListener('kondi-taskqueue-updated', onQueueUpdated);
   }, [chatId]);
 
+  /**
+   * Chat → council escalation: posts a live card message into the chat, runs the
+   * council in the background (pipeline runner), and keeps the card updated via
+   * onChatMessagePatch. Resolves with the result (never throws — a failure is a
+   * card state), so it is safe inside tool loops.
+   */
+  const escalateFromChat = async (
+    targetChatId: string,
+    thread: Message[],
+    task: string,
+    opts: { kind?: CouncilStepKind; focus?: string } = {},
+  ) => {
+    const cardMessageId = crypto.randomUUID();
+    let posted = false;
+    const post = (card: CouncilRunCardData) => {
+      const patch: Partial<Message> = { content: renderCardMarkdown(card), councilRun: card };
+      if (!posted) {
+        posted = true;
+        const msg: Message = { id: cardMessageId, role: 'assistant', content: patch.content!, councilRun: card, provider: 'council', timestamp: new Date() };
+        if (onChatUpdate) onChatUpdate(targetChatId, [...thread, msg]); else onMessagesChange([...thread, msg]);
+      } else if (onChatMessagePatch) {
+        onChatMessagePatch(targetChatId, cardMessageId, patch);
+      }
+    };
+    if (activeEscalation(targetChatId)) {
+      const note: Message = { id: crypto.randomUUID(), role: 'assistant', content: '⚖ A council is already running for this chat — wait for it (or open it) before convening another.', timestamp: new Date() };
+      if (onChatUpdate) onChatUpdate(targetChatId, [...thread, note]); else onMessagesChange([...thread, note]);
+      return { status: 'failed' as const, output: 'A council is already running for this chat.' };
+    }
+    return escalateToCouncil({
+      chatId: targetChatId,
+      task,
+      kind: opts.kind,
+      focus: opts.focus,
+      thread: thread.slice(-12),
+      workingDirectory: chatWorkingDir || globalWorkingDirectory || undefined,
+      avail: (configuredProviders || {}) as unknown as Record<string, boolean>,
+      onCard: post,
+    });
+  };
+
+  /** ⚖ composer button: the typed text becomes the council's task. */
+  const handleEscalateClick = () => {
+    const task = inputValue.trim();
+    if (!task || !chatId) return;
+    const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content: task, timestamp: new Date() };
+    const thread = [...messages, userMessage];
+    if (onChatUpdate) onChatUpdate(chatId, thread); else onMessagesChange(thread);
+    setInputValue('');
+    void escalateFromChat(chatId, thread, task);
+  };
+
+  /** "Second opinion" on an assistant answer: a council verifies and improves it. */
+  const handleSecondOpinion = (target: Message) => {
+    if (!chatId) return;
+    const idx = messages.findIndex((m) => m.id === target.id);
+    const question = [...messages.slice(0, Math.max(idx, 0))].reverse().find((m) => m.role === 'user')?.content || '(see conversation)';
+    const task = `Give a SECOND OPINION on the assistant's answer below: verify every claim, find mistakes or omissions, and produce an improved answer.\n\n## QUESTION\n${question.slice(0, 4000)}\n\n## ANSWER UNDER REVIEW\n${target.content.slice(0, 8000)}`;
+    void escalateFromChat(chatId, messages, task, { kind: 'analysis', focus: 'Correctness first; be concrete about what was wrong.' });
+  };
+
   const handleSendMessage = async () => {
     if (!inputValue.trim() || sending || !chatId) return;
 
@@ -1336,33 +1424,13 @@ const ChatArea: FC<ChatAreaProps> = ({
     setSendingTarget(true);
     stopRef.current = false;
 
-    // ── Chat → generate-and-run a council ──
-    if (isCouncilCreationRequest(trimmed)) {
-      try {
-        const setup = await generateCouncilSetup(trimmed, {
-          avail: configuredProviders as unknown as Record<string, boolean>,
-          workingDirectory: chatWorkingDir || globalWorkingDirectory || undefined,
-        });
-        const council = createCouncilFromSetup(setup);
-        updateTarget([...currentMessages, {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: `🗳️ Created council **${council.name}** (${setup.stepType}) with ${setup.personas.length} personas. Opening it now — review the setup and click **Start** when ready.\n\n**Task:** ${setup.task}`,
-          provider: effectiveProviderId,
-          timestamp: new Date(),
-        } as Message]);
-        requestCouncilRun(council.id, setup.task || trimmed);
-      } catch (e) {
-        updateTarget([...currentMessages, {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: `⚠️ Couldn't generate a council: ${(e as Error).message}`,
-          provider: effectiveProviderId,
-          timestamp: new Date(),
-        } as Message]);
-      } finally {
-        setSendingTarget(false);
-      }
+    // ── Chat → council (in-chat): `/council <task>` or a natural-language ask.
+    // The council runs in the background and reports into a live card here —
+    // the conversation never navigates away; "Open deliberation" is one click.
+    const slash = /^\/council\s+([\s\S]+)$/i.exec(trimmed);
+    if (slash || isCouncilCreationRequest(trimmed)) {
+      setSendingTarget(false);
+      void escalateFromChat(targetChatId, currentMessages, slash ? slash[1].trim() : trimmed);
       return;
     }
 
@@ -1660,7 +1728,7 @@ const ChatArea: FC<ChatAreaProps> = ({
 
       <div className="messages-container" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
         {messages.map((message) => (
-          <MessageRow key={message.id} message={message} servers={servers} onRetry={handleRetry} />
+          <MessageRow key={message.id} message={message} servers={servers} onRetry={handleRetry} onSecondOpinion={handleSecondOpinion} />
         ))}
 
         {showWorking && (
@@ -1778,6 +1846,14 @@ const ChatArea: FC<ChatAreaProps> = ({
             />
           )}
 
+          <button
+            className="escalate-btn"
+            title="Escalate to a council (manager + consultants + worker deliberate on this; result returns here)"
+            onClick={handleEscalateClick}
+            disabled={!inputValue.trim() || !chatId}
+          >
+            ⚖
+          </button>
           <button
             className={`send-btn ${sending && inputValue.trim() ? 'stage-mode' : ''}`}
             onClick={() => {
@@ -1904,7 +1980,7 @@ const markdownComponents: Components = {
   },
 };
 
-const MessageRow: FC<{ message: Message; servers: MCPServer[]; onRetry?: (m: Message) => void }> = ({ message, servers, onRetry }) => {
+const MessageRow: FC<{ message: Message; servers: MCPServer[]; onRetry?: (m: Message) => void; onSecondOpinion?: (m: Message) => void }> = ({ message, servers, onRetry, onSecondOpinion }) => {
   const isUser = message.role === 'user';
   const provider = message.provider;
   const [showModelDetails, setShowModelDetails] = useState(false);
@@ -1960,6 +2036,7 @@ const MessageRow: FC<{ message: Message; servers: MCPServer[]; onRetry?: (m: Mes
         ) : (
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{message.content}</ReactMarkdown>
         )}
+        {message.councilRun && <CouncilRunCard card={message.councilRun} />}
 
         {(() => {
           const calls = message.toolCalls || [];
@@ -1989,6 +2066,9 @@ const MessageRow: FC<{ message: Message; servers: MCPServer[]; onRetry?: (m: Mes
           )}
           {onRetry && (
             <button className="msg-action" onClick={() => onRetry(message)} title="Regenerate this response">↻ Try again</button>
+          )}
+          {onSecondOpinion && !message.councilRun && (
+            <button className="msg-action" onClick={() => onSecondOpinion(message)} title="Have a council verify and improve this answer">⚖ Second opinion</button>
           )}
           {u && (
             <button className="msg-action msg-ctx" onClick={() => setShowCtx(v => !v)}>

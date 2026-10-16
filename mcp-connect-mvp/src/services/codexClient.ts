@@ -7,6 +7,7 @@
  * Format: OpenAI Responses API
  */
 
+import { getToolTimeoutMs } from './localTools';
 import { invoke } from '@tauri-apps/api/core';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
@@ -316,7 +317,7 @@ export class CodexClient {
             toolCall.status = 'running';
             console.log('[Codex] Calling tool:', toolInfo.serverId, toolInfo.tool.name, args);
 
-            const TOOL_CALL_TIMEOUT = 300_000; // 5 min per tool call
+            const TOOL_CALL_TIMEOUT = getToolTimeoutMs(toolInfo.tool.name); // per tool (convene_council runs for minutes)
             const toolPromise = toolInfo.serverId === LOCAL_SERVER_ID
               ? localToolsService.callTool(toolInfo.tool.name, args, workingDirectory)
               : mcpClient.callTool(toolInfo.serverId, toolInfo.tool.name, args);

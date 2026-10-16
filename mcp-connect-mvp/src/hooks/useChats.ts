@@ -312,6 +312,20 @@ export function useChats({
     });
   };
 
+  /** Patch ONE message in place (functional update — safe from async closures
+   *  that hold a stale message array, e.g. a council card updating for minutes). */
+  const handleChatMessagePatch = (chatId: string, messageId: string, patch: Partial<Message>) => {
+    setChats((prev) => {
+      const list = prev[chatId];
+      if (!list) return prev;
+      const idx = list.findIndex((m) => m.id === messageId);
+      if (idx === -1) return prev;
+      const next = [...list];
+      next[idx] = { ...next[idx], ...patch };
+      return { ...prev, [chatId]: next };
+    });
+  };
+
   const handleDeleteChat = (chatId: string) => {
     setChats((prev) => {
       const next = { ...prev };
@@ -411,6 +425,7 @@ export function useChats({
     createNewChat,
     cancelNewChat,
     handleChatMessagesChange,
+    handleChatMessagePatch,
     handleDeleteChat,
     handleGithubCheck,
     chatWorkingDirs,

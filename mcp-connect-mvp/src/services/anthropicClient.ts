@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { getToolTimeoutMs } from './localTools';
 import { throwIfAborted } from '../agent-runtime/signals';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
@@ -411,7 +412,7 @@ class AnthropicClient {
           call.status = 'running';
           console.log('[Anthropic] Calling tool:', call.serverId, call.toolName, call.arguments);
 
-          const TOOL_CALL_TIMEOUT = 300_000; // 5 min per tool call
+          const TOOL_CALL_TIMEOUT = getToolTimeoutMs(call.toolName); // per tool (convene_council runs for minutes)
           let result;
           const toolPromise = call.serverId === LOCAL_SERVER_ID
             ? localToolsService.callTool(call.toolName, call.arguments, workingDirectory)

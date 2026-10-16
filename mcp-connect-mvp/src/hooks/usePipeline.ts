@@ -242,6 +242,13 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
     return { executor, platform: tauriPlatform };
   };
 
+  /** Run a pipeline in the BACKGROUND (no view switch, no gate UI) — used by
+   *  chat → council escalation. Resolves when the run ends; rejects on failure. */
+  const runBackground = (id: string, overrides?: Partial<PipelineExecutorCallbacks>): Promise<void> => {
+    const { executor } = createExecutor(true, overrides);
+    return executor.run(id);
+  };
+
   const runExecutor = (executor: PipelineExecutor, id: string) => {
     setPipelineExecutor(executor);
     setPipelineMode('execution');
@@ -423,6 +430,7 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
     handleExecutionAbort,
     handlePipelineRun,
     handleRetryStep,
+    runBackground,
     runCouncilWorkflow,
     improveActions,
   } as const;

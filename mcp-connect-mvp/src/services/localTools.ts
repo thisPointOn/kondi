@@ -84,6 +84,37 @@ export const LOCAL_TOOLS: MCPTool[] = [
 ];
 
 export const LOCAL_SERVER_ID = '__local__';
+
+/**
+ * CHAT-ONLY tools — merged into the `__local__` entry by ChatArea.callProvider
+ * ONLY (never via useServers, so council workers can't recurse into councils).
+ */
+export const CHAT_ONLY_TOOLS: MCPTool[] = [
+  {
+    name: 'convene_council',
+    description:
+      'Escalate a hard or high-stakes task from this chat to a Kondi council (manager + consultants + worker deliberation). ' +
+      'Use when a question needs multiple expert perspectives, a plan plus implementation with review, or when you are unsure. ' +
+      'Runs for minutes; returns the council\'s final output. Give a complete, self-contained task.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: { type: 'string', description: 'The complete task for the council (self-contained; the recent chat is attached as context automatically).' },
+        kind: { type: 'string', enum: ['council', 'coding', 'analysis', 'review', 'agent', 'enrich', 'code_planning'], description: 'Council kind. coding = implement with tests; analysis = decide/recommend; review = audit; default council.' },
+        focus: { type: 'string', description: 'Optional: what to pay special attention to.' },
+      },
+      required: ['task'],
+    },
+  },
+];
+
+/** Per-tool wall-clock timeout for the chat tool loops (replaces a flat 5 min). */
+export function getToolTimeoutMs(toolName: string): number {
+  if (toolName === 'convene_council') return 3_600_000; // a council runs for minutes
+  return 300_000;
+}
+
+export type ChatToolHandler = (name: string, args: Record<string, unknown>) => Promise<unknown>;
 const WORKING_DIR_KEY = 'kondi-working-dir';
 
 // Callback for requesting user permission for out-of-scope operations
@@ -205,8 +236,18 @@ export class LocalToolsService {
     return true;
   }
 
+  /** Handler for CHAT_ONLY_TOOLS, set by ChatArea for the duration of a call (null = unavailable). */
+  private chatToolHandler: ChatToolHandler | null = null;
+  setChatToolHandler(h: ChatToolHandler | null): void { this.chatToolHandler = h; }
+
   async callTool(toolName: string, args: Record<string, any>, workingDirectory?: string): Promise<any> {
     const dir = workingDirectory ?? this.workingDirectory;
+
+    if (CHAT_ONLY_TOOLS.some((t) => t.name === toolName)) {
+      if (!this.chatToolHandler) throw new Error(`${toolName} is only available from a chat`);
+      const result = await this.chatToolHandler(toolName, args);
+      return [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) }];
+    }
 
     switch (toolName) {
       case 'read_file': {

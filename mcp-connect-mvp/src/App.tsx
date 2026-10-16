@@ -3,7 +3,8 @@ import Sidebar, { type AppView } from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import { PipelineLibrary, PipelineBuilder, PipelineExecutionView, PipelineResultsView } from './components/pipeline';
 import { requestPipelineCreate } from './components/pipeline/pipelineCreateSignal';
-import { COUNCIL_RUN_EVENT } from './components/council/councilCreateSignal';
+import { COUNCIL_RUN_EVENT, COUNCIL_OPEN_EVENT } from './components/council/councilCreateSignal';
+import { registerRunner } from './services/councilRunService';
 import { requestCouncilView } from './components/council/councilSetupSignal';
 import ErrorBoundary from './components/ErrorBoundary';
 import ProjectView from './components/ProjectView';
@@ -92,6 +93,25 @@ function App() {
     window.addEventListener(COUNCIL_RUN_EVENT, onRun);
     return () => window.removeEventListener(COUNCIL_RUN_EVENT, onRun);
   }, [council]);
+
+  // Chat council card → open the (running or finished) deliberation; Back returns to pipelines.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const id = (e as CustomEvent).detail?.councilId;
+      if (id) {
+        council.setCurrentCouncilId(id);
+        setCurrentView('council');
+      }
+    };
+    window.addEventListener(COUNCIL_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(COUNCIL_OPEN_EVENT, onOpen);
+  }, [council]);
+
+  // Chat → council escalation runs pipelines in the background through this runner.
+  useEffect(() => {
+    registerRunner((pipelineId, overrides) => pipeline.runBackground(pipelineId, overrides));
+    return () => registerRunner(null);
+  }, [pipeline]);
 
   return (
     <div className="app-container">
@@ -233,6 +253,7 @@ function App() {
             messages={chats.chatMessages}
             onMessagesChange={(msgs) => chats.currentChatId && chats.handleChatMessagesChange(chats.currentChatId, msgs)}
             onChatUpdate={chats.handleChatMessagesChange}
+            onChatMessagePatch={chats.handleChatMessagePatch}
             onDeleteChat={chats.handleDeleteChat}
             servers={serverHook.servers}
             availableTools={serverHook.availableTools}

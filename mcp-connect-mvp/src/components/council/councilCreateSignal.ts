@@ -17,6 +17,14 @@ export function requestCouncilRun(councilId: string, task: string): void {
   } catch { /* no window (non-DOM env) */ }
 }
 
+/** Navigate to an EXISTING council (no auto-run) — used by the chat's council card. */
+export const COUNCIL_OPEN_EVENT = 'kondi-open-council';
+export function requestCouncilOpen(councilId: string): void {
+  try {
+    window.dispatchEvent(new CustomEvent(COUNCIL_OPEN_EVENT, { detail: { councilId } }));
+  } catch { /* no window */ }
+}
+
 /** Read+clear the pending run iff it targets `councilId` (or any, if omitted). */
 export function consumeCouncilRun(councilId?: string): { councilId: string; task: string } | null {
   if (!pendingRun) return null;
