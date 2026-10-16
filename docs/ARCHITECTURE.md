@@ -404,7 +404,7 @@ A council or coding step can opt into working on the real repository instead of 
 ```
 runCouncilStep (codebaseMode: 'worktree')
   |- precondition: pipeline working dir is a git repo top level (else logged fallback to isolated)
-  |- exclude .kondi/ in .git/info/exclude
+  |- exclude .kondi/ in .git/info/exclude   (covers runs/, outputs/, memory/, worktrees/)
   |- prepareWorktree  --> <repo>/.kondi/worktrees/<run>-<step>  on branch kondi/<pipeline>/<run>
   |- council runs with workDir(council) = worktreePath   (council record untouched)
   |     worker edits in place, never commits
@@ -677,7 +677,11 @@ cli/run-pipeline.ts
 
 ### API Providers and the Agent Runtime
 
-For API providers (`anthropic-api`, `openai-api`, `deepseek`, `xai`, `zai`, `moonshot`, `nvidia-router`, `ollama`), `cli/llm-caller.ts` calls `cli/api-tool-caller.ts`, which runs the provider-neutral tool loop from `src/agent-runtime/` (`runToolLoop` + OpenAI-compatible or Anthropic streaming adapter) with four Node local tools (scoped by the orchestrator's abstract allowed tools: Read/Write/Edit/Bash/Glob/Grep map onto them). Paths are realpath-contained: reads and writes outside the working directory are denied, and Bash commands follow rules equivalent to the Claude PreToolUse guard. Headless pipelines on API models can therefore read and write files in the working directory with real token usage. The abort/timeout primitives (`AbortError`, `TimeoutError`, `anySignal`) live in the same package. `llm-router` remains the only completion entry point in the GUI.
+For API providers (`anthropic-api`, `openai-api`, `deepseek`, `xai`, `zai`, `moonshot`, `nvidia-router`, `ollama`), `cli/llm-caller.ts` calls `cli/api-tool-caller.ts`, which runs the provider-neutral tool loop from `src/agent-runtime/` (`runToolLoop` + OpenAI-compatible or Anthropic streaming adapter) with four Node local tools (scoped by the orchestrator's abstract allowed tools: Read/Write/Edit/Bash/Glob/Grep map onto them). Paths are realpath-contained: reads and writes outside the working directory are denied, and Bash commands follow rules equivalent to the Claude PreToolUse guard. Headless pipelines on API models can therefore read and write files in the working directory with real token usage. The abort/timeout primitives (`AbortError`, `TimeoutError`, `anySignal`) live in the same package. `llm-router` remains the only completion entry point in the GUI, and all four GUI API clients (Anthropic, OpenAI, OpenAI-compatible providers, ChatGPT-Codex via a Responses-API adapter) now run on the same tool loop; HTTP adapters retry transient failures with backoff.
+
+**Fake tool calls.** Some models write a tool call as text instead of making it. The loop recovers unambiguous text calls for known tools and runs them for real, nudges once otherwise; the orchestrators add one corrective retry when a reply still narrates calls (tool-less personas are told to answer in prose). Per-model request overrides from the catalog (e.g. disabling hidden reasoning on NVIDIA Nemotron Lightning) are applied by the adapter.
+
+**Working-directory layout.** Everything Kondi writes into a working directory lives under `.kondi/` (`runs/`, `outputs/`, `memory/`, `worktrees/`, and the CLI execution report), so a repo gets a single ignorable folder.
 
 ### Session Persistence
 

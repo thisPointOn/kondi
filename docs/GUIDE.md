@@ -866,7 +866,7 @@ Press Ctrl-C once to abort the run cleanly (running model calls are stopped); pr
 2. Based on the model name, calls route to either **Claude Code CLI** (`claude --print --verbose --output-format stream-json`) or **Codex CLI** (`codex exec --json`).
 3. Prompts are piped via stdin to avoid OS argument length limits.
 4. Output streams in real-time with colored formatting and timestamps.
-5. On completion, a JSON execution report is written.
+5. On completion, a JSON execution report is written to `<working-dir>/.kondi/kondi-execution-report.json`. Everything Kondi writes into a working directory (per-run outputs under `.kondi/runs/`, saved deliberations, memory, worktrees) lives under that one `.kondi/` folder, so you can add a single `.kondi/` line to your `.gitignore`.
 6. A `.kondi-session.json` file is exported for import back into the GUI.
 
 ### Per-Persona Sessions
