@@ -45,7 +45,7 @@ export async function runToolLoop(opts: RunToolLoopOptions): Promise<RunToolLoop
   const tools = opts.executor?.list() ?? [];
   const usage: UsageTotals = { inputTokens: 0, outputTokens: 0, apiTurns: 0, toolCalls: 0, reported: true };
 
-  const messages: LoopMessage[] = [{ role: 'user', content: opts.userMessage }];
+  const messages: LoopMessage[] = [...(opts.history ?? []), { role: 'user', content: opts.userMessage }];
   const texts: string[] = [];
   let turns = 0;
   let hitMaxTurns = false;

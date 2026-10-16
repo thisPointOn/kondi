@@ -90,6 +90,10 @@ export interface RunToolLoopOptions {
   executor?: ToolExecutor;
   system: string;
   userMessage: string;
+  /** Earlier conversation turns (multi-turn chat), placed BEFORE userMessage.
+   *  Earlier tool calls should be folded into assistant text — their ids are
+   *  from previous API calls and cannot be replayed. */
+  history?: LoopMessage[];
   maxTurns?: number;            // default 25
   perToolTimeoutMs?: number;    // default 300_000
   resultCapChars?: number;      // default 30_000 — cap for THIS turn's tool results

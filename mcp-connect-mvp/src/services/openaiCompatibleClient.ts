@@ -5,11 +5,12 @@
  * expose an OpenAI-compatible API (DeepSeek, x.ai/Grok, Ollama, etc.)
  */
 
-import { anySignal, throwIfAborted } from '../agent-runtime/signals';
 import OpenAI from 'openai';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
-import { mcpClient } from './mcpClient';
-import { LOCAL_SERVER_ID, localToolsService } from './localTools';
+import { runToolLoop } from '../agent-runtime/tool-loop';
+import { openaiCompatibleAdapter } from '../agent-runtime/adapters/openai-compatible';
+import type { LoopMessage, RunToolLoopResult } from '../agent-runtime/types';
+import { createGuiToolExecutor } from './gui-tool-executor';
 import { formatToolCallSummary } from './formatToolCallSummary';
 import {
   resolveApiKey,
@@ -130,30 +131,6 @@ export class OpenAICompatibleClient {
     }
   }
 
-  private minimizeSchema(schema: any): any {
-    if (!schema || typeof schema !== 'object') return schema;
-    const result: any = {};
-    if (schema.type) result.type = schema.type;
-    if (schema.description) {
-      result.description = schema.description.length > 150
-        ? schema.description.slice(0, 147) + '...'
-        : schema.description;
-    }
-    if (schema.enum) result.enum = schema.enum;
-    if (schema.properties) {
-      result.properties = {};
-      for (const [key, value] of Object.entries(schema.properties)) {
-        result.properties[key] = this.minimizeSchema(value);
-      }
-    }
-    if (schema.required && schema.required.length > 0) result.required = schema.required;
-    if (schema.items) result.items = this.minimizeSchema(schema.items);
-    if (schema.oneOf) result.oneOf = schema.oneOf.map((s: any) => this.minimizeSchema(s));
-    if (schema.anyOf) result.anyOf = schema.anyOf.map((s: any) => this.minimizeSchema(s));
-    if (schema.allOf) result.allOf = schema.allOf.map((s: any) => this.minimizeSchema(s));
-    return result;
-  }
-
   async validateKey(key: string): Promise<{ ok: boolean; error?: string }> {
     try {
       const client = new OpenAI({
@@ -219,67 +196,6 @@ export class OpenAICompatibleClient {
     }
   }
 
-  /**
-   * Run one completion as an SSE stream, assembling content + tool-call deltas.
-   * Returns a message-shaped object compatible with the non-streaming path.
-   * `onToken` is called for each text delta (live chat streaming).
-   */
-  private async streamOnce(
-    params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
-    onToken: (delta: string) => void,
-    outerSignal?: AbortSignal,
-  ): Promise<{ content: string | null; tool_calls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number } | null }> {
-    // Idle-abort watchdog: GLM/z.ai (and other OpenAI-compatible streams) sometimes
-    // stall mid-stream — no further tokens, no error — and `for await` waits forever
-    // (the SDK's default timeout is 10 min). If no chunk arrives for IDLE_TIMEOUT_MS
-    // (reset on every chunk), abort the request so it throws instead of hanging.
-    const IDLE_TIMEOUT_MS = 90_000;
-    const ac = new AbortController();
-    let lastChunk = Date.now();
-    const watchdog = setInterval(() => {
-      if (Date.now() - lastChunk > IDLE_TIMEOUT_MS) {
-        clearInterval(watchdog);
-        ac.abort();
-      }
-    }, 5000);
-    try {
-      const stream = await this.client!.chat.completions.create(
-        { ...params, stream: true, stream_options: { include_usage: true } },
-        { signal: anySignal([ac.signal, outerSignal]) },
-      );
-      let content = '';
-      let usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
-      const toolCallsAcc: any[] = [];
-      for await (const chunk of stream as any) {
-        lastChunk = Date.now();
-        if (chunk.usage) usage = chunk.usage; // trailing usage chunk (empty choices)
-        const delta = chunk.choices?.[0]?.delta;
-        if (!delta) continue;
-        if (delta.content) { content += delta.content; onToken(delta.content); }
-        if (delta.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            const idx = tc.index ?? 0;
-            if (!toolCallsAcc[idx]) toolCallsAcc[idx] = { id: '', type: 'function', function: { name: '', arguments: '' } };
-            if (tc.id) toolCallsAcc[idx].id = tc.id;
-            if (tc.function?.name) toolCallsAcc[idx].function.name += tc.function.name;
-            if (tc.function?.arguments) toolCallsAcc[idx].function.arguments += tc.function.arguments;
-          }
-        }
-      }
-      return { content: content || null, tool_calls: toolCallsAcc.length ? toolCallsAcc : undefined, usage };
-    } catch (err: any) {
-      if (outerSignal?.aborted) throw err; // caller's cancel/timeout — not a stall
-      if (ac.signal.aborted) {
-        throw new Error(
-          `${this.config.providerName} stream stalled — no data for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s (the request hung). Try again, or switch the model for this chat.`
-        );
-      }
-      throw err;
-    } finally {
-      clearInterval(watchdog);
-    }
-  }
-
   async chat(
     messages: Message[],
     availableTools: Map<string, { serverId: string; tools: MCPTool[] }>,
@@ -307,31 +223,11 @@ export class OpenAICompatibleClient {
     const resolved = this.config.requiresAuth ? await resolveApiKey(this.config.authProvider, preferredProfileId) : null;
     const profileId = resolved?.profileId || null;
 
-    const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [];
-    const toolMap = new Map<string, { serverId: string; tool: MCPTool }>();
-
-    const serverIds = Array.from(availableTools.keys());
-    const serverIndexMap = new Map(serverIds.map((id, i) => [id, `s${i}`]));
-
-    for (const [serverId, { tools: serverTools }] of availableTools) {
-      const shortPrefix = serverIndexMap.get(serverId) || 's0';
-      for (const tool of serverTools) {
-        const maxToolNameLen = 64 - shortPrefix.length - 2;
-        const truncatedName = tool.name.length > maxToolNameLen
-          ? tool.name.slice(0, maxToolNameLen)
-          : tool.name;
-        const prefixedName = `${shortPrefix}__${truncatedName}`;
-        tools.push({
-          type: 'function',
-          function: {
-            name: prefixedName,
-            description: (tool.description || '').slice(0, 300),
-            parameters: this.minimizeSchema(tool.inputSchema),
-          },
-        });
-        toolMap.set(prefixedName, { serverId, tool });
-      }
-    }
+    // One shared agentic loop (src/agent-runtime) over this provider's wire
+    // format: streaming (SSE) with usage, tool calls executed through the chat's
+    // local + MCP tools, real cancellation via `signal`. NIM goes through the
+    // Rust relay (no CORS headers — rule 14).
+    const executor = availableTools.size > 0 ? createGuiToolExecutor(availableTools) : undefined;
 
     const systemParts = [BASE_SYSTEM_PROMPT];
     if (workingDirectory) {
@@ -342,111 +238,37 @@ export class OpenAICompatibleClient {
     }
     const systemPrompt = systemParts.join('\n\n');
 
-    const openaiMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-      { role: 'system', content: systemPrompt },
-      ...messages.map((message) => ({
-        role: message.role as 'user' | 'assistant',
-        content: message.role === 'assistant' && message.toolCalls?.length
-          ? message.content + '\n\n' + formatToolCallSummary(message.toolCalls)
-          : message.content,
-      })),
-    ];
+    // Multi-turn: everything before the last user message is history; earlier
+    // tool calls are folded into the assistant text (their ids can't replay).
+    const turns = messages.filter((m) => m.role === 'user' || m.role === 'assistant');
+    const lastUserIdx = (() => { for (let k = turns.length - 1; k >= 0; k--) if (turns[k].role === 'user') return k; return -1; })();
+    const lastUser = lastUserIdx >= 0 ? turns[lastUserIdx] : undefined;
+    const historySrc = lastUserIdx >= 0 ? turns.slice(0, lastUserIdx) : turns;
+    const history: LoopMessage[] = historySrc.map((m) => m.role === 'assistant'
+      ? { role: 'assistant' as const, content: m.toolCalls?.length ? `${m.content}\n\n${formatToolCallSummary(m.toolCalls)}` : m.content }
+      : { role: 'user' as const, content: m.content });
 
-    const MAX_TOOL_TURNS = 25;
-    const toolCalls: ToolCall[] = [];
-    let currentMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [...openaiMessages];
-    let turnCount = 0;
-    let finalContent = '';
-    // Usage summed across tool-loop turns (billedInput = every turn's prompt;
-    // inputTokens = last turn's context). `stream_options.include_usage` makes
-    // the streaming path report it too (final chunk, empty choices).
-    const usageAcc = { lastInput: 0, billedInput: 0, output: 0, turns: 0 };
-    const addUsage = (u: { prompt_tokens?: number; completion_tokens?: number } | null | undefined) => {
-      if (!u) return;
-      usageAcc.lastInput = u.prompt_tokens || 0;
-      usageAcc.billedInput += u.prompt_tokens || 0;
-      usageAcc.output += u.completion_tokens || 0;
-      usageAcc.turns++;
-    };
+    const adapter = openaiCompatibleAdapter({
+      fetchImpl: this.config.relayViaBackend ? relayFetch : undefined,
+      baseUrl: this.config.baseURL,
+      apiKey: this.config.requiresAuth ? (this.clientKey || '') : '', // empty → no Authorization header (Ollama)
+      model: model || this.config.defaultModel,
+      provider: this.config.authProvider,
+      stream: true,
+    });
 
+    let result: RunToolLoopResult;
     try {
-      while (turnCount < MAX_TOOL_TURNS) {
-        turnCount++;
-        throwIfAborted(signal);
-        const createParams = {
-          model: model || this.config.defaultModel,
-          messages: currentMessages,
-          tools: tools.length > 0 ? tools : undefined,
-          tool_choice: (turnCount === 1 && tools.length > 0 ? 'auto' : undefined) as any,
-        };
-
-        // Stream the response when a token callback is provided (live chat).
-        let response: { content: string | null; tool_calls?: any[] };
-        if (onToken) {
-          const streamed = await this.streamOnce(createParams, onToken, signal);
-          addUsage(streamed.usage);
-          response = streamed;
-        } else {
-          const completion = await this.client!.chat.completions.create(createParams, { signal });
-          addUsage(completion.usage);
-          response = completion.choices[0].message;
-        }
-
-        if (!response.tool_calls || response.tool_calls.length === 0) {
-          finalContent = typeof response.content === 'string'
-            ? response.content
-            : JSON.stringify(response.content || '');
-          break;
-        }
-
-        const toolResults: OpenAI.Chat.Completions.ChatCompletionToolMessageParam[] = [];
-
-        for (const tc of response.tool_calls) {
-          if (tc.type !== 'function') continue;
-          const toolInfo = toolMap.get(tc.function.name);
-          if (!toolInfo) {
-            toolResults.push({ role: 'tool', tool_call_id: tc.id, content: `Error: Unknown tool ${tc.function.name}` });
-            continue;
-          }
-
-          const toolCall: ToolCall = {
-            id: tc.id,
-            serverId: toolInfo.serverId,
-            toolName: toolInfo.tool.name,
-            arguments: JSON.parse(tc.function.arguments),
-            status: 'pending',
-          };
-
-          try {
-            toolCall.status = 'running';
-            let result;
-            if (toolInfo.serverId === LOCAL_SERVER_ID) {
-              result = await localToolsService.callTool(toolInfo.tool.name, toolCall.arguments, workingDirectory);
-            } else {
-              result = await mcpClient.callTool(toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);
-            }
-            toolCall.result = result;
-            toolCall.status = 'completed';
-            toolResults.push({
-              role: 'tool',
-              tool_call_id: tc.id,
-              content: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
-            });
-          } catch (error) {
-            toolCall.error = error instanceof Error ? error.message : 'Unknown error';
-            toolCall.status = 'failed';
-            toolResults.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${toolCall.error}` });
-          }
-          toolCalls.push(toolCall);
-        }
-
-        currentMessages = [
-          ...currentMessages,
-          { role: 'assistant' as const, content: response.content, tool_calls: response.tool_calls },
-          ...toolResults,
-        ];
-      }
-
+      result = await runToolLoop({
+        adapter,
+        executor,
+        system: systemPrompt,
+        userMessage: lastUser?.content || '',
+        history,
+        workingDir: workingDirectory,
+        signal,
+        onEvent: onToken ? (e) => { if (e.kind === 'text') onToken(e.delta); } : undefined,
+      });
       if (profileId) reportSuccess(profileId);
     } catch (err) {
       if (profileId) {
@@ -462,16 +284,18 @@ export class OpenAICompatibleClient {
       message: {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: finalContent || '[No content returned]',
+        content: result.content || '[No content returned]',
         timestamp: new Date(),
-        usage: usageAcc.turns > 0 ? {
-          inputTokens: usageAcc.lastInput,
-          outputTokens: usageAcc.output,
-          billedInputTokens: usageAcc.billedInput,
-          apiTurns: usageAcc.turns,
+        usage: result.usage.reported || result.usage.inputTokens > 0 || result.usage.outputTokens > 0 ? {
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          billedInputTokens: result.usage.inputTokens,
+          cacheRead: result.usage.cacheReadTokens,
+          cacheCreation: result.usage.cacheWriteTokens,
+          apiTurns: result.usage.apiTurns,
         } : undefined,
       },
-      toolCalls,
+      toolCalls: executor?.toolCalls ?? [],
     };
   }
 }
