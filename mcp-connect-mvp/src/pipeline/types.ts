@@ -330,6 +330,18 @@ export function migrateLlmConfig(config: LlmStepConfig): CouncilStepConfig {
 // Pipeline Step
 // ============================================================================
 
+/** What a `waiting_approval` step is waiting FOR: a gate decision, or an answer
+ *  to a council worker's `## NEEDS INPUT` question (ask-back, rule 23). */
+export interface PendingInput {
+  kind: 'gate' | 'question';
+  prompt: string;
+  councilId?: string;
+  personaName?: string;
+  /** The manager's note when it escalated the question (why it couldn't answer). */
+  managerNote?: string;
+  askedAt: string;
+}
+
 export interface PipelineStep {
   id: string;
   name: string;
@@ -340,6 +352,8 @@ export interface PipelineStep {
   error?: string;
   startedAt?: string;
   completedAt?: string;
+  /** Set while the step is `waiting_approval`; cleared when the input arrives. */
+  pendingInput?: PendingInput;
 }
 
 // ============================================================================

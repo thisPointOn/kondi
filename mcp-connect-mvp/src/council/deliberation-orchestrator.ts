@@ -73,6 +73,11 @@ import { buildWorkOrder, stripTaskPrefix, extractAcceptanceCriteria as extractAc
 import type { WorkOrderInput, WorkOrderQA, ToolScope } from './work-order';
 import { parseWorkerSignals, signalsForLedger } from './worker-signals';
 import { detectTestCommand } from '../pipeline/test-detect';
+import {
+  resolveWorkerQuestion, buildWorkerQuestionAnswerPrompt,
+  MAX_QUESTIONS_PER_PHASE, BUDGET_EXHAUSTED_ANSWER,
+} from './ask-back';
+import type { WorkerQuestionHandler } from './ask-back';
 
 import {
   buildManagerFramingPrompt,
@@ -154,6 +159,12 @@ export interface OrchestratorConfig {
    *  orchestrator re-runs as the final check). Defaults: `deliberation.testCommand`,
    *  else auto-detected for file/directory outputs when readFile is available. */
   verify?: { command?: string; autoDetect?: boolean; maxWorkerTries?: number };
+  /** Ask-back: a human hook for worker questions the manager escalates (or when
+   *  there is no manager). Resolve null when nobody can answer → the worker is
+   *  told to proceed on its best judgment. The pipeline executor parks the step
+   *  in `waiting_approval` while this is pending. */
+  onWorkerQuestion?: WorkerQuestionHandler;
+  askBack?: { maxQuestionsPerPhase?: number };
   /** Whether this runtime can actually EXECUTE tools for a persona's provider.
    *  Default true (app, where API clients run tool loops). The headless CLI
    *  runner returns true only for the claude/codex binaries so API-provider
@@ -190,9 +201,9 @@ const PHASE_TRANSITIONS: Record<DeliberationPhase, {
   planning: { validNext: ['directing'], terminal: false },
   deciding: { validNext: ['planning', 'directing', 'completed'], terminal: false },
   directing: { validNext: ['executing'], terminal: false },
-  executing: { validNext: ['reviewing', 'completed'], terminal: false },
-  reviewing: { validNext: ['completed', 'revising', 'round_interactive'], terminal: false },
-  revising: { validNext: ['reviewing', 'completed'], terminal: false },
+  executing: { validNext: ['reviewing', 'completed', 'failed'], terminal: false },
+  reviewing: { validNext: ['completed', 'revising', 'round_interactive', 'failed'], terminal: false },
+  revising: { validNext: ['reviewing', 'completed', 'failed'], terminal: false },
   decomposing: { validNext: [], terminal: false },
   implementing: { validNext: [], terminal: false },
   code_reviewing: { validNext: [], terminal: false },
@@ -1657,6 +1668,80 @@ export class DeliberationOrchestrator {
    * Build the typed WORK ORDER the worker receives (replaces the old
    * "directive + ORIGINAL TASK & SOURCE MATERIAL" concatenation).
    */
+  /**
+   * Ask-back. While the worker's reply is a `## NEEDS INPUT` question (and not a
+   * delivery), resolve it — manager → human (`onWorkerQuestion`) → auto — and
+   * re-invoke the worker on the SAME attempt with the Q&A appended (`rebuild`
+   * produces the new user message from the accumulated Q&A). Capped at
+   * `askBack.maxQuestionsPerPhase` answered questions; the next question gets the
+   * budget-exhausted auto answer and one last re-invoke, then the output stands.
+   * Ledger (rule 1): question = `manager_question` authored by the worker;
+   * answer = `response` with `structured.answeredBy` (manager | user | system).
+   */
+  private async handleWorkerSignals(
+    council: Council,
+    worker: Persona,
+    systemPrompt: string,
+    response: AgentResponse,
+    rebuild: (qa: WorkOrderQA[]) => string,
+    context: 'execution' | 'revision',
+    phase: DeliberationPhase,
+  ): Promise<{ response: AgentResponse; qa: WorkOrderQA[] }> {
+    const qa: WorkOrderQA[] = [];
+    const max = this.config.askBack?.maxQuestionsPerPhase ?? MAX_QUESTIONS_PER_PHASE;
+    const manager = getPersonaByRole(council, 'manager')[0];
+    for (let asked = 0; asked <= max; asked++) {
+      const signals = parseWorkerSignals(response.content);
+      if (signals.status !== 'question' || !signals.question) break;
+      const question = signals.question;
+      this.createEntry(council.id, 'worker', worker.id, 'manager_question', phase,
+        `[Question from ${worker.name}] ${question}`, response.tokensUsed, response.latencyMs,
+        undefined, undefined, { ...response.structured, signals: signalsForLedger(signals), askedBy: 'worker' });
+
+      let answer: string;
+      let answeredBy: WorkOrderQA['answeredBy'];
+      const exhausted = asked >= max;
+      if (exhausted) {
+        answer = BUDGET_EXHAUSTED_ANSWER;
+        answeredBy = 'system';
+      } else {
+        const directive = getDirective(council.id);
+        const decision = getDecision(council.id);
+        const resolved = await resolveWorkerQuestion({
+          ctx: { councilId: council.id, personaId: worker.id, personaName: worker.name, question, phase: context },
+          askManager: manager ? async () => {
+            const r = await this.invokeAgentSafe({
+              personaId: manager.id,
+              systemPrompt: manager.predisposition.systemPrompt,
+              userMessage: buildWorkerQuestionAnswerPrompt({
+                question, workerName: worker.name,
+                directive: directive?.content, decision: decision?.content,
+                acceptanceCriteria: decision?.acceptanceCriteria, source: this.rawProblemFor(council),
+              }),
+            }, manager, 'worker_question');
+            return r.content;
+          } : undefined,
+          onWorkerQuestion: this.config.onWorkerQuestion,
+        });
+        answer = resolved.answer;
+        answeredBy = resolved.answeredBy;
+      }
+      console.log(`[Orchestrator:AskBack] ${worker.name} asked (${asked + 1}); answered by ${answeredBy}`);
+      this.createEntry(council.id, manager ? 'manager' : 'worker', (manager ?? worker).id, 'response', phase,
+        `[Answer to ${worker.name} — ${answeredBy}] ${answer}`, 0, 0, undefined, undefined,
+        { answeredBy, question, automatic: answeredBy === 'system' });
+      qa.push({ question, answer, answeredBy });
+
+      response = await this.invokeAgentSafe(
+        { personaId: worker.id, systemPrompt, userMessage: rebuild(qa) },
+        worker,
+        context,
+      );
+      if (exhausted) break;
+    }
+    return { response, qa };
+  }
+
   private composeWorkOrder(
     council: Council,
     assignment: DeliberationRoleAssignment | undefined,
@@ -1756,6 +1841,16 @@ export class DeliberationOrchestrator {
     if (!response.content || !response.content.trim()) {
       throw new Error('Worker produced no output after a retry — the deliverable could not be generated.');
     }
+
+    // Ask-back: a `## NEEDS INPUT` question is answered (manager → human → auto)
+    // and the worker re-invoked on this same attempt with the Q&A in its order.
+    const findingsSuffix = effectiveDirective.slice(order.length);
+    ({ response } = await this.handleWorkerSignals(council, worker, systemPrompt, response, (qa) =>
+      buildWorkerExecutionPrompt(
+        this.composeWorkOrder(council, assignment, workerPermissions, directive.content,
+          { number: revisionCount + 1, max: maxRevisions + 1, mode: 'answer' }, { qa }) + findingsSuffix,
+        workerPermissions, stepType,
+      ), 'execution', 'executing'));
 
     // Create output artifact
     const output = createOutput(council.id, workerPermissions.writePermissions ? response.content : sanitizeDeliverable(response.content), directive.id);
@@ -1864,11 +1959,50 @@ export class DeliberationOrchestrator {
     // command itself (the worker's own "**Verification:** exit 0" is not trusted).
     // A failure skips the manager call entirely — the verdict is a mechanical
     // `revise` whose feedback is the real test tail (honours maxRevisions).
-    const verification = hasWritePermissions ? await this.runFinalVerification(council, 'reviewing') : undefined;
+    // WORKER-INITIATED RE-DELIBERATION: a worker that reports `**Status:** Blocked`
+    // is not reviewed on quality — the manager re-plans (once) via the existing
+    // re_deliberate branch; after that budget it must deliver its best effort,
+    // and if the revision budget is spent too the council FAILS honestly.
+    const latestWork = getLatestOfType(council.id, 'work_output');
+    const workerSignals = (latestWork?.structured as { signals?: { status?: string; blockedReason?: string } } | undefined)?.signals;
+    const blocked = workerSignals?.status === 'blocked';
+    const blockedReason = workerSignals?.blockedReason || 'Worker reported being blocked';
+
+    const verification = !blocked && hasWritePermissions ? await this.runFinalVerification(council, 'reviewing') : undefined;
 
     let review: ManagerReview;
     let entry: LedgerEntry;
-    if (verification && !verification.passed) {
+    if (blocked) {
+      const reDelibCount = council.deliberationState?.reDeliberationCount || 0;
+      const revisionCount = council.deliberationState?.revisionCount || 0;
+      const maxRevisions = council.deliberation?.maxRevisions ?? 3;
+      if (reDelibCount < 1) {
+        review = {
+          verdict: 're_deliberate',
+          reasoning: `Worker reported being BLOCKED: ${blockedReason}`,
+          newInformation: `The worker could not carry out the directive. Blocked reason: ${blockedReason}\n\nRe-plan around this obstacle (a different approach, a narrower scope, or different tooling) and issue a directive the worker can actually execute.`,
+        };
+      } else if (revisionCount >= maxRevisions) {
+        this.createEntry(council.id, 'manager', manager.id, 'error', 'reviewing',
+          `Worker still BLOCKED after re-deliberation and ${revisionCount} revision(s): ${blockedReason}`, 0, 0,
+          undefined, undefined, { blockedReason });
+        councilStore.updateDeliberationState(council.id, { completionSummary: `Worker blocked: ${blockedReason}` });
+        this.transitionPhase(council.id, 'failed');
+        councilStore.setStatus(council.id, 'resolved');
+        throw new Error(`Worker blocked after re-deliberation: ${blockedReason}`);
+      } else {
+        review = {
+          verdict: 'revise',
+          reasoning: `Worker blocked again after re-deliberation (${blockedReason}); re-deliberation budget exhausted.`,
+          feedback: `You reported being blocked: ${blockedReason}. The re-deliberation budget is exhausted. Deliver your BEST EFFORT now: complete every part that IS possible, list precisely what remains blocked and why, and state what would unblock it.`,
+        };
+      }
+      entry = this.createEntry(
+        council.id, 'manager', manager.id, 'review', 'reviewing',
+        `Verdict: ${review.verdict}\n\n${review.reasoning}`,
+        0, 0, undefined, undefined, { automatic: true, blockedReason }, undefined, review.verdict
+      );
+    } else if (verification && !verification.passed) {
       review = {
         verdict: 'revise',
         reasoning: `Verification command \`${verification.command}\` failed with exit code ${verification.exitCode}.`,
@@ -2045,11 +2179,20 @@ export class DeliberationOrchestrator {
       stepType,
     );
 
-    const response = await this.invokeAgentSafe(
+    let response = await this.invokeAgentSafe(
       { personaId: worker.id, systemPrompt, userMessage },
       worker,
       'revision'
     );
+
+    ({ response } = await this.handleWorkerSignals(council, worker, systemPrompt, response, (qa) =>
+      buildWorkerRevisionPrompt(
+        this.composeWorkOrder(council, assignment, workerPermissions, directive.content, {
+          number: revisionCount + 1, max: maxRevisions + 1, mode: 'answer',
+          previousOutput: previousOutput.content, feedback: revisionRequest.content,
+        }, { qa, lastTestTail: isFix ? lastTest!.content : undefined }),
+        previousOutput.content, revisionRequest.content, workerPermissions, stepType,
+      ), 'revision', 'revising'));
 
     // Create revision output
     const output = createRevisionOutput(
@@ -2150,7 +2293,7 @@ export class DeliberationOrchestrator {
     // The work order (the raw problem IS the directive here) + subagent fan-out
     // (static + dynamic) on the direct-execution path too. Source is omitted:
     // the directive already holds the whole problem.
-    const order = buildWorkOrder({
+    const mkOrder = (qa?: WorkOrderQA[]) => buildWorkOrder({
       objective: { task: this.config.brief?.task, stepName: this.config.brief?.stepName, stepType: this.config.brief?.stepType ?? stepType },
       deliverable: { outputType: council.deliberation?.outputType, expectedOutput: council.deliberation?.expectedOutput },
       acceptance: { decisionCriteria: council.deliberation?.decisionCriteria },
@@ -2165,11 +2308,13 @@ export class DeliberationOrchestrator {
         codebase: workerPermissions.codebase,
       },
       verification: workerPermissions.verifyCommand ? { command: workerPermissions.verifyCommand, maxTries: workerPermissions.verifyMaxTries ?? 3 } : undefined,
-      attempt: { number: 1, max: 1, mode: 'execute' },
+      attempt: { number: 1, max: 1, mode: qa?.length ? 'answer' : 'execute', qa },
       inputs: this.config.brief?.inputs,
       seatBrief: this.config.seatBriefs?.worker,
     });
+    const order = mkOrder();
     const effectiveProblem = await this.runSubagents(council, worker, order);
+    const findingsSuffix = effectiveProblem.slice(order.length);
     const userMessage = buildWorkerExecutionPrompt(effectiveProblem, workerPermissions, stepType);
 
     let response = await this.invokeAgentSafe(
@@ -2177,6 +2322,26 @@ export class DeliberationOrchestrator {
       worker,
       'execution'
     );
+
+    // Ask-back (no manager here → human hook → auto answer).
+    ({ response } = await this.handleWorkerSignals(council, worker, systemPrompt, response, (qa) =>
+      buildWorkerExecutionPrompt(mkOrder(qa) + findingsSuffix, workerPermissions, stepType), 'execution', 'executing'));
+
+    // Manager-less + blocked: nobody can re-plan, so fail HONESTLY (the executor
+    // turns a failed council into a failed step) instead of completing with a
+    // "I could not do this" deliverable.
+    const directSignals = parseWorkerSignals(response.content);
+    if (directSignals.status === 'blocked') {
+      const reason = directSignals.blockedReason || 'Worker reported being blocked';
+      this.createEntry(council.id, 'worker', worker.id, 'work_output', 'executing', response.content,
+        response.tokensUsed, response.latencyMs, undefined, undefined, { ...response.structured, signals: signalsForLedger(directSignals) });
+      this.createEntry(council.id, 'worker', worker.id, 'error', 'executing',
+        `Worker BLOCKED (no manager to re-plan): ${reason}`, 0, 0, undefined, undefined, { blockedReason: reason });
+      councilStore.updateDeliberationState(council.id, { completionSummary: `Worker blocked: ${reason}` });
+      this.transitionPhase(council.id, 'failed');
+      councilStore.setStatus(council.id, 'resolved');
+      throw new Error(`Worker blocked: ${reason}`);
+    }
 
     // Manager-less final verification: run the verify command ourselves; on
     // failure give the worker bounded fix attempts (maxRevisions) with the tail.
@@ -2732,7 +2897,7 @@ export class DeliberationOrchestrator {
 
     const workerToolPhases = ['execution', 'revision', 'debug'];
     const readOnlyToolPhases = ['independent_analysis', 'deliberation_response', 'code_review'];
-    const managerToolPhases = ['problem_framing', 'directive', 'review'];
+    const managerToolPhases = ['problem_framing', 'directive', 'review', 'worker_question'];
 
     const roleAssignment = council?.deliberation?.roleAssignments
       ?.find(r => r.personaId === persona.id);
@@ -2833,6 +2998,7 @@ export class DeliberationOrchestrator {
       directive: 600_000,
       plan: 600_000,
       review: 600_000,
+      worker_question: 600_000,
       round_summary: 600_000,
       // Consultant contexts — 10 min
       independent_analysis: 600_000,

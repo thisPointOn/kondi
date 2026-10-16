@@ -28,7 +28,9 @@ interface UsePipelineParams {
 export function usePipeline({ availableTools, setThinkingPersonas, configuredProviders }: UsePipelineParams) {
   const [currentPipelineId, setCurrentPipelineId] = useState<string | null>(null);
   const [pipelineMode, setPipelineMode] = useState<'library' | 'builder' | 'execution' | 'results'>('library');
-  const [gateResolvers, setGateResolvers] = useState<Map<string, (approved: boolean) => void>>(new Map());
+  // Per-step resolvers for whatever the step is waiting for: a gate (boolean)
+  // or a worker's question (answer string, or null = let the worker decide).
+  const [gateResolvers, setGateResolvers] = useState<Map<string, (value: boolean | string | null) => void>>(new Map());
   const [pipelineExecutor, setPipelineExecutor] = useState<PipelineExecutor | null>(null);
   const [activePipelineCouncilId, setActivePipelineCouncilId] = useState<string | null>(null);
   const [pipelineSelectedCouncilId, setPipelineSelectedCouncilId] = useState<string | null>(null);
@@ -163,8 +165,7 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
     overrides?: Partial<PipelineExecutorCallbacks>,
   ): { executor: PipelineExecutor; platform: PlatformAdapter } => {
     if (!background) {
-      const resolverMap = new Map<string, (approved: boolean) => void>();
-      setGateResolvers(resolverMap);
+      setGateResolvers(new Map());
     }
 
     const tauriPlatform: PlatformAdapter = makePlatform();
@@ -184,7 +185,21 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
         return new Promise<boolean>((resolve) => {
           setGateResolvers((prev) => {
             const next = new Map(prev);
-            next.set(stepId, resolve);
+            next.set(stepId, (v) => { resolve(v === true); next.delete(stepId); });
+            return next;
+          });
+        });
+      },
+      // Ask-back: background runs have no one to ask (null → worker proceeds on
+      // its best judgment); foreground runs show a question card on the step.
+      onCouncilQuestion: background ? () => Promise.resolve(null) : (stepId) => {
+        return new Promise<string | null>((resolve) => {
+          setGateResolvers((prev) => {
+            const next = new Map(prev);
+            next.set(stepId, (v) => {
+              setGateResolvers((p2) => { const n2 = new Map(p2); n2.delete(stepId); return n2; });
+              resolve(typeof v === 'string' && v.trim() ? v.trim() : null);
+            });
             return next;
           });
         });

@@ -673,3 +673,32 @@
   font-style: italic;
   padding: 0.375rem 0;
 }
+
+/* Ask-back: a council worker's question parked on the step */
+.gate-approval.worker-question {
+  border-top-color: #8b5cf640;
+}
+
+.worker-question-note {
+  margin-top: 0.25rem;
+  font-style: italic;
+  color: var(--text-tertiary, #777);
+}
+
+.worker-question-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.375rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #333);
+  background: var(--bg-tertiary, #1a1a1a);
+  color: var(--text-primary, #eee);
+}
+
+.gate-approve-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

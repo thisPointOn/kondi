@@ -21,7 +21,7 @@ export type ToolScope = 'none' | 'read_only' | 'full';
 export interface WorkOrderQA {
   question: string;
   answer: string;
-  answeredBy: 'manager' | 'user' | 'auto';
+  answeredBy: 'manager' | 'user' | 'system';
 }
 
 export interface WorkOrderInput {

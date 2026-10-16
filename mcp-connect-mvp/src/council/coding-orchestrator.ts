@@ -58,6 +58,9 @@ import { detectInstallCommand } from '../pipeline/install-detect';
 import type { AgentInvocation, AgentResponse, AgentInvoker, StepBrief } from './deliberation-orchestrator';
 export type { AgentInvocation, AgentResponse, AgentInvoker } from './deliberation-orchestrator';
 import { parseWorkerSignals, signalsForLedger } from './worker-signals';
+import { resolveWorkerQuestion, buildWorkerQuestionAnswerPrompt, MAX_QUESTIONS_PER_PHASE, BUDGET_EXHAUSTED_ANSWER } from './ask-back';
+import type { WorkerQuestionHandler } from './ask-back';
+import type { WorkOrderQA } from './work-order';
 
 export interface CodingOrchestratorConfig {
   invokeAgent: AgentInvoker;
@@ -70,6 +73,9 @@ export interface CodingOrchestratorConfig {
   seatBriefs?: Partial<Record<DeliberationRole, string>>;
   runCommand?: (cmd: string, cwd: string) => Promise<{ stdout: string; stderr: string; exit_code: number; success: boolean }>;
   readFile?: (path: string) => Promise<string | null>;
+  /** Ask-back human hook (see OrchestratorConfig.onWorkerQuestion). */
+  onWorkerQuestion?: WorkerQuestionHandler;
+  askBack?: { maxQuestionsPerPhase?: number };
   onPhaseChange?: (from: DeliberationPhase, to: DeliberationPhase) => void;
   onEntryAdded?: (entry: LedgerEntry) => void;
   onError?: (error: Error, context: string) => void;
@@ -568,11 +574,12 @@ export class CodingOrchestrator {
 
         this.config.onAgentThinkingStart?.(worker, Date.now());
 
-        const response = await this.invokeAgentSafe(
+        let response = await this.invokeAgentSafe(
           { personaId: worker.id, systemPrompt, userMessage },
           worker,
           'module_implementation'
         );
+        response = await this.askBack(council, worker, systemPrompt, userMessage, response, 'module_implementation', 'implementing', module.directive);
 
         // Create ledger entry (+ parsed worker signals)
         const signals = parseWorkerSignals(response.content);
@@ -765,11 +772,12 @@ export class CodingOrchestrator {
 
         console.log(`[CodingOrchestrator] Worker ${worker.name} fixing module ${module.name}`);
 
-        const response = await this.invokeAgentSafe(
+        let response = await this.invokeAgentSafe(
           { personaId: worker.id, systemPrompt, userMessage },
           worker,
           'debug_fix'
         );
+        response = await this.askBack(council, worker, systemPrompt, userMessage, response, 'debug_fix', 'debugging', `Fix the failing tests in module ${module.name}`);
 
         moduleOutputs[module.name] = response.content;
 
@@ -826,6 +834,69 @@ export class CodingOrchestrator {
   // ==========================================================================
   // Completion
   // ==========================================================================
+
+  /**
+   * Ask-back for coding workers (same ladder and ledger shape as the
+   * deliberation orchestrator: manager → `onWorkerQuestion` → auto answer; the
+   * question is a worker-authored `manager_question`, the answer a `response`).
+   * The worker is re-invoked with the Q&A appended to its original message.
+   */
+  private async askBack(
+    council: Council,
+    worker: Persona,
+    systemPrompt: string,
+    baseMessage: string,
+    response: AgentResponse,
+    context: 'module_implementation' | 'debug_fix',
+    phase: DeliberationPhase,
+    directive: string,
+  ): Promise<AgentResponse> {
+    const qa: WorkOrderQA[] = [];
+    const max = this.config.askBack?.maxQuestionsPerPhase ?? MAX_QUESTIONS_PER_PHASE;
+    const manager = getPersonaByRole(council, 'manager')[0];
+    for (let asked = 0; asked <= max; asked++) {
+      const signals = parseWorkerSignals(response.content);
+      if (signals.status !== 'question' || !signals.question) break;
+      const question = signals.question;
+      this.createEntry(council.id, 'worker', worker.id, 'manager_question', phase,
+        `[Question from ${worker.name}] ${question}`, response.tokensUsed, response.latencyMs,
+        undefined, undefined, { ...response.structured, signals: signalsForLedger(signals), askedBy: 'worker' });
+
+      let answer: string;
+      let answeredBy: WorkOrderQA['answeredBy'];
+      const exhausted = asked >= max;
+      if (exhausted) {
+        answer = BUDGET_EXHAUSTED_ANSWER;
+        answeredBy = 'system';
+      } else {
+        const spec = council.deliberation?.savedProblem;
+        const resolved = await resolveWorkerQuestion({
+          ctx: { councilId: council.id, personaId: worker.id, personaName: worker.name, question, phase: context },
+          askManager: manager ? async () => {
+            const r = await this.invokeAgentSafe({
+              personaId: manager.id,
+              systemPrompt: manager.predisposition.systemPrompt,
+              userMessage: buildWorkerQuestionAnswerPrompt({ question, workerName: worker.name, directive, source: spec }),
+            }, manager, 'worker_question');
+            return r.content;
+          } : undefined,
+          onWorkerQuestion: this.config.onWorkerQuestion,
+        });
+        answer = resolved.answer;
+        answeredBy = resolved.answeredBy;
+      }
+      console.log(`[CodingOrchestrator:AskBack] ${worker.name} asked (${asked + 1}); answered by ${answeredBy}`);
+      this.createEntry(council.id, manager ? 'manager' : 'worker', (manager ?? worker).id, 'response', phase,
+        `[Answer to ${worker.name} — ${answeredBy}] ${answer}`, 0, 0, undefined, undefined,
+        { answeredBy, question, automatic: answeredBy === 'system' });
+      qa.push({ question, answer, answeredBy });
+
+      const userMessage = `${baseMessage}\n\n## ANSWERS TO YOUR QUESTIONS\n${qa.map((q) => `- Q: ${q.question}\n  A (${q.answeredBy}): ${q.answer}`).join('\n')}\n\nContinue the task now using these answers. Do not ask them again.`;
+      response = await this.invokeAgentSafe({ personaId: worker.id, systemPrompt, userMessage }, worker, context);
+      if (exhausted) break;
+    }
+    return response;
+  }
 
   private async mergeAndComplete(council: Council, spec: string, warnings: string[] = []): Promise<void> {
     const state = council.deliberationState;

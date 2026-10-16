@@ -18,6 +18,7 @@ import type {
   GateStepConfig,
   ScriptStepConfig,
   ConditionStepConfig,
+  PendingInput,
 } from './types';
 import { migrateLlmConfig } from './types';
 import { renderCoreTemplate, extractJsonBlock } from './input-template';
@@ -74,6 +75,12 @@ export interface PipelineExecutorCallbacks {
   onStepComplete?: (stepId: string, artifact: StepArtifact) => void;
   onStepError?: (stepId: string, error: string) => void;
   onGateWaiting?: (stepId: string, prompt: string) => Promise<boolean>;
+  /** Ask-back: a council worker asked a question the manager could not answer
+   *  (or there is no manager). The step is parked in `waiting_approval` with
+   *  `step.pendingInput` while this is pending. Resolve with the answer, or null
+   *  when nobody can answer (the worker is told to proceed on its best judgment).
+   *  Absent → every escalated question is auto-answered. */
+  onCouncilQuestion?: (stepId: string, input: PendingInput) => Promise<string | null>;
   /** Narration line (e.g. loop-back notices). */
   onLog?: (message: string) => void;
   onCouncilCreated?: (stepId: string, councilId: string) => void;
@@ -889,12 +896,35 @@ export class PipelineExecutor {
     };
 
     // Branch: coding steps use CodingOrchestrator, planning uses DeliberationOrchestrator
+    // Ask-back: park the step while a human answers a worker's question.
+    const onWorkerQuestion = this.callbacks.onCouncilQuestion
+      ? async (ctx: { councilId: string; personaName: string; question: string; managerNote?: string }) => {
+          const pending: PendingInput = {
+            kind: 'question', prompt: ctx.question, councilId: ctx.councilId,
+            personaName: ctx.personaName, managerNote: ctx.managerNote, askedAt: new Date().toISOString(),
+          };
+          pipelineStore.setStepPendingInput(pipelineId, step.id, pending);
+          pipelineStore.setStepStatus(pipelineId, step.id, 'waiting_approval');
+          this.callbacks.onLog?.(`${step.name}: ${ctx.personaName} asks — ${ctx.question.slice(0, 200)}`);
+          try {
+            return await this.callbacks.onCouncilQuestion!(step.id, pending);
+          } finally {
+            pipelineStore.setStepPendingInput(pipelineId, step.id, undefined);
+            // Only un-park if nothing else moved the step on (abort fails it).
+            if (pipelineStore.get(pipelineId)?.stages.flatMap((st) => st.steps).find((s) => s.id === step.id)?.status === 'waiting_approval') {
+              pipelineStore.setStepStatus(pipelineId, step.id, 'running');
+            }
+          }
+        }
+      : undefined;
+
     const orchestratorCallbacks = {
       invokeAgent: this.callbacks.invokeAgent,
       canUseTools: this.callbacks.canUseTools,
       brief,
       runCommand: this.platform.runCommand,
       readFile: this.platform.readFile,
+      onWorkerQuestion,
       onPhaseChange: (from: any, to: any) =>
         console.log(`[Pipeline:Council] Phase: ${from} -> ${to}`),
       onError: (err: Error, ctx: string) =>
@@ -1220,13 +1250,19 @@ export class PipelineExecutor {
   ): Promise<StepArtifact> {
     const config = step.config as GateStepConfig;
 
+    pipelineStore.setStepPendingInput(pipelineId, step.id, { kind: 'gate', prompt: config.approvalPrompt, askedAt: new Date().toISOString() });
     pipelineStore.setStepStatus(pipelineId, step.id, 'waiting_approval');
 
     if (!this.callbacks.onGateWaiting) {
       throw new Error('No gate approval handler configured');
     }
 
-    const approved = await this.callbacks.onGateWaiting(step.id, config.approvalPrompt);
+    let approved: boolean;
+    try {
+      approved = await this.callbacks.onGateWaiting(step.id, config.approvalPrompt);
+    } finally {
+      pipelineStore.setStepPendingInput(pipelineId, step.id, undefined);
+    }
 
     if (!approved) {
       throw new Error('Gate step rejected by user');

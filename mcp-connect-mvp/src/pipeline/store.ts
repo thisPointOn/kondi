@@ -11,6 +11,7 @@ import type {
   PipelineStatus,
   StepConfig,
   StepArtifact,
+  PendingInput,
   LlmStepConfig,
 } from './types';
 import { migrateLlmConfig } from './types';
@@ -198,6 +199,7 @@ function resetStaleExecutionStates(): void {
           step.status = 'failed';
           step.error = 'Interrupted: application was restarted';
           step.completedAt = new Date().toISOString();
+          step.pendingInput = undefined;
           dirty = true;
         }
       }
@@ -537,6 +539,14 @@ export function setStepStatus(
   return updateStep(pipelineId, stepId, updates);
 }
 
+export function setStepPendingInput(
+  pipelineId: string,
+  stepId: string,
+  pendingInput: PendingInput | undefined
+): Pipeline | null {
+  return updateStep(pipelineId, stepId, { pendingInput });
+}
+
 export function setStepArtifact(
   pipelineId: string,
   stepId: string,
@@ -775,6 +785,12 @@ export class PipelineStore {
 
   setStepArtifact(pipelineId: string, stepId: string, artifact: StepArtifact): Pipeline | null {
     const pipeline = setStepArtifact(pipelineId, stepId, artifact);
+    if (pipeline) this.notify();
+    return pipeline;
+  }
+
+  setStepPendingInput(pipelineId: string, stepId: string, pendingInput: PendingInput | undefined): Pipeline | null {
+    const pipeline = setStepPendingInput(pipelineId, stepId, pendingInput);
     if (pipeline) this.notify();
     return pipeline;
   }

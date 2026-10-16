@@ -21,7 +21,7 @@ import readline from 'node:readline';
 import { pipelineStore } from '../src/pipeline/store';
 import { PipelineExecutor } from '../src/pipeline/executor';
 import type { PlatformAdapter } from '../src/pipeline/executor';
-import type { Pipeline, CouncilStepConfig, LlmStepConfig, ScriptStepConfig, ConditionStepConfig } from '../src/pipeline/types';
+import type { Pipeline, CouncilStepConfig, LlmStepConfig, ScriptStepConfig, ConditionStepConfig, PendingInput } from '../src/pipeline/types';
 import { migrateLlmConfig } from '../src/pipeline/types';
 import { callLLM } from './llm-caller';
 import { ensureWorkdirGitInit } from './workdir-isolate';
@@ -315,6 +315,23 @@ async function promptGate(stepId: string, prompt: string): Promise<boolean> {
     rl.question(`${C.yellow}Approve? (y/n): ${C.reset}`, (answer) => {
       rl.close();
       resolve(answer.toLowerCase().startsWith('y'));
+    });
+  });
+}
+
+// ── Ask-back: a council worker's question the manager escalated (or no manager) ──
+async function promptQuestion(stepId: string, input: PendingInput): Promise<string | null> {
+  if (!process.stdin.isTTY) {
+    console.log(`${C.yellow}QUESTION from ${input.personaName || 'worker'} in step ${stepId} (no TTY — worker proceeds on its best judgment): ${input.prompt}${C.reset}`);
+    return null;
+  }
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    console.log(`\n${C.yellow}${C.bold}QUESTION from ${input.personaName || 'worker'}:${C.reset} ${input.prompt}`);
+    if (input.managerNote) console.log(`${C.dim}Manager: ${input.managerNote}${C.reset}`);
+    rl.question(`${C.yellow}Answer (empty = let the worker decide): ${C.reset}`, (answer) => {
+      rl.close();
+      resolve(answer.trim() ? answer.trim() : null);
     });
   });
 }
@@ -682,6 +699,7 @@ async function main() {
     },
 
     onGateWaiting: promptGate,
+    onCouncilQuestion: promptQuestion,
 
     onImprovementEvent: (e) => {
       if (e.type === 'proposals') log(C.magenta, 'Improve', `${e.count} proposal(s) from the retrospective`);

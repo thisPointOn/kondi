@@ -26,6 +26,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ensureWorkdirGitInit } from './workdir-isolate';
 import { createNodePlatform } from './node-platform';
+import readline from 'node:readline';
 import { councilStore } from '../src/council/store';
 import { createCouncilFromSetup } from '../src/council/factory';
 import { DeliberationOrchestrator } from '../src/council/deliberation-orchestrator';
@@ -385,6 +386,19 @@ async function main() {
     onError: (err: Error, ctx: string) => log(C.red, 'Error', `${ctx}: ${err.message}`),
     onAgentThinkingStart: (_persona: Persona) => {},
     onAgentThinkingEnd: (_persona: Persona) => {},
+    // Ask-back: answer a worker's escalated question at the terminal (TTY only).
+    onWorkerQuestion: async (ctx: { personaName: string; question: string; managerNote?: string }) => {
+      if (!process.stdin.isTTY) {
+        log(C.yellow, 'Question', `${ctx.personaName} asks (no TTY → best judgment): ${ctx.question}`);
+        return null;
+      }
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      return new Promise<string | null>((resolve) => {
+        console.log(`\n${C.yellow}QUESTION from ${ctx.personaName}:${C.reset} ${ctx.question}`);
+        if (ctx.managerNote) console.log(`${C.dim}Manager: ${ctx.managerNote}${C.reset}`);
+        rl.question(`${C.yellow}Answer (empty = let the worker decide): ${C.reset}`, (a) => { rl.close(); resolve(a.trim() || null); });
+      });
+    },
   };
 
   // ── Execute ──

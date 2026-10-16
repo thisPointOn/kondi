@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import type { Pipeline, PipelineStep } from '../../pipeline/types';
+import type { Pipeline, PipelineStep, PendingInput } from '../../pipeline/types';
 import { isCouncilType } from '../../pipeline/types';
 import type { Council, Persona } from '../../council/types';
 import { pipelineStore } from '../../pipeline/store';
@@ -17,7 +17,7 @@ interface PipelineExecutionViewProps {
   onBack: () => void;
   onAbort: () => void;
   /** Gate approval handler — resolves with true (approve) or false (reject) */
-  gateResolvers: Map<string, (approved: boolean) => void>;
+  gateResolvers: Map<string, (value: boolean | string | null) => void>;
   /** The council that is currently running (set by onCouncilCreated) */
   activeCouncilId?: string | null;
   /** Personas currently thinking */
@@ -316,6 +316,33 @@ export default function PipelineExecutionView({
 // Execution Step Card
 // ============================================================================
 
+function WorkerQuestionCard({ input, resolve }: { input: PendingInput; resolve: (value: string | null) => void }) {
+  const [answer, setAnswer] = useState('');
+  return (
+    <div className="gate-approval worker-question" onClick={(e) => e.stopPropagation()}>
+      <div className="gate-prompt">
+        <strong>{input.personaName || 'Worker'} asks:</strong> {input.prompt}
+        {input.managerNote && <div className="worker-question-note">Manager: {input.managerNote}</div>}
+      </div>
+      <textarea
+        className="worker-question-input"
+        placeholder="Your answer (the worker continues with it)…"
+        value={answer}
+        onChange={(e) => setAnswer(e.target.value)}
+        rows={3}
+      />
+      <div className="gate-actions">
+        <button className="gate-approve-btn" disabled={!answer.trim()} onClick={() => resolve(answer.trim())}>
+          Answer
+        </button>
+        <button className="gate-reject-btn" onClick={() => resolve(null)} title="The worker proceeds on its best judgment and states its assumptions">
+          Let the worker decide
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ExecutionStepCard({
   step,
   expanded,
@@ -332,7 +359,7 @@ function ExecutionStepCard({
   step: PipelineStep;
   expanded: boolean;
   onToggleArtifact: () => void;
-  gateResolver?: (approved: boolean) => void;
+  gateResolver?: (value: boolean | string | null) => void;
   activeCouncilId?: string | null;
   isActiveCouncil?: boolean;
   isSelectedStep?: boolean;
@@ -383,6 +410,11 @@ function ExecutionStepCard({
             </button>
           </div>
         </div>
+      )}
+
+      {/* Ask-back: a council worker's question (manager escalated, or no manager) */}
+      {step.status === 'waiting_approval' && step.pendingInput?.kind === 'question' && gateResolver && (
+        <WorkerQuestionCard input={step.pendingInput} resolve={gateResolver} />
       )}
 
       {/* Step view indicator */}
