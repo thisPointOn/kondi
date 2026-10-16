@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { AgentStreamEvent } from '../agent-runtime/types';
+import type { BudgetState } from '../pipeline/budget';
 import { PipelineExecutor, type PlatformAdapter } from '../pipeline';
 import type { PipelineExecutorCallbacks } from '../pipeline/executor';
 import { syncWorkflowPipeline } from '../council/workflow-runner';
@@ -36,6 +37,8 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
   // or a worker's question (answer string, or null = let the worker decide).
   const [gateResolvers, setGateResolvers] = useState<Map<string, (value: boolean | string | null) => void>>(new Map());
   const [pipelineExecutor, setPipelineExecutor] = useState<PipelineExecutor | null>(null);
+  /** Live run-budget progress (null when the pipeline sets no budget). */
+  const [budgetState, setBudgetState] = useState<BudgetState | null>(null);
   const [activePipelineCouncilId, setActivePipelineCouncilId] = useState<string | null>(null);
   const [pipelineSelectedCouncilId, setPipelineSelectedCouncilId] = useState<string | null>(null);
   const [pipelineSelectedStepId, setPipelineSelectedStepId] = useState<string | null>(null);
@@ -232,6 +235,7 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
             clearStream?.(persona.id);
           },
       onAgentEvent: background ? undefined : onAgentEvent,
+      onBudgetTick: background ? undefined : (s) => setBudgetState({ ...s }),
       ...overrides,
     }, tauriPlatform);
 
@@ -241,6 +245,7 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
   const runExecutor = (executor: PipelineExecutor, id: string) => {
     setPipelineExecutor(executor);
     setPipelineMode('execution');
+    setBudgetState(null);
 
     executor.run(id).then(() => {
       console.log('[Pipeline] Execution completed');
@@ -404,6 +409,7 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
     pipelineMode,
     gateResolvers,
     pipelineExecutor,
+    budgetState,
     activePipelineCouncilId,
     pipelineSelectedCouncilId,
     setPipelineSelectedCouncilId,

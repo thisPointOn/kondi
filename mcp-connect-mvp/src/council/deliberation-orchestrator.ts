@@ -80,6 +80,7 @@ import {
 import type { WorkerQuestionHandler } from './ask-back';
 import { anySignal, timeoutSignal, raceSignal, throwIfAborted, isAbortError, isTimeoutError, AbortError } from '../agent-runtime/signals';
 import type { AgentStreamEvent } from '../agent-runtime/types';
+import { isBudgetExceededError } from '../pipeline/budget';
 
 import {
   buildManagerFramingPrompt,
@@ -181,6 +182,9 @@ export interface OrchestratorConfig {
   /** Live stream events per persona call (display only — never used to build
    *  the deliverable). The GUI shows the tail under the thinking indicator. */
   onAgentEvent?: (persona: Persona, event: AgentStreamEvent, context: string) => void;
+  /** Run budget status line injected into EVERY persona's prompt (after the
+   *  lessons). Supplied per run by the executor's BudgetMeter. */
+  budgetLine?: () => string | undefined;
   /** Whether this runtime can actually EXECUTE tools for a persona's provider.
    *  Default true (app, where API clients run tool loops). The headless CLI
    *  runner returns true only for the claude/codex binaries so API-provider
@@ -437,7 +441,8 @@ export class DeliberationOrchestrator {
       const author = getPersonaByRole(council, 'manager')[0] || council.personas[0];
       if (author) {
         this.createEntry(councilId, author.preferredDeliberationRole || 'manager', author.id, 'error', phase,
-          `Deliberation error during ${phase}: ${(error as Error)?.message || String(error)}`, 0, 0);
+          `Deliberation error during ${phase}: ${(error as Error)?.message || String(error)}`, 0, 0, undefined, undefined,
+          isBudgetExceededError(error) ? { budget: { kind: error.state.exceeded?.kind, usd: error.state.usd, tokens: error.state.tokens } } : undefined);
       }
     } catch { /* best effort */ }
     this.transitionPhase(councilId, 'failed');
@@ -445,7 +450,10 @@ export class DeliberationOrchestrator {
 
   /** True for a run-level abort (not a per-call timeout). */
   private isUserAbort(error: unknown): boolean {
-    return (isAbortError(error) && !isTimeoutError(error)) || !!this.config.signal?.aborted;
+    if (isBudgetExceededError(error)) return false; // a budget breach is an honest FAILURE
+    const signalReason = this.config.signal?.aborted ? this.config.signal.reason : undefined;
+    const signalIsUserAbort = !!this.config.signal?.aborted && !isBudgetExceededError(signalReason);
+    return (isAbortError(error) && !isTimeoutError(error)) || signalIsUserAbort;
   }
 
   /** Cancellation entry + `cancelled` phase (idempotent). */
@@ -739,7 +747,8 @@ export class DeliberationOrchestrator {
           errPhase || 'failed',
           `Deliberation error during ${errPhase}: ${errMsg}`,
           0, 0, undefined,
-          council.deliberationState?.currentRound
+          council.deliberationState?.currentRound,
+          isBudgetExceededError(error) ? { budget: { kind: error.state.exceeded?.kind, usd: error.state.usd, tokens: error.state.tokens } } : undefined
         );
       } catch { /* best effort */ }
 
@@ -3055,6 +3064,10 @@ export class DeliberationOrchestrator {
     const lessonsBlock = formatLessonsBlock(this.config.lessons, roleAssignment?.role || persona.preferredDeliberationRole);
     if (lessonsBlock) {
       invocation = { ...invocation, userMessage: invocation.userMessage + lessonsBlock };
+    }
+    const budgetLine = this.config.budgetLine?.();
+    if (budgetLine) {
+      invocation = { ...invocation, userMessage: `${invocation.userMessage}\n\n${budgetLine}` };
     }
 
     // Thread working directory from council so each invocation uses its own dir

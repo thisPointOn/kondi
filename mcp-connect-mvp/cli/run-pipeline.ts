@@ -97,6 +97,7 @@ function parseArgs() {
   let dryRun = false;
   let improve = false;
   let autoApprove = false;
+  const budget: { maxUsd?: number; maxTokens?: number; maxMinutes?: number; onExceeded?: 'finish_call' | 'abort_now' } = {};
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--working-dir' && args[i + 1]) {
@@ -111,6 +112,14 @@ function parseArgs() {
       improve = true;
     } else if (args[i] === '--auto-approve') {
       autoApprove = true;
+    } else if (args[i] === '--budget-usd' && args[i + 1]) {
+      budget.maxUsd = parseFloat(args[++i]);
+    } else if (args[i] === '--budget-tokens' && args[i + 1]) {
+      budget.maxTokens = parseInt(args[++i], 10);
+    } else if (args[i] === '--budget-minutes' && args[i + 1]) {
+      budget.maxMinutes = parseFloat(args[++i]);
+    } else if (args[i] === '--budget-abort-now') {
+      budget.onExceeded = 'abort_now';
     } else if (args[i] === '--help' || args[i] === '-h') {
       console.log(`
 ${C.bold}Kondi CLI Pipeline Runner${C.reset}
@@ -126,6 +135,10 @@ Options:
   --improve              After the run, retrospect on it and review proposed recipe
                          improvements interactively (self-improvement loop)
   --auto-approve         With --improve: apply every proposal without asking
+  --budget-usd <n>       Hard spend ceiling for this run (USD); exceeding it fails
+  --budget-tokens <n>    the current step honestly and stops the run
+  --budget-minutes <n>   Wall-clock ceiling for this run
+  --budget-abort-now     Cancel in-flight calls on breach (default: finish the call)
   --help                 Show this help
 
 Accepts two JSON formats:
@@ -149,7 +162,7 @@ Output:
     process.exit(1);
   }
 
-  return { pipelineFile, workingDir, model, pipelineName, dryRun, improve, autoApprove };
+  return { pipelineFile, workingDir, model, pipelineName, dryRun, improve, autoApprove, budget };
 }
 
 // ── Load pipeline JSON ──
@@ -484,8 +497,12 @@ function formatDuration(ms: number): string {
 
 // ── Main ──
 async function main() {
-  const { pipelineFile, workingDir, model, pipelineName, dryRun, improve, autoApprove } = parseArgs();
+  const { pipelineFile, workingDir, model, pipelineName, dryRun, improve, autoApprove, budget } = parseArgs();
   const pipeline = loadPipeline(pipelineFile, workingDir, model, pipelineName);
+  if (budget.maxUsd || budget.maxTokens || budget.maxMinutes) {
+    pipeline.settings.budget = { ...pipeline.settings.budget, ...budget };
+    log(C.yellow, 'Budget', [budget.maxUsd && `$${budget.maxUsd}`, budget.maxTokens && `${budget.maxTokens} tokens`, budget.maxMinutes && `${budget.maxMinutes} min`].filter(Boolean).join(', ') + (budget.onExceeded === 'abort_now' ? ' (abort in-flight calls on breach)' : ''));
+  }
 
   // --improve: turn the post-run retrospective on for this run. Manual mode
   // queues proposals (reviewed interactively below); --auto-approve applies them.

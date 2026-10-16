@@ -162,6 +162,7 @@ function App() {
               pipelineId={pipeline.currentPipelineId}
               onBack={pipeline.handleExecutionBack}
               onAbort={pipeline.handleExecutionAbort}
+              budgetState={pipeline.budgetState}
               gateResolvers={pipeline.gateResolvers}
               activeCouncilId={pipeline.activePipelineCouncilId}
               thinkingPersonas={council.thinkingPersonas}

@@ -429,6 +429,17 @@ export interface Pipeline {
     /** Self-improvement loop (see `src/improve/`). Absent = disabled; scorecards
      *  are still built for every run. */
     selfImprove?: SelfImproveSettings;
+    /** Hard spend ceiling for a run (USD / tokens / minutes). Exceeding it fails
+     *  the current step honestly and stops the run at the stage boundary. See
+     *  `src/pipeline/budget.ts`. */
+    budget?: {
+      maxUsd?: number;
+      maxTokens?: number;
+      maxMinutes?: number;
+      /** 'finish_call' (default): the in-flight call completes, the next is refused;
+       *  'abort_now': in-flight calls are cancelled too. */
+      onExceeded?: 'finish_call' | 'abort_now';
+    };
   };
   status: PipelineStatus;
   currentStageIndex: number;

@@ -1202,3 +1202,11 @@
 .tool-access-item:hover {
   background: var(--bg-hover, #222);
 }
+
+/* Run budget fields (settings panel) */
+.budget-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.375rem;
+}
+.budget-fields select { grid-column: 1 / -1; }

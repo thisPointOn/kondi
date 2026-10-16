@@ -47,7 +47,9 @@ import { saveStepInput, getStepInput, formatStepInputMarkdown } from '../improve
 import { buildRunScorecard, summarizeCouncilUsage, scorecardJsonlLine } from '../improve/run-metrics';
 import { improveStore } from '../improve/store';
 import { newRunId } from '../improve/hash';
-import { AbortError, raceSignal } from '../agent-runtime/signals';
+import { AbortError, raceSignal, anySignal } from '../agent-runtime/signals';
+import { BudgetMeter, hasBudget, formatBudgetLine, isBudgetExceededError } from './budget';
+import type { BudgetState } from './budget';
 import { buildLessonBundle } from '../improve/lessons';
 import { runImprovementCycle, liveSettings } from '../improve/cycle';
 import type { RunScorecard, ImproveEvent } from '../improve/types';
@@ -90,6 +92,8 @@ export interface PipelineExecutorCallbacks {
   onAgentThinkingEnd?: (persona: Persona) => void;
   /** Live per-call stream events (text deltas, tool calls) — display only. */
   onAgentEvent?: (persona: Persona, event: AgentStreamEvent, context: string) => void;
+  /** Budget progress after every agent call (and on breach). */
+  onBudgetTick?: (state: BudgetState) => void;
   /** Self-improvement loop progress (scorecard saved, proposals queued/applied, errors). Logging only. */
   onImprovementEvent?: (event: ImproveEvent) => void;
   /** Which providers are configured — lets auto-applied proposals be validated like the builder does. */
@@ -227,6 +231,8 @@ export class PipelineExecutor {
   /** Run-level cancellation: aborted by `abort()`; its signal reaches every
    *  orchestrator call and pending human prompt (gates/questions). */
   private runAbort: AbortController | null = null;
+  /** Run budget meter (null when the pipeline sets no budget). */
+  private budget: BudgetMeter | null = null;
   private runningPipelineId: string | null = null;
   /** Set by condition steps to skip the next stage */
   private skipNextStage = false;
@@ -272,6 +278,10 @@ export class PipelineExecutor {
 
     this.aborted = false;
     this.runAbort = new AbortController();
+    this.budget = hasBudget(pipeline.settings.budget)
+      ? new BudgetMeter(pipeline.settings.budget!, { onTick: (s) => { try { this.callbacks.onBudgetTick?.(s); } catch { /* ignore */ } } })
+      : null;
+    if (this.budget) this.callbacks.onBudgetTick?.(this.budget.state);
     this.skipNextStage = false;
     this.stopPipeline = false;
     this.loopRequest = null;
@@ -365,6 +375,17 @@ export class PipelineExecutor {
         if (this.loopFeedback) {
           previousArtifacts.push(this.loopFeedback);
           this.loopFeedback = null;
+        }
+
+        // Budget spent → stop HONESTLY at the stage boundary (the breaching step
+        // already failed; later stages never start).
+        if (this.budget?.exceeded) {
+          const detail = this.budget.state.exceeded!.detail;
+          this.callbacks.onLog?.(`Budget exceeded — stopping before stage ${i + 1}: ${detail}`);
+          for (const step of stage.steps) {
+            if (step.status !== 'completed') pipelineStore.setStepStatus(pipelineId, step.id, 'skipped');
+          }
+          throw new Error(`Budget exceeded: ${detail}`);
         }
 
         this.callbacks.onStageStart?.(i);
@@ -928,13 +949,18 @@ export class PipelineExecutor {
       : undefined;
 
     const orchestratorCallbacks = {
-      invokeAgent: this.callbacks.invokeAgent,
+      invokeAgent: this.budget ? this.budget.wrap(this.callbacks.invokeAgent) : this.callbacks.invokeAgent,
+      budgetLine: this.budget ? () => formatBudgetLine(this.budget!) : undefined,
       canUseTools: this.callbacks.canUseTools,
       brief,
       runCommand: this.platform.runCommand,
       readFile: this.platform.readFile,
       onWorkerQuestion,
-      signal: this.runAbort?.signal,
+      // Run abort ∪ budget abort_now (the latter carries a BudgetExceededError
+      // reason — classified as a failure, not a user cancel, by the orchestrators).
+      signal: this.budget && this.budget.state.limits.onExceeded === 'abort_now'
+        ? anySignal([this.runAbort?.signal, this.budget.signal])
+        : this.runAbort?.signal,
       onPhaseChange: (from: any, to: any) =>
         console.log(`[Pipeline:Council] Phase: ${from} -> ${to}`),
       onError: (err: Error, ctx: string) =>

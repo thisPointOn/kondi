@@ -63,6 +63,7 @@ import type { WorkerQuestionHandler } from './ask-back';
 import type { WorkOrderQA } from './work-order';
 import { anySignal, timeoutSignal, raceSignal, throwIfAborted, isAbortError, isTimeoutError, AbortError } from '../agent-runtime/signals';
 import type { AgentStreamEvent } from '../agent-runtime/types';
+import { isBudgetExceededError } from '../pipeline/budget';
 
 export interface CodingOrchestratorConfig {
   invokeAgent: AgentInvoker;
@@ -82,6 +83,9 @@ export interface CodingOrchestratorConfig {
   signal?: AbortSignal;
   /** Live stream events per persona call (see OrchestratorConfig.onAgentEvent). */
   onAgentEvent?: (persona: Persona, event: AgentStreamEvent, context: string) => void;
+  /** Run budget status line injected into EVERY persona's prompt (after the
+   *  lessons). Supplied per run by the executor's BudgetMeter. */
+  budgetLine?: () => string | undefined;
   onPhaseChange?: (from: DeliberationPhase, to: DeliberationPhase) => void;
   onEntryAdded?: (entry: LedgerEntry) => void;
   onError?: (error: Error, context: string) => void;
@@ -401,7 +405,8 @@ export class CodingOrchestrator {
           council.id, role, persona.id, 'error',
           currentPhase || 'created',
           `Coding workflow error during ${currentPhase}: ${errMsg}`,
-          0, 0
+          0, 0, undefined, undefined,
+          isBudgetExceededError(error) ? { budget: { kind: error.state.exceeded?.kind, usd: error.state.usd, tokens: error.state.tokens } } : undefined
         );
       } catch { /* best effort */ }
 
@@ -924,7 +929,10 @@ export class CodingOrchestrator {
 
   /** True for a run-level abort (not a per-call timeout). */
   private isUserAbort(error: unknown): boolean {
-    return (isAbortError(error) && !isTimeoutError(error)) || !!this.config.signal?.aborted;
+    if (isBudgetExceededError(error)) return false; // a budget breach is an honest FAILURE
+    const signalReason = this.config.signal?.aborted ? this.config.signal.reason : undefined;
+    const signalIsUserAbort = !!this.config.signal?.aborted && !isBudgetExceededError(signalReason);
+    return (isAbortError(error) && !isTimeoutError(error)) || signalIsUserAbort;
   }
 
   private async mergeAndComplete(council: Council, spec: string, warnings: string[] = []): Promise<void> {
@@ -1275,6 +1283,10 @@ export class CodingOrchestrator {
     const lessonsBlock = formatLessonsBlock(this.config.lessons, roleAssignment?.role || persona.preferredDeliberationRole);
     if (lessonsBlock) {
       invocation = { ...invocation, userMessage: invocation.userMessage + lessonsBlock };
+    }
+    const budgetLine = this.config.budgetLine?.();
+    if (budgetLine) {
+      invocation = { ...invocation, userMessage: `${invocation.userMessage}\n\n${budgetLine}` };
     }
 
     // Thread working directory from council so each invocation uses its own dir

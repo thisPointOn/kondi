@@ -350,6 +350,38 @@ export default function PipelineBuilder({
               </label>
             </div>
           </div>
+          <div className="meta-field">
+            <label>Run budget</label>
+            <div className="budget-fields">
+              <input
+                type="number" min={0} step={0.5} placeholder="max $"
+                title="Maximum spend in USD for one run (blank = no limit)"
+                value={pipeline.settings.budget?.maxUsd ?? ''}
+                onChange={(e) => pipelineStore.update(pipelineId, { settings: { ...pipeline.settings, budget: { ...pipeline.settings.budget, maxUsd: e.target.value === '' ? undefined : Math.max(0, parseFloat(e.target.value) || 0) } } })}
+              />
+              <input
+                type="number" min={0} step={10000} placeholder="max tokens"
+                title="Maximum tokens for one run (blank = no limit)"
+                value={pipeline.settings.budget?.maxTokens ?? ''}
+                onChange={(e) => pipelineStore.update(pipelineId, { settings: { ...pipeline.settings, budget: { ...pipeline.settings.budget, maxTokens: e.target.value === '' ? undefined : Math.max(0, parseInt(e.target.value) || 0) } } })}
+              />
+              <input
+                type="number" min={0} step={5} placeholder="max min"
+                title="Maximum wall-clock minutes for one run (blank = no limit)"
+                value={pipeline.settings.budget?.maxMinutes ?? ''}
+                onChange={(e) => pipelineStore.update(pipelineId, { settings: { ...pipeline.settings, budget: { ...pipeline.settings.budget, maxMinutes: e.target.value === '' ? undefined : Math.max(0, parseFloat(e.target.value) || 0) } } })}
+              />
+              <select
+                title="What happens when the budget is exceeded"
+                value={pipeline.settings.budget?.onExceeded ?? 'finish_call'}
+                onChange={(e) => pipelineStore.update(pipelineId, { settings: { ...pipeline.settings, budget: { ...pipeline.settings.budget, onExceeded: e.target.value as 'finish_call' | 'abort_now' } } })}
+              >
+                <option value="finish_call">finish the current call, then stop</option>
+                <option value="abort_now">cancel in-flight calls immediately</option>
+              </select>
+            </div>
+            <span className="hint">Hard ceiling per run. Every persona sees the remaining budget; exceeding it fails the step honestly and stops the run.</span>
+          </div>
 
           {/* Scheduler */}
           <SchedulerSection pipeline={pipeline} pipelineId={pipelineId} />

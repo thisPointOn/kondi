@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import type { Pipeline, PipelineStep, PendingInput } from '../../pipeline/types';
+import type { BudgetState } from '../../pipeline/budget';
 import { isCouncilType } from '../../pipeline/types';
 import type { Council, Persona } from '../../council/types';
 import { pipelineStore } from '../../pipeline/store';
@@ -24,6 +25,8 @@ interface PipelineExecutionViewProps {
   thinkingPersonas?: Persona[];
   /** Live per-persona stream tails (see useCouncilHandlers.streamingContent). */
   streamingContent?: Map<string, string>;
+  /** Live run-budget progress (null/undefined when no budget is set). */
+  budgetState?: BudgetState | null;
   /** Lifted council selection — persists across navigation */
   selectedCouncilId?: string | null;
   onSelectedCouncilChange?: (id: string | null) => void;
@@ -75,6 +78,7 @@ export default function PipelineExecutionView({
   activeCouncilId,
   thinkingPersonas = [],
   streamingContent,
+  budgetState,
   selectedCouncilId: selectedCouncilIdProp,
   onSelectedCouncilChange,
   selectedStepId: selectedStepIdProp,
@@ -200,6 +204,7 @@ export default function PipelineExecutionView({
           <span className="execution-title">{pipeline.name}</span>
         </div>
         <div className="execution-status">
+          {budgetState && <BudgetChip state={budgetState} />}
           <span
             className="execution-status-badge"
             style={{
@@ -319,6 +324,25 @@ export default function PipelineExecutionView({
 // ============================================================================
 // Execution Step Card
 // ============================================================================
+
+function BudgetChip({ state }: { state: BudgetState }) {
+  const { limits, usd, tokens, exceeded } = state;
+  const parts: string[] = [];
+  if (limits.maxUsd) parts.push(`$${usd.toFixed(3)} / $${limits.maxUsd}`);
+  if (limits.maxTokens) parts.push(`${Math.round(tokens / 1000)}k / ${Math.round(limits.maxTokens / 1000)}k tok`);
+  if (limits.maxMinutes) parts.push(`${state.elapsedMinutes.toFixed(1)} / ${limits.maxMinutes} min`);
+  const ratio = Math.max(
+    limits.maxUsd ? usd / limits.maxUsd : 0,
+    limits.maxTokens ? tokens / limits.maxTokens : 0,
+    limits.maxMinutes ? state.elapsedMinutes / limits.maxMinutes : 0,
+  );
+  const level = exceeded ? 'over' : ratio > 0.8 ? 'warn' : 'ok';
+  return (
+    <span className={`execution-budget-chip ${level}`} title={exceeded ? `Budget exceeded: ${exceeded.detail}` : `Run budget (${state.calls} calls)`}>
+      {exceeded ? 'Budget exceeded · ' : 'Budget · '}{parts.join(' · ')}
+    </span>
+  );
+}
 
 function WorkerQuestionCard({ input, resolve }: { input: PendingInput; resolve: (value: string | null) => void }) {
   const [answer, setAnswer] = useState('');
