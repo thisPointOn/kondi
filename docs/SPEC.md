@@ -187,6 +187,8 @@ Workers are not handed a bare directive. `buildWorkOrder(WorkOrderInput)` (`coun
 
 `OrchestratorConfig.brief` (`StepBrief`: `task`, `stepName`, `stepType`, `runDir`, `inputs[{stepName,outputType,path}]`) is supplied per run by `PipelineExecutor`; it is NOT a `DeliberationConfig` field, so no `createCouncil()` whitelist change (§10 gotcha 22 is unaffected). Related `OrchestratorConfig` members: `seatBriefs`, `runCommand`, `readFile`. When `brief` is set the orchestrator keeps the raw problem on the instance and does NOT overwrite `deliberation.savedProblem` (a bound council's saved task used to compound input on reruns); standalone runs still persist it via `councilStore.setSavedProblem`.
 
+**Seat brief (self-view, §4f).** `OrchestratorConfig.seatBriefs` / `CodingOrchestratorConfig.seatBriefs` (`Partial<Record<role,string>>`) carry a short track record of the seat's OWN past performance on this step. `buildSeatBriefs(cards, stepId)` (`improve/seat-brief.ts`) needs `SEAT_BRIEF_MIN_RUNS`=2 prior scorecards containing the step (gate/script/condition excluded), else returns undefined. Worker brief: first-try acceptance X/N, avg revisions, failed runs / runs with failing verification, and RECURRING reviewer objections (`normalizeObjection` lines present in ≥2 runs, top 3, `(k/N runs)`), else the last 3 objections. Manager brief (only if reviews exist): accept/revise/re-deliberate verdict counts, a nudge toward concrete directives when revisions outnumber acceptances, plus the objections. Each ≤`SEAT_BRIEF_MAX_CHARS`=600. Source data: `StepScore.reviewFeedback` (≤12 lines × ≤300 chars: `revision_request`/`re_deliberation` heads, `code_review` structured issue descriptions, failing `test_result` tails), captured by `scoreStep`. The executor builds briefs from `improveStore.listScorecards(pipelineId, 10)` only when `lessons.enabled`. Rendering: the worker brief is the work order's `## Your track record in this seat` section (`WorkOrderInput.seatBrief`) and the coding module directive (`seatBrief`); the manager brief is appended to the user message ONLY when `invokeAgentSafe` context is `'directive'`. No new entry types/phases.
+
 **Worker signals** (`council/worker-signals.ts`, `parseWorkerSignals` / `signalsForLedger`): `## NEEDS INPUT` heading with a `**Question:** …` line (worker STOPS); `**Status:** Blocked — <reason>` (in `## COMPLETION SUMMARY` or a `## BLOCKED` heading); `**Verification:** exit <N> …` (worker-run tests). A question accompanied by `**Status:** Complete` is a caveat (delivered), not a stop. Signals are stored as `structured.signals` on `work_output` / `module_output` ledger entries — no new entry types or phases.
 
 **Coding orchestrator:** module workers receive the spec head (6000 chars) + `testStrategy`; review issues are routed per module via `structured.issues` on the formatted `code_review` entry; the debugger's prompt contains the ACTUAL files on disk (via `readFile`), not its earlier prose.
@@ -232,6 +234,20 @@ Workers that write files own a test loop; the orchestrator re-runs the same comm
 `createStreamJsonAccumulator` (`pipeline/output-parsers.ts`): text from `stream_event` `content_block_delta`, `tool_call` from `assistant` `tool_use` blocks, `tool_result` from `user` `tool_result` blocks (name/duration via a pending-tool map), per-turn usage. **Display only** — final text still comes from `parseStreamJsonOutput` over the full output, whose dead top-level `content_block_delta` branch was removed so text never doubles. Rust `run_claude_streaming` has a REQUIRED `on_line: Channel<String>` (Tauri channels cannot be `Option`) forwarding each stdout line; the webview client always passes one (no-op when nobody listens). `cli/claude-caller.ts` splits stdout live (`feedChunk`) and honours `signal`.
 
 `council/stream-tail.ts` `appendStreamTail` renders `→ name(args)` and `✓|✗ name (chars, s)` lines and caps the tail at 2000 chars. GUI: `useCouncilHandlers` owns the per-persona tail map (ref + state throttled to ≤100ms) and exposes `streamingContent` / `onAgentEvent` / `clearStream`; `usePipeline` takes the same sink (background runs: none); `DeliberationView` renders a collapsible `.thinking-stream` `<pre>` under each thinking indicator (`CouncilView` / `PipelineExecutionView` pass it through). CLI `run-pipeline` logs tool calls immediately (`→ Read({...})`), flags failed tool results, and prints a 2s-throttled text summary on a TTY. Verification-driven `revision_request` entries are tagged `structured.fromVerification` so `requestRevision` issues a `fix` order (replaced a same-millisecond timestamp compare).
+
+### 4a-6. Worktree Mode (`pipeline/worktree.ts`)
+
+`CouncilStepConfig.codebaseMode?: 'isolated' | 'worktree'` (default isolated) and `keepWorktree?: boolean` are PIPELINE-owned, top-level on the step config (bound steps keep an empty `councilSetup`; the council record is never mutated). Worktree mode makes the step's artifact the change itself, for a later step/script to merge.
+
+**Executor flow (`runCouncilStep`).** Precondition: `platform.runCommand` and a pipeline `workingDirectory` that is a repo TOP LEVEL (`isRepoTopLevel`: `git rev-parse --show-toplevel` equals the dir, not merely inside a repo). Otherwise it logs and runs isolated (`validateStep` also warns when worktree mode has no pipeline working dir). Then: `ensureKondiExcluded` (append `.kondi/` to `.git/info/exclude`, idempotent) -> `prepareWorktree` (`git worktree add <repo>/.kondi/worktrees/<runId[0..12]>-<stepSlug> -b kondi/<pipelineSlug>/<runId[0..12]>` from HEAD; branch collisions get `-2`, `-3`…) -> orchestrator runs with `OrchestratorConfig.codebase` / `CodingOrchestratorConfig.codebase` (`WorktreeInfo {mode, repoRoot, worktreePath, branch, baseSha}`) -> `collectDiff` -> `commitWorktree` -> `formatPatch` written to `<runDir>/<stepSlug>.patch` -> `removeWorktree` unless `keepWorktree` or the step failed (the branch is always kept).
+
+**Workers never commit.** The executor commits (`git add -A`, identity `Kondi <kondi@local>`, message `kondi(<step>): <name>`, tagged `[step failed]` on failure; nothing-to-commit is tolerated). A worker commit inside a worktree would have to write `<main>/.git`, which Codex's cwd-rooted sandbox forbids. `WorkerPermissions.codebase {branch,...}` makes the worker prompt say "edit IN PLACE on branch X; never commit/stash/checkout".
+
+**Directory resolution.** Both orchestrators use `workDir(council)` = `config.codebase?.worktreePath ?? deliberation.workingDirectory` everywhere a working dir is read. Coding `createGitSnapshot` returns the worktree `baseSha` WITHOUT committing and `ensureWorkspaceDir` is skipped.
+
+**Reviewers read the diff.** `buildCodeReviewPrompt` and `buildManagerReviewPrompt` gain a `diff` section (authoritative over the worker's prose) from `collectDiff(run, cwd, baseSha)`: `git add -A -N` (so untracked files appear) + `--stat` + full patch + file list; over `WORKTREE_DIFF_CAP`=60000 chars -> stat + per-file heads (`truncated`). The coding orchestrator also feeds it in isolated mode whenever a snapshot sha exists.
+
+**Artifact.** `formatWorktreeArtifact`: `## Branch` / `## Base` (`base -> head`, `Patch: <path>`) / `## Files changed (N)` (+ stat) / `## Diff` / `## Worker summary`. `StepArtifact.metadata` adds `codebaseMode:'worktree'`, `branch`, `worktreePath`, `baseSha`, `headSha`, `patchPath`, `filesChanged[]`. Downstream `{{input}}` therefore receives the diff; a script step can `git merge <branch>` or `gh pr create`. UI: `StepConfigPanel` "Codebase" section (mode select + keep-worktree checkbox); `BoundCouncilStepPanel` gets the same via `PipelineBuilder` props.
 
 ### 4b. Coding Orchestrator
 
@@ -330,7 +346,7 @@ Two layers: **measurement (always on, no LLM)** and **the improvement cycle (opt
 
 **CLI.** `npx tsx cli/improve.ts <pipeline.json|id> [--runs N] [--eval none|judge|replay] [--retro-model prov/model] [--deep] [--auto-approve] [--write-back [file]] [--status]` (also `kondi improve`, npm script `improve`); `--eval judge` = `judge-only`. `kondi pipeline … --improve [--auto-approve]` (§7) enables the cycle for that run (manual mode reviews interactively; `--auto-approve` sets mode `auto`). Applied changes live in CLI state unless `--write-back`.
 
-**Tests.** `vitest.config.ts` + `tests/setup/browser-shims.ts`; `tests/improve/*.test.ts` (64 tests) document exact behaviour.
+**Tests.** `vitest.config.ts` + `tests/setup/browser-shims.ts`; `tests/improve/*.test.ts` (64 tests, plus `seat-brief.test.ts` for §4a-1) document exact behaviour.
 
 **Known limits.** Bound-council and coding steps are judge-only (no replay). `model_swap` is gated off by default (`scope.models`) and does not yet run launch-time `validateCouncilModels` (§3d). `router_profile`/`structure` kinds are parsed but not applicable. Replay of an `inputTemplate` change is unsupported.
 
@@ -491,6 +507,8 @@ Per-type checks (`validateStep`):
 ### 5b. Pipeline Store Schema
 
 Key: `mcp-pipelines` — version 5.
+
+`CouncilStepConfig` also carries `codebaseMode?: 'isolated'|'worktree'` and `keepWorktree?: boolean` (§4a-6).
 
 Step configs: `CouncilStepConfig | LlmStepConfig | GateStepConfig | ScriptStepConfig | ConditionStepConfig`
 
@@ -751,7 +769,7 @@ Feature-verification harness for the pipeline engine, separate from unit tests. 
 
 ### Unit Tests and Typecheck
 
-`cd mcp-connect-mvp && npm test` runs vitest: `tests/council/*.test.ts` (`phase0`, `work-order`, `verify-loop`, `ask-back`, `cancel`, `stream-accumulator`, `budget`), `tests/agent-runtime/*.test.ts` (`adapters`, `api-tool-caller`, `node-tools`, `tool-loop`), `tests/improve/*` (§4f), plus `router`, `auth`, `mcpClient`; shims in `tests/setup/browser-shims.ts`. `npm run typecheck` runs `tsc --noEmit` for BOTH `tsconfig.app.json` and `tsconfig.cli.json` (the CLI runners are covered).
+`cd mcp-connect-mvp && npm test` runs vitest: `tests/council/*.test.ts` (`phase0`, `work-order`, `verify-loop`, `ask-back`, `cancel`, `stream-accumulator`, `budget`, `worktree`), `tests/agent-runtime/*.test.ts` (`adapters`, `api-tool-caller`, `node-tools`, `tool-loop`), `tests/improve/*` (§4f; incl. `seat-brief`), plus `router`, `auth`, `mcpClient`; shims in `tests/setup/browser-shims.ts`. `npm run typecheck` runs `tsc --noEmit` for BOTH `tsconfig.app.json` and `tsconfig.cli.json` (the CLI runners are covered).
 
 ### Dev Mode
 ```bash

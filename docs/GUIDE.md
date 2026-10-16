@@ -648,6 +648,14 @@ The coding output begins with a **`Files produced (N)`** list — the actual fil
 
 The orchestrator completes **honestly**: if the worker produced nothing usable — for example it was blocked by its sandbox, tooling, or filesystem and only narrated the failure — the council is marked **failed**, not completed, with a summary explaining why (and suggesting you re-run with a different worker, such as an API model). You will never see a false "completed" run.
 
+### Working in a git worktree
+
+By default a step works in the pipeline's working directory (isolated). To have a coding or council step change a real repository on its own branch, open the step and set **Codebase** to **Git worktree**. Requirements: the pipeline's **working directory** must be the top level of a git repo; otherwise the step logs a warning and runs isolated (the builder also flags the missing directory).
+
+What happens: Kondi creates a worktree under `<repo>/.kondi/worktrees/` on a branch named `kondi/<pipeline>/<run id>`, the workers edit files there, and reviewers judge the actual diff rather than the worker's description. Kondi (not the worker) commits the result, even if the step failed, and saves `<step>.patch` in the run folder. The worktree is deleted afterward; the branch stays. Tick **Keep worktree** to leave the folder on disk (it is always kept when a step fails). `.kondi/` is excluded from the repo via `.git/info/exclude`, so your `.gitignore` is untouched.
+
+The step's artifact lists the branch, base to head commit, files changed, the diff and the worker's summary, so downstream steps receive the change itself. Follow it with a script step such as `git merge kondi/...` or `gh pr create` to land it. Details: SPEC.md section 4a-6.
+
 ### Safeguards
 
 - **Git snapshot**: The orchestrator takes a git snapshot before any file changes, so you can always revert.
@@ -953,6 +961,10 @@ Click **Retrospect now** to review the last few runs on demand without waiting f
 ### Lessons
 
 Besides edits, the retrospective can propose short **lessons** (for example "always include a test plan"). Once applied they are added to the prompts of the relevant roles on later runs. The panel lists lessons in effect; click **mute** to stop one.
+
+### Seat track record
+
+When lessons are enabled and a step has run at least twice, each role also sees a short note about its own history in that step: workers get how often they were accepted first try, how many revisions they usually need, and the reviewer objections that keep recurring; managers get their accept/revise counts. The note is brief and automatic, there is nothing to configure beyond the lessons toggle.
 
 ### Command line
 

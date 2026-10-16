@@ -397,6 +397,24 @@ Key differences from deliberation:
 
 **Honest completion** (`mergeAndComplete`): the council is marked `failed` (not `completed`) when the worker produced no module output or self-reported being blocked (`looksLikeFailedDeliverable`) — preventing false "completed" runs. The final output artifact begins with a `## Files produced (N)` list derived from real git changes (not the worker's prose), so the output names exactly what was made.
 
+### Worktree Mode (`pipeline/worktree.ts`)
+
+A council or coding step can opt into working on the real repository instead of an isolated scratch directory. The executor owns the git lifecycle; the orchestrators only learn a different working directory.
+
+```
+runCouncilStep (codebaseMode: 'worktree')
+  |- precondition: pipeline working dir is a git repo top level (else logged fallback to isolated)
+  |- exclude .kondi/ in .git/info/exclude
+  |- prepareWorktree  --> <repo>/.kondi/worktrees/<run>-<step>  on branch kondi/<pipeline>/<run>
+  |- council runs with workDir(council) = worktreePath   (council record untouched)
+  |     worker edits in place, never commits
+  |     reviewers receive the DIFF (git add -A -N + stat + patch) instead of trusting prose
+  |- executor commits (also on failure)  --> write <runDir>/<step>.patch
+  '- remove worktree (kept on failure / keepWorktree); branch always kept
+```
+
+Why: the change becomes a first-class artifact (branch, base to head, files, diff) that a later script step can merge or open a PR from, and reviewers judge what actually changed. Workers never commit because a sandboxed CLI worker (Codex) cannot write the main repo's `.git` from inside a worktree; the executor, outside the sandbox, does. The step artifact flows downstream as the diff. See SPEC.md §4a-6.
+
 ### Build/Test/Install Detection
 
 ```
@@ -791,6 +809,10 @@ PipelineExecutor (every completed/failed run)
 - **Approval never blocks a run.** In manual mode, proposals simply wait in the Improvements panel (or CLI review); the run and the CLI process finish normally, and unattended or scheduled runs can never approve anything. In auto mode the mode is re-read at the moment of each apply, so a user can switch back to manual while a cycle is in flight.
 - **Edits are guarded against drift.** Each proposal pins the hash of the thing it changes. Applying refuses if the target moved, except when the exact field still holds the value the proposal was computed from (so several proposals from one retrospective can all land). The post-apply hash lets revert refuse rather than clobber later edits. Unbound steps are re-validated by the builder's own validator before saving; bound councils go through the council store's schema validation.
 - **Lessons live at the orchestrator level.** Lessons are short operating notes, not recipe edits. They are appended to each persona's prompt at call time, role-scoped, rather than written into step or council definitions. That makes them work uniformly for bound councils (whose records must not be mutated per run) and keeps them cheap to mute or revert. They are also mirrored to the memory directory as a superset of the existing patterns file, so the existing memory template keeps working.
+
+### Seat self-view
+
+Besides lessons, each seat sees its own track record. The scorecard keeps why a step's work was sent back (`reviewFeedback`); on later runs, once a step has at least two prior scorecards and lessons are enabled, the executor derives a short per-role brief (first-try acceptance, average revisions, recurring reviewer objections) and the orchestrators place it in the worker's work order and, for the manager, only in the directive call. This keeps the feedback loop inside the prompt path with no recipe edits (SPEC.md §4a-1).
 
 ### Surfaces
 
