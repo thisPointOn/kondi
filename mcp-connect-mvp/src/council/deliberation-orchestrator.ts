@@ -69,6 +69,9 @@ import { buildContextInspection } from './context-inspection';
 import type { ContextInspection } from './types';
 import { isRoutedModel } from '../router/profile-options';
 import { formatLessonsBlock } from '../improve/lessons';
+import { buildWorkOrder, stripTaskPrefix, extractAcceptanceCriteria as extractAcceptanceCriteriaSection } from './work-order';
+import type { WorkOrderInput, WorkOrderQA, ToolScope } from './work-order';
+import { parseWorkerSignals, signalsForLedger } from './worker-signals';
 
 import {
   buildManagerFramingPrompt,
@@ -123,8 +126,29 @@ export interface AgentResponse {
 
 export type AgentInvoker = (invocation: AgentInvocation, persona: Persona) => Promise<AgentResponse>;
 
+/** Per-run step facts the executor knows and the council record doesn't (work order Objective/Inputs). */
+export interface StepBrief {
+  /** The step's TASK alone (savedProblem is task + input for pipeline councils). */
+  task?: string;
+  stepName?: string;
+  stepType?: string;
+  runDir?: string;
+  inputs?: Array<{ stepName?: string; outputType?: string; path?: string }>;
+}
+
+export type RunCommandFn = (cmd: string, cwd: string) => Promise<{ stdout: string; stderr: string; exit_code: number; success: boolean }>;
+
 export interface OrchestratorConfig {
   invokeAgent: AgentInvoker;
+  /** Work-order facts supplied per run by the pipeline executor. When set, the
+   *  orchestrator does NOT overwrite `deliberation.savedProblem` (bound councils
+   *  keep their original task instead of compounding input into it). */
+  brief?: StepBrief;
+  /** Per-seat track record (role → text) rendered into the work order. */
+  seatBriefs?: Partial<Record<DeliberationRole, string>>;
+  /** Platform hooks for verification/diffs (pipeline executor passes the platform's). */
+  runCommand?: RunCommandFn;
+  readFile?: (path: string) => Promise<string | null>;
   /** Whether this runtime can actually EXECUTE tools for a persona's provider.
    *  Default true (app, where API clients run tool loops). The headless CLI
    *  runner returns true only for the claude/codex binaries so API-provider
@@ -245,6 +269,8 @@ export function sanitizeDeliverable(raw: string): string {
 export class DeliberationOrchestrator {
   private config: OrchestratorConfig;
   private activeCouncilId: string | null = null;
+  /** councilId → the raw problem this run was started with (work order Source). */
+  private rawProblems = new Map<string, string>();
 
   constructor(config: OrchestratorConfig) {
     this.config = config;
@@ -266,12 +292,18 @@ export class DeliberationOrchestrator {
     // Always read fresh from store to avoid stale React state
     council = councilStore.get(council.id) || council;
 
-    // Persist the raw problem: the worker's directive is a summary two hops
-    // removed from it (input → framing → decision → directive), so execution
-    // and revision re-attach this original source material (see groundInSource).
-    if (rawProblem?.trim() && council.deliberation) {
-      councilStore.setSavedProblem(council.id, rawProblem);
-      council = councilStore.get(council.id) || council;
+    // Keep the raw problem for the work order's Source section: the worker's
+    // directive is a summary two hops removed from it (input → framing →
+    // decision → directive). Pipeline runs (config.brief set) keep it on the
+    // instance so a BOUND council's savedProblem stays its original TASK
+    // (persisting task+input there made reruns compound input into the task);
+    // legacy standalone callers still persist it for the UI.
+    if (rawProblem?.trim()) {
+      this.rawProblems.set(council.id, rawProblem);
+      if (!this.config.brief && council.deliberation) {
+        councilStore.setSavedProblem(council.id, rawProblem);
+        council = councilStore.get(council.id) || council;
+      }
     }
 
     // Pre-flight check: log role assignments and personas for debugging
@@ -1544,14 +1576,61 @@ export class DeliberationOrchestrator {
    * positioning decision). Re-attach the original problem/input as
    * authoritative source material so the deliverable stays grounded in it.
    */
-  private groundInSource(council: Council, directiveContent: string): string {
-    const problem = council.deliberation?.savedProblem?.trim();
-    if (!problem) return directiveContent;
-    const MAX_SOURCE_CHARS = 24000;
-    const src = problem.length > MAX_SOURCE_CHARS
-      ? `${problem.slice(0, MAX_SOURCE_CHARS)}\n…[source material truncated]`
-      : problem;
-    return `${directiveContent}\n\n---\nORIGINAL TASK & SOURCE MATERIAL (authoritative — the directive above summarizes THIS; ground every claim and detail of your deliverable in it, and do not invent facts it does not support):\n${src}`;
+  /** The raw problem this run started with (falls back to the persisted savedProblem). */
+  private rawProblemFor(council: Council): string {
+    return this.rawProblems.get(council.id) ?? council.deliberation?.savedProblem?.trim() ?? '';
+  }
+
+  /** What the worker may do with tools — mirrors the grant logic in invokeAgentSafe (rule 5). */
+  private toolScopeFor(assignment: DeliberationRoleAssignment | undefined, writePermissions: boolean): ToolScope {
+    if (assignment?.toolAccess === 'none') return 'none';
+    if (writePermissions) return 'full';
+    // The per-call runtime gate (canUseTools) may still turn these off; the
+    // order text stays conservative and never names write tools (rule 5).
+    if (assignment?.toolAccess === 'full' || (assignment?.allowedServerIds?.length ?? 0) > 0) return 'read_only';
+    return 'none';
+  }
+
+  /**
+   * Build the typed WORK ORDER the worker receives (replaces the old
+   * "directive + ORIGINAL TASK & SOURCE MATERIAL" concatenation).
+   */
+  private composeWorkOrder(
+    council: Council,
+    assignment: DeliberationRoleAssignment | undefined,
+    perms: WorkerPermissions,
+    directiveText: string,
+    attempt: WorkOrderInput['attempt'],
+    extras: { qa?: WorkOrderQA[]; lastTestTail?: string } = {},
+  ): string {
+    const d = council.deliberation;
+    const decision = getDecision(council.id);
+    const brief = this.config.brief;
+    const task = brief?.task ?? undefined;
+    const raw = this.rawProblemFor(council);
+    return buildWorkOrder({
+      objective: { task, stepName: brief?.stepName, stepType: brief?.stepType ?? d?.stepType },
+      deliverable: { outputType: d?.outputType, expectedOutput: d?.expectedOutput },
+      acceptance: { acceptanceCriteria: decision?.acceptanceCriteria, decisionCriteria: d?.decisionCriteria },
+      directive: directiveText,
+      constraints: {
+        writePermissions: !!perms.writePermissions,
+        toolScope: this.toolScopeFor(assignment, !!perms.writePermissions),
+        workingDirectory: perms.workingDirectory,
+        directoryConstrained: perms.directoryConstrained,
+        maxWords: d?.maxWordsPerResponse || undefined,
+        timeoutMinutes: 30,
+        codebase: perms.codebase,
+      },
+      verification: perms.verifyCommand
+        ? { command: perms.verifyCommand, maxTries: perms.verifyMaxTries ?? 3, lastOutputTail: extras.lastTestTail }
+        : extras.lastTestTail ? { command: '', maxTries: 0, lastOutputTail: extras.lastTestTail } : undefined,
+      attempt: { ...attempt, qa: extras.qa },
+      inputs: brief?.inputs,
+      // Task-only councils (no input) have nothing left after stripping the task.
+      source: task ? stripTaskPrefix(raw, task) : raw,
+      seatBrief: this.config.seatBriefs?.worker,
+    });
   }
 
   async executeWork(council: Council): Promise<LedgerEntry> {
@@ -1582,11 +1661,15 @@ export class DeliberationOrchestrator {
       ? getMinimalWorkerSystemPrompt(workerPermissions, stepType)
       : worker.predisposition.systemPrompt;
 
-    // Subagent fan-out (provider-agnostic): if the worker has subagents, run them
-    // first and fold their findings into the directive before the worker synthesizes.
-    const effectiveDirective = await this.runSubagents(
-      council, worker, this.groundInSource(council, directive.content)
-    );
+    // The typed WORK ORDER (objective, deliverable, acceptance, directive,
+    // constraints, attempt, inputs, source) — then subagent fan-out
+    // (provider-agnostic): if the worker has subagents, run them first and fold
+    // their findings in before the worker synthesizes.
+    const revisionCount = council.deliberationState?.revisionCount || 0;
+    const maxRevisions = council.deliberation?.maxRevisions ?? 3;
+    const order = this.composeWorkOrder(council, assignment, workerPermissions, directive.content,
+      { number: revisionCount + 1, max: maxRevisions + 1, mode: 'execute' });
+    const effectiveDirective = await this.runSubagents(council, worker, order);
 
     const userMessage = buildWorkerExecutionPrompt(effectiveDirective, workerPermissions, stepType);
 
@@ -1618,7 +1701,8 @@ export class DeliberationOrchestrator {
     // Update state
     councilStore.setCurrentOutput(council.id, output.id);
 
-    // Create ledger entry
+    // Create ledger entry (+ the worker's parsed signals: status/question/blocked/verification)
+    const signals = parseWorkerSignals(response.content);
     const entry = this.createEntry(
       council.id,
       'worker',
@@ -1630,7 +1714,7 @@ export class DeliberationOrchestrator {
       response.latencyMs,
       [{ artifactType: 'output', artifactId: output.id, version: output.version }],
       undefined,
-      response.structured
+      { ...response.structured, signals: signalsForLedger(signals) }
     );
 
     // Evolve context with worker results
@@ -1859,8 +1943,15 @@ export class DeliberationOrchestrator {
       ? getMinimalWorkerSystemPrompt(workerPermissions, stepType)
       : worker.predisposition.systemPrompt;
 
+    // incrementRevisionCount already ran in reviewWork → this is attempt revisionCount+1.
+    const revisionCount = council.deliberationState?.revisionCount || 0;
+    const maxRevisions = council.deliberation?.maxRevisions ?? 3;
+    const order = this.composeWorkOrder(council, assignment, workerPermissions, directive.content, {
+      number: revisionCount + 1, max: maxRevisions + 1, mode: 'revise',
+      previousOutput: previousOutput.content, feedback: revisionRequest.content,
+    });
     const userMessage = buildWorkerRevisionPrompt(
-      this.groundInSource(council, directive.content),
+      order,
       previousOutput.content,
       revisionRequest.content,
       workerPermissions,
@@ -1885,6 +1976,7 @@ export class DeliberationOrchestrator {
     councilStore.setCurrentOutput(council.id, output.id);
 
     // Create ledger entry
+    const signals = parseWorkerSignals(response.content);
     const entry = this.createEntry(
       council.id,
       'worker',
@@ -1896,7 +1988,7 @@ export class DeliberationOrchestrator {
       response.latencyMs,
       [{ artifactType: 'output', artifactId: output.id, version: output.version }],
       undefined,
-      response.structured
+      { ...response.structured, signals: signalsForLedger(signals) }
     );
 
     // Evolve context with revision results
@@ -1968,8 +2060,29 @@ export class DeliberationOrchestrator {
       ? getMinimalWorkerSystemPrompt(workerPermissions, stepType)
       : worker.predisposition.systemPrompt;
 
-    // Subagent fan-out (static + dynamic) on the direct-execution path too.
-    const effectiveProblem = await this.runSubagents(council, worker, enrichedProblem);
+    // The work order (the raw problem IS the directive here) + subagent fan-out
+    // (static + dynamic) on the direct-execution path too. Source is omitted:
+    // the directive already holds the whole problem.
+    const order = buildWorkOrder({
+      objective: { task: this.config.brief?.task, stepName: this.config.brief?.stepName, stepType: this.config.brief?.stepType ?? stepType },
+      deliverable: { outputType: council.deliberation?.outputType, expectedOutput: council.deliberation?.expectedOutput },
+      acceptance: { decisionCriteria: council.deliberation?.decisionCriteria },
+      directive: this.config.brief?.task ? stripTaskPrefix(enrichedProblem, this.config.brief.task) || enrichedProblem : enrichedProblem,
+      constraints: {
+        writePermissions: !!workerPermissions.writePermissions,
+        toolScope: this.toolScopeFor(assignment, !!workerPermissions.writePermissions),
+        workingDirectory: workerPermissions.workingDirectory,
+        directoryConstrained: workerPermissions.directoryConstrained,
+        maxWords: council.deliberation?.maxWordsPerResponse || undefined,
+        timeoutMinutes: 30,
+        codebase: workerPermissions.codebase,
+      },
+      verification: workerPermissions.verifyCommand ? { command: workerPermissions.verifyCommand, maxTries: workerPermissions.verifyMaxTries ?? 3 } : undefined,
+      attempt: { number: 1, max: 1, mode: 'execute' },
+      inputs: this.config.brief?.inputs,
+      seatBrief: this.config.seatBriefs?.worker,
+    });
+    const effectiveProblem = await this.runSubagents(council, worker, order);
     const userMessage = buildWorkerExecutionPrompt(effectiveProblem, workerPermissions, stepType);
 
     const response = await this.invokeAgentSafe(
@@ -1982,6 +2095,7 @@ export class DeliberationOrchestrator {
     const output = createOutput(council.id, workerPermissions.writePermissions ? response.content : sanitizeDeliverable(response.content), directive.id);
     councilStore.setCurrentOutput(council.id, output.id);
 
+    const signals = parseWorkerSignals(response.content);
     this.createEntry(
       council.id,
       'worker',
@@ -1993,7 +2107,7 @@ export class DeliberationOrchestrator {
       response.latencyMs,
       [{ artifactType: 'output', artifactId: output.id, version: output.version }],
       undefined,
-      response.structured
+      { ...response.structured, signals: signalsForLedger(signals) }
     );
 
     // No review — first output is accepted
@@ -2918,9 +3032,9 @@ export class DeliberationOrchestrator {
     console.log(`[Orchestrator] Context evolved to v${updated.version}: ${label} by ${personaName}`);
   }
 
+  /** Heading-aware (the old regex stopped at the first blank line and lost every bullet after it). */
   private extractAcceptanceCriteria(content: string): string | undefined {
-    const match = content.match(/ACCEPTANCE CRITERIA[:\s]*\n*([\s\S]*?)(?=\n\n|$)/i);
-    return match?.[1]?.trim();
+    return extractAcceptanceCriteriaSection(content);
   }
 
   private parseManagerEvaluation(content: string): ManagerEvaluation {

@@ -55,14 +55,19 @@ import { detectInstallCommand } from '../pipeline/install-detect';
 
 // ONE shared definition of the agent invocation contract (was a drifting
 // private copy here that lacked allowedTools/workingDirectory/timeoutMs).
-import type { AgentInvocation, AgentResponse, AgentInvoker } from './deliberation-orchestrator';
+import type { AgentInvocation, AgentResponse, AgentInvoker, StepBrief } from './deliberation-orchestrator';
 export type { AgentInvocation, AgentResponse, AgentInvoker } from './deliberation-orchestrator';
+import { parseWorkerSignals, signalsForLedger } from './worker-signals';
 
 export interface CodingOrchestratorConfig {
   invokeAgent: AgentInvoker;
   /** Whether this runtime can EXECUTE tools for a persona's provider (see
    *  OrchestratorConfig.canUseTools). Default true. */
   canUseTools?: (persona: Persona) => boolean;
+  /** Per-run step facts from the executor (task, step name, inputs) — see OrchestratorConfig.brief. */
+  brief?: StepBrief;
+  /** Per-seat track record (role → text) appended to worker prompts. */
+  seatBriefs?: Partial<Record<DeliberationRole, string>>;
   runCommand?: (cmd: string, cwd: string) => Promise<{ stdout: string; stderr: string; exit_code: number; success: boolean }>;
   readFile?: (path: string) => Promise<string | null>;
   onPhaseChange?: (from: DeliberationPhase, to: DeliberationPhase) => void;
@@ -476,12 +481,28 @@ export class CodingOrchestrator {
 
     // Get latest review feedback if this is a revision cycle
     let reviewFeedback: string | undefined;
+    let reviewIssues: ReviewVerdict['issues'] | undefined;
     if (isRevision) {
-      // Find the most recent code_review entry
+      // Find the most recent code_review entry (the formatted one carries the
+      // structured issue list so each module can be sent ONLY its own issues).
       const allEntries = ledgerStore.getAll(council.id);
       const lastReview = [...allEntries].reverse().find(e => e.entryType === 'code_review');
       reviewFeedback = lastReview?.content;
+      const issues = (lastReview?.structured as { issues?: ReviewVerdict['issues'] } | undefined)?.issues;
+      if (Array.isArray(issues) && issues.length) reviewIssues = issues;
     }
+    // Spec head + test strategy reach every module worker (the spec argument used
+    // to be ignored here, so consultant guidance never reached the implementers).
+    const specHead = spec.length > 6000 ? `${spec.slice(0, 6000)}\n…[spec truncated]` : spec;
+    const feedbackForModule = (moduleName: string): string | undefined => {
+      if (!reviewFeedback) return undefined;
+      if (!reviewIssues) return reviewFeedback;
+      const mine = reviewIssues.filter((i) => !i.module || i.module === 'all' || i.module.toLowerCase() === moduleName.toLowerCase());
+      if (mine.length === 0) {
+        return `${reviewFeedback.split('\n## Issues to Fix')[0].trim()}\n\nNo issues were filed against your module (${moduleName}); other modules are being fixed by their owners. Re-check your module's integration with theirs and only change what is needed.`;
+      }
+      return `## Issues to fix in YOUR module (${moduleName})\n${mine.map((i) => `- **[${i.severity.toUpperCase()}]** ${i.description}${i.suggestion ? `\n  → Fix: ${i.suggestion}` : ''}`).join('\n')}`;
+    };
 
     // Assign modules to workers round-robin
     const assignments: Array<{ module: typeof modules[0]; worker: Persona }> = [];
@@ -516,11 +537,12 @@ export class CodingOrchestrator {
 
         let userMessage: string;
 
-        if (isRevision && reviewFeedback) {
-          // Revision: include review feedback + previous output
+        const moduleFeedback = isRevision ? feedbackForModule(module.name) : undefined;
+        if (isRevision && moduleFeedback) {
+          // Revision: include (per-module) review feedback + previous output
           const previousOutput = state?.moduleOutputs?.[module.name] || '';
           userMessage = buildRevisionFromReviewPrompt(
-            reviewFeedback, previousOutput, module.directive, workerPermissions
+            moduleFeedback, previousOutput, module.directive, workerPermissions
           );
         } else {
           // First pass: build module directive
@@ -529,7 +551,8 @@ export class CodingOrchestrator {
             .map(m => ({ name: m.name, interfaces: m.interfaces }));
 
           userMessage = buildModuleDirectivePrompt(
-            module, otherInterfaces, decomposition.integrationNotes, workerPermissions
+            module, otherInterfaces, decomposition.integrationNotes, workerPermissions,
+            { specHead, testStrategy: decomposition.testStrategy, seatBrief: this.config.seatBriefs?.worker },
           );
         }
 
@@ -541,14 +564,15 @@ export class CodingOrchestrator {
           'module_implementation'
         );
 
-        // Create ledger entry
+        // Create ledger entry (+ parsed worker signals)
+        const signals = parseWorkerSignals(response.content);
         this.createEntry(
           council.id, 'worker', worker.id,
           'module_output',
           'implementing',
           `[Module: ${module.name}]\n\n${response.content}`,
           response.tokensUsed, response.latencyMs,
-          undefined, undefined, { ...response.structured, module: module.name }
+          undefined, undefined, { ...response.structured, module: module.name, signals: signalsForLedger(signals) }
         );
 
         // Evolve context with module implementation
@@ -720,9 +744,11 @@ export class CodingOrchestrator {
           ? getMinimalWorkerSystemPrompt(workerPermissions)
           : worker.predisposition.systemPrompt;
 
+        // The debugger gets the ACTUAL files on disk (not its previous prose).
+        const fileContents = await this.readModuleFiles(council, module.files);
         const userMessage = buildDebugFixPrompt(
           testOutput, moduleOutputs[module.name] || '', spec,
-          workerPermissions, module.name, module.files
+          workerPermissions, module.name, module.files, fileContents
         );
 
         console.log(`[CodingOrchestrator] Worker ${worker.name} fixing module ${module.name}`);
@@ -735,11 +761,12 @@ export class CodingOrchestrator {
 
         moduleOutputs[module.name] = response.content;
 
+        const signals = parseWorkerSignals(response.content);
         this.createEntry(
           council.id, 'worker', worker.id, 'debug_fix', 'debugging',
           `[Module: ${module.name}]\n\n${response.content}`,
           response.tokensUsed, response.latencyMs,
-          undefined, undefined, { ...response.structured, module: module.name }
+          undefined, undefined, { ...response.structured, module: module.name, signals: signalsForLedger(signals) }
         );
       }
 
@@ -1365,11 +1392,35 @@ export class CodingOrchestrator {
     const authorId = reviewer?.id || 'system';
 
     // This entry replaces the raw code_review entry as the revision worker's
-    // feedback source (implementModules looks for the last code_review entry)
+    // feedback source (implementModules looks for the last code_review entry).
+    // The structured issue list lets implementModules route each module ONLY
+    // its own issues (the whole review used to go to every module).
     this.createEntry(
       council.id, 'reviewer', authorId, 'code_review', 'code_reviewing',
-      lines.join('\n'), 0, 0
+      lines.join('\n'), 0, 0,
+      undefined, undefined, { verdict: verdict.verdict, issues: verdict.issues, summary: verdict.summary }
     );
+  }
+
+  /** Read a module's files from disk (capped) so the debugger sees real code, not prose. */
+  private async readModuleFiles(council: Council, files: string[]): Promise<Record<string, string> | undefined> {
+    const wd = council.deliberation?.workingDirectory;
+    if (!this.config.readFile || !wd || files.length === 0) return undefined;
+    const PER_FILE = 8_000, TOTAL = 40_000;
+    const out: Record<string, string> = {};
+    let used = 0;
+    for (const f of files) {
+      const abs = f.startsWith('/') ? f : `${wd.replace(/\/$/, '')}/${f}`;
+      try {
+        const content = await this.config.readFile(abs);
+        if (content == null) continue;
+        const cut = content.length > PER_FILE ? `${content.slice(0, PER_FILE)}\n…[truncated ${content.length - PER_FILE} chars]` : content;
+        if (used + cut.length > TOTAL) break;
+        out[f] = cut;
+        used += cut.length;
+      } catch { /* missing file — the debugger will see it is absent */ }
+    }
+    return Object.keys(out).length ? out : undefined;
   }
 
   private parseReviewVerdict(content: string): ReviewVerdict {

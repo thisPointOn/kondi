@@ -874,10 +874,27 @@ export class PipelineExecutor {
       ? buildLessonBundle(improveStore.get(pipelineId), step.id, improveSettings.lessons.maxChars)
       : undefined;
 
+    // Work-order facts only the executor knows: the step's TASK alone (the raw
+    // problem is task + input), its name, the run dir and upstream input refs.
+    const brief = {
+      task: config.boundCouncilId
+        ? (council.deliberation?.savedProblem || council.topic)
+        : config.task,
+      stepName: step.name,
+      stepType: config.type,
+      runDir: this.currentRunDir || undefined,
+      inputs: previousArtifacts
+        .filter((a) => a.stepId !== '__initial__')
+        .map((a) => ({ stepName: a.metadata?.stepName, outputType: a.metadata?.outputType, path: a.metadata?.outputPath })),
+    };
+
     // Branch: coding steps use CodingOrchestrator, planning uses DeliberationOrchestrator
     const orchestratorCallbacks = {
       invokeAgent: this.callbacks.invokeAgent,
       canUseTools: this.callbacks.canUseTools,
+      brief,
+      runCommand: this.platform.runCommand,
+      readFile: this.platform.readFile,
       onPhaseChange: (from: any, to: any) =>
         console.log(`[Pipeline:Council] Phase: ${from} -> ${to}`),
       onError: (err: Error, ctx: string) =>

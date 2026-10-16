@@ -333,6 +333,11 @@ export function extractOpenQuestions(messages: CouncilMessage[]): string[] {
  * Minimal worker system prompt when persona is suppressed
  */
 export interface WorkerPermissions {
+  /** Verify command the worker should run itself and iterate against (A4). */
+  verifyCommand?: string;
+  verifyMaxTries?: number;
+  /** Worktree mode: edit the real repo in place on this branch; never commit. */
+  codebase?: { mode: 'worktree'; branch: string; repoRoot: string };
   writePermissions?: boolean;
   workingDirectory?: string;
   directoryConstrained?: boolean;
@@ -1505,7 +1510,17 @@ export function buildModuleDirectivePrompt(
   otherModuleInterfaces: Array<{ name: string; interfaces: string }>,
   integrationNotes: string,
   permissions?: WorkerPermissions,
+  extras?: { specHead?: string; testStrategy?: string; seatBrief?: string },
 ): string {
+  const specSection = extras?.specHead
+    ? `\n## ORIGINAL SPECIFICATION (what the whole system must do — your module is one part)\n${extras.specHead}\n`
+    : '';
+  const testSection = extras?.testStrategy || permissions?.verifyCommand
+    ? `\n## VERIFICATION\n${extras?.testStrategy ? `Test strategy: ${extras.testStrategy}\n` : ''}${permissions?.verifyCommand
+      ? `After implementing, RUN \`${permissions.verifyCommand}\` with your shell tool and iterate until it exits 0 (max ${permissions.verifyMaxTries ?? 3} tries). Failures in OTHER modules' areas are expected until their owners finish — fix only yours. Report the real result as \`**Verification:** exit <code> — <last lines>\` in your COMPLETION SUMMARY; never fabricate it.\n`
+      : ''}`
+    : '';
+  const seatSection = extras?.seatBrief ? `\n## YOUR TRACK RECORD IN THIS SEAT\n${extras.seatBrief}\n` : '';
   const interfacesSection = otherModuleInterfaces.length > 0
     ? `\n## OTHER MODULE INTERFACES (code to these contracts — do NOT implement them)\n${otherModuleInterfaces.map(
         (m) => `### ${m.name}\n${m.interfaces}`
@@ -1535,10 +1550,15 @@ Your implementation must integrate with the existing codebase.
 
 ## DIRECTIVE
 ${module.directive}
-${interfacesSection}${depsSection}
+${specSection}${interfacesSection}${depsSection}
 ## INTEGRATION NOTES
 ${integrationNotes}
-${scopeNote}
+${testSection}${seatSection}${scopeNote}
+If the directive is ambiguous on something you cannot infer or look up, STOP and reply with ONLY:
+## NEEDS INPUT
+**Question:** <one precise question>
+If it is infeasible or contradicts the spec, end your summary with **Status:** Blocked — <why>.
+
 MANDATORY — When DONE, end with:
 
 ## COMPLETION SUMMARY
@@ -1640,7 +1660,18 @@ export function buildDebugFixPrompt(
   permissions?: WorkerPermissions,
   moduleName?: string,
   moduleFiles?: string[],
+  fileContents?: Record<string, string>,
 ): string {
+  // Real files beat the worker's earlier prose about them.
+  const filesSection = fileContents && Object.keys(fileContents).length
+    ? `\n## CURRENT FILES ON DISK (authoritative)\n${Object.entries(fileContents).map(([f, c]) => `### ${f}\n\`\`\`\n${c}\n\`\`\``).join('\n\n')}\n`
+    : '';
+  const codeSection = filesSection
+    ? ''
+    : `\n## CURRENT CODE (your previous output)\n${allCode}\n`;
+  const verifySection = permissions?.verifyCommand
+    ? `\nAfter fixing, RUN \`${permissions.verifyCommand}\` yourself and iterate until it exits 0 (max ${permissions.verifyMaxTries ?? 3} tries). Report \`**Verification:** exit <code> — <last lines>\` in your summary; never fabricate it.\n`
+    : '';
   const scopeNote = permissions?.writePermissions
     ? `\nIMPORTANT: You have WRITE PERMISSIONS. USE YOUR TOOLS to edit the files on disk.
 Do NOT just describe fixes — actually apply them.
@@ -1661,13 +1692,10 @@ Focus your fixes on this module's code. Other modules are handled by other worke
 
 ## TEST OUTPUT (failures)
 ${testOutput}
-${moduleContext}
-## CURRENT CODE
-${allCode}
-
+${moduleContext}${filesSection}${codeSection}
 ## ORIGINAL SPECIFICATION
 ${spec}
-${scopeNote}
+${scopeNote}${verifySection}
 Instructions:
 - Analyze the test failures and identify root causes
 - If failures indicate missing packages or modules (e.g. "Cannot find module", "ModuleNotFoundError",
