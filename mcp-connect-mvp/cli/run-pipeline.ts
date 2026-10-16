@@ -722,6 +722,28 @@ async function main() {
     onAgentThinkingEnd: (_persona) => {
       // Intentionally quiet
     },
+
+    // Live status: tool calls are logged as they happen; streamed text is
+    // summarized as a throttled one-liner (TTY only — logs stay clean in CI).
+    onAgentEvent: (() => {
+      const chars = new Map<string, number>();
+      let lastTick = 0;
+      return (persona, e) => {
+        if (e.kind === 'tool_call') {
+          const args = JSON.stringify(e.args);
+          log(C.dim, persona.name, `→ ${e.name}(${args.length > 100 ? args.slice(0, 97) + '…' : args})`);
+        } else if (e.kind === 'tool_result' && !e.ok) {
+          log(C.yellow, persona.name, `✗ ${e.name} failed`);
+        } else if (e.kind === 'text' && process.stdout.isTTY) {
+          chars.set(persona.id, (chars.get(persona.id) || 0) + e.delta.length);
+          const now = Date.now();
+          if (now - lastTick > 2000) {
+            lastTick = now;
+            log(C.dim, persona.name, `… ${chars.get(persona.id)} chars so far`);
+          }
+        }
+      };
+    })(),
   }, platform);
 
   // Ctrl-C: abort the run (councils end `cancelled`, no scorecard); a second

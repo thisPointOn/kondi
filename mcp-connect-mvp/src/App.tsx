@@ -71,6 +71,8 @@ function App() {
     availableTools: serverHook.availableTools,
     setThinkingPersonas: council.setThinkingPersonas,
     configuredProviders: providerConfig.configuredProviders,
+    onAgentEvent: council.onAgentEvent,
+    clearStream: council.clearStream,
   });
 
   const activeApiKey = providerConfig.provider === 'chatgpt' ? providerConfig.openaiKey : providerConfig.anthropicKey;
@@ -163,6 +165,7 @@ function App() {
               gateResolvers={pipeline.gateResolvers}
               activeCouncilId={pipeline.activePipelineCouncilId}
               thinkingPersonas={council.thinkingPersonas}
+              streamingContent={council.streamingContent}
               selectedCouncilId={pipeline.pipelineSelectedCouncilId}
               onSelectedCouncilChange={pipeline.setPipelineSelectedCouncilId}
               selectedStepId={pipeline.pipelineSelectedStepId}
@@ -221,6 +224,7 @@ function App() {
               onUserMessage={council.onUserMessage}
               configuredProviders={providerConfig.configuredProviders}
               thinkingPersonas={council.thinkingPersonas}
+              streamingContent={council.streamingContent}
             />
         ) : (
           <ChatArea

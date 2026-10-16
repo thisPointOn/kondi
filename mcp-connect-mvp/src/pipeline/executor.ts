@@ -34,6 +34,7 @@ import { stripCompletedCouncil } from '../council/storage-cleanup';
 import { buildAbbreviatedSummary } from '../services/deliberationSummary';
 import type { Persona } from '../council/types';
 import type { AgentInvocation, AgentResponse } from '../council/deliberation-orchestrator';
+import type { AgentStreamEvent } from '../agent-runtime/types';
 import type { MCPTool } from '../types/mcp';
 import { verifyRequiredTools } from '../utils/filterTools';
 
@@ -87,6 +88,8 @@ export interface PipelineExecutorCallbacks {
   onCouncilCreated?: (stepId: string, councilId: string) => void;
   onAgentThinkingStart?: (persona: Persona, startedAt: number, prompt?: string) => void;
   onAgentThinkingEnd?: (persona: Persona) => void;
+  /** Live per-call stream events (text deltas, tool calls) — display only. */
+  onAgentEvent?: (persona: Persona, event: AgentStreamEvent, context: string) => void;
   /** Self-improvement loop progress (scorecard saved, proposals queued/applied, errors). Logging only. */
   onImprovementEvent?: (event: ImproveEvent) => void;
   /** Which providers are configured — lets auto-applied proposals be validated like the builder does. */
@@ -938,6 +941,7 @@ export class PipelineExecutor {
         console.error(`[Pipeline:Council] Error in ${ctx}:`, err),
       onAgentThinkingStart: this.callbacks.onAgentThinkingStart,
       onAgentThinkingEnd: this.callbacks.onAgentThinkingEnd,
+      onAgentEvent: this.callbacks.onAgentEvent,
       lessons,
     };
 

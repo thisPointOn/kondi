@@ -15,7 +15,9 @@
  * - stream-json output parsing
  */
 
-import { invoke } from '@tauri-apps/api/core';
+import { createStreamJsonAccumulator } from '../pipeline/output-parsers';
+import type { AgentStreamEvent } from '../agent-runtime/types';
+import { invoke, Channel } from '@tauri-apps/api/core';
 import type { Message, MCPTool } from '../types/mcp';
 import type { ChatResult } from './llm-router';
 import { WORKDIR_GUARD_SRC, workdirGuardSettings } from './cli-workdir-guard';
@@ -137,6 +139,8 @@ export async function claudeCliChat(
     skipTools?: boolean;
     /** Cancellation: kills the claude process via `cancel_claude_streaming`. */
     signal?: AbortSignal;
+    /** Live display events (text deltas, tool calls/results, turns). */
+    onEvent?: (e: AgentStreamEvent) => void;
   },
 ): Promise<ChatResult> {
   const existingSessionId = chatId ? sessionMap.get(chatId) : undefined;
@@ -162,6 +166,9 @@ export async function claudeCliChat(
     '--model', model,
     '--permission-mode', 'bypassPermissions',
   ];
+  // Live display: text deltas arrive as `stream_event` lines (the `assistant`
+  // events still carry the full text, so the final parse never doubles).
+  if (opts?.onEvent) args.push('--include-partial-messages');
 
   // Grant tool access to the working directory so the CLI can write files,
   // and install the PreToolUse guard that DENIES any write outside it. The
@@ -251,6 +258,15 @@ export async function claudeCliChat(
     if (opts.signal.aborted) throw (opts.signal.reason instanceof Error ? opts.signal.reason : new Error('Aborted'));
     opts.signal.addEventListener('abort', onAbort, { once: true });
   }
+  // Live lines over an IPC channel → display-only accumulator → onEvent.
+  // (A Tauri Channel can't be optional on the Rust side, so always pass one.)
+  const onLine = new Channel<string>();
+  if (opts?.onEvent) {
+    const acc = createStreamJsonAccumulator(opts.onEvent);
+    onLine.onmessage = (line) => acc.feed(line);
+  } else {
+    onLine.onmessage = () => {};
+  }
   let result: ClaudeCommandResult;
   try {
     result = await invoke<ClaudeCommandResult>('run_claude_streaming', {
@@ -259,6 +275,7 @@ export async function claudeCliChat(
       stdinInput,
       timeoutMs: opts?.timeoutMs ?? 600_000,
       cancelId,
+      onLine,
     });
   } finally {
     opts?.signal?.removeEventListener('abort', onAbort);

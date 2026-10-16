@@ -41,6 +41,8 @@ interface CouncilViewProps {
   };
   /** Personas currently thinking/generating responses */
   thinkingPersonas?: Persona[];
+  /** Live per-persona stream tails (see useCouncilHandlers.streamingContent). */
+  streamingContent?: Map<string, string>;
 }
 
 export default function CouncilView({
@@ -67,6 +69,7 @@ export default function CouncilView({
     deepseek: true
   },
   thinkingPersonas = [],
+  streamingContent,
 }: CouncilViewProps) {
   const [council, setCouncil] = useState<Council | null>(null);
   const [inputValue, setInputValue] = useState('');
@@ -123,6 +126,7 @@ export default function CouncilView({
         onUserMessage={onUserMessage}
         configuredProviders={configuredProviders}
         thinkingPersonas={thinkingPersonas}
+        streamingContent={streamingContent}
       />
     );
   }

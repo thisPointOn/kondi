@@ -8,7 +8,8 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parseStreamJsonOutput } from '../src/pipeline/output-parsers';
+import { parseStreamJsonOutput, createStreamJsonAccumulator } from '../src/pipeline/output-parsers';
+import type { AgentStreamEvent } from '../src/agent-runtime/types';
 import { WORKDIR_GUARD_SRC, workdirGuardSettings } from '../src/services/cli-workdir-guard';
 
 /** Cross-platform Kondi data dir for the Node CLI (mirrors Rust dirs::data_dir + the webview's get_kondi_data_dir). */
@@ -73,6 +74,10 @@ export async function callClaude(opts: {
   timeoutMs?: number;
   /** Confine all file writes to workingDir via a PreToolUse hook (default true). */
   confineToDir?: boolean;
+  /** Live display events (text deltas, tool calls/results) as the stream arrives. */
+  onEvent?: (e: AgentStreamEvent) => void;
+  /** Cancellation — kills the child process. */
+  signal?: AbortSignal;
 }): Promise<CallerResult> {
   const start = Date.now();
 
@@ -104,6 +109,7 @@ export async function callClaude(opts: {
   } else {
     args.push('--print', '--verbose', '--output-format', 'stream-json');
   }
+  if (opts.onEvent) args.push('--include-partial-messages');
 
   if (opts.model) {
     args.push('--model', opts.model);
@@ -158,12 +164,25 @@ export async function callClaude(opts: {
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
+    const acc = opts.onEvent ? createStreamJsonAccumulator(opts.onEvent) : null;
 
-    child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stdout.on('data', (chunk: Buffer) => { stdoutChunks.push(chunk); acc?.feedChunk(chunk.toString('utf-8')); });
     child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+
+    // Cancellation: kill the process group politely, then hard.
+    const onAbort = () => {
+      child.kill('SIGTERM');
+      setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); }, 5_000);
+      clearTimeout(timer);
+      reject(opts.signal?.reason instanceof Error ? opts.signal.reason : new Error('Claude CLI call aborted'));
+    };
+    if (opts.signal?.aborted) { onAbort(); return; }
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
 
     child.on('close', (code) => {
       clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onAbort);
+      acc?.flush();
       const rawStdout = Buffer.concat(stdoutChunks).toString('utf-8');
       const rawStderr = Buffer.concat(stderrChunks).toString('utf-8');
       const latencyMs = Date.now() - start;

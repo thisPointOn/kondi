@@ -79,6 +79,7 @@ import {
 } from './ask-back';
 import type { WorkerQuestionHandler } from './ask-back';
 import { anySignal, timeoutSignal, raceSignal, throwIfAborted, isAbortError, isTimeoutError, AbortError } from '../agent-runtime/signals';
+import type { AgentStreamEvent } from '../agent-runtime/types';
 
 import {
   buildManagerFramingPrompt,
@@ -120,6 +121,9 @@ export interface AgentInvocation {
   /** Cancellation: run abort ∪ this call's timeout (set by invokeAgentSafe).
    *  Invokers pass it to the client; a TimeoutError reason means the timeout. */
   signal?: AbortSignal;
+  /** Live stream events (text deltas, tool calls/results, turns) for display.
+   *  Set by invokeAgentSafe from `OrchestratorConfig.onAgentEvent`. */
+  onEvent?: (e: AgentStreamEvent) => void;
 }
 
 export interface AgentResponse {
@@ -174,6 +178,9 @@ export interface OrchestratorConfig {
    *  the council in the `cancelled` phase with a `cancellation` entry (no
    *  `error` entry, no `failed`). */
   signal?: AbortSignal;
+  /** Live stream events per persona call (display only — never used to build
+   *  the deliverable). The GUI shows the tail under the thinking indicator. */
+  onAgentEvent?: (persona: Persona, event: AgentStreamEvent, context: string) => void;
   /** Whether this runtime can actually EXECUTE tools for a persona's provider.
    *  Default true (app, where API clients run tool loops). The headless CLI
    *  runner returns true only for the claude/codex binaries so API-provider
@@ -2144,6 +2151,9 @@ export class DeliberationOrchestrator {
       } else {
         // Request revision
         if (review.feedback) {
+          // A verification-driven send-back is tagged so requestRevision issues a
+          // `fix` order (robust against same-millisecond timestamps).
+          const fromVerification = !!(verification && !verification.passed);
           this.createEntry(
             council.id,
             'manager',
@@ -2151,7 +2161,8 @@ export class DeliberationOrchestrator {
             'revision_request',
             'reviewing',
             review.feedback,
-            0, 0
+            0, 0, undefined, undefined,
+            fromVerification ? { fromVerification: true, verification: { exitCode: verification!.exitCode, command: verification!.command } } : undefined
           );
         }
         councilStore.incrementRevisionCount(council.id);
@@ -2236,8 +2247,7 @@ export class DeliberationOrchestrator {
     const revisionCount = council.deliberationState?.revisionCount || 0;
     const maxRevisions = council.deliberation?.maxRevisions ?? 3;
     const lastTest = getLatestOfType(council.id, 'test_result');
-    const isFix = (lastTest?.structured as { verification?: boolean } | undefined)?.verification === true
-      && revisionRequest.timestamp <= lastTest!.timestamp;
+    const isFix = !!lastTest && (revisionRequest.structured as { fromVerification?: boolean } | undefined)?.fromVerification === true;
     const order = this.composeWorkOrder(council, assignment, workerPermissions, directive.content, {
       number: revisionCount + 1, max: maxRevisions + 1, mode: isFix ? 'fix' : 'revise',
       previousOutput: previousOutput.content, feedback: revisionRequest.content,
@@ -3132,7 +3142,8 @@ export class DeliberationOrchestrator {
       try {
         const startedAt = Date.now();
         this.config.onAgentThinkingStart?.(persona, startedAt, invocation.userMessage);
-        const response = await raceSignal(this.config.invokeAgent({ ...invocation, signal: callSignal }, persona), callSignal);
+        const onEvent = this.config.onAgentEvent ? (e: AgentStreamEvent) => this.config.onAgentEvent!(persona, e, context) : invocation.onEvent;
+        const response = await raceSignal(this.config.invokeAgent({ ...invocation, signal: callSignal, onEvent }, persona), callSignal);
         this.config.onAgentThinkingEnd?.(persona);
         const callDuration = ((Date.now() - startedAt) / 1000).toFixed(1);
         console.log(`[Orchestrator:Call] ${persona.name} (${context}) completed in ${callDuration}s — ${response.tokensUsed} tokens`);

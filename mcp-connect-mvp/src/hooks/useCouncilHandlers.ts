@@ -1,4 +1,6 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef } from 'react';
+import { appendStreamTail } from '../council/stream-tail';
+import type { AgentStreamEvent } from '../agent-runtime/types';
 import { createOrchestrator, DeliberationOrchestrator } from '../council';
 import { CodingOrchestrator } from '../council/coding-orchestrator';
 import { updateCouncil } from '../council/store';
@@ -23,6 +25,25 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
   const [currentCouncilId, setCurrentCouncilId] = useState<string | null>(null);
   const [thinkingPersonas, setThinkingPersonas] = useState<Persona[]>([]);
 
+  // Live per-persona stream tails (text deltas + tool calls), shown under the
+  // thinking indicators. Appended in a ref; React state is refreshed at most
+  // every ~100ms so token-rate updates don't re-render the whole view.
+  const streamRef = useRef<Map<string, string>>(new Map());
+  const [streamingContent, setStreamingContent] = useState<Map<string, string>>(new Map());
+  const streamFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushStream = useCallback(() => {
+    streamFlushTimer.current = null;
+    setStreamingContent(new Map(streamRef.current));
+  }, []);
+  const onAgentEvent = useCallback((persona: Persona, e: AgentStreamEvent) => {
+    streamRef.current.set(persona.id, appendStreamTail(streamRef.current.get(persona.id) || '', e));
+    if (!streamFlushTimer.current) streamFlushTimer.current = setTimeout(flushStream, 100);
+  }, [flushStream]);
+  const clearStream = useCallback((personaId?: string) => {
+    if (personaId) streamRef.current.delete(personaId); else streamRef.current.clear();
+    if (!streamFlushTimer.current) streamFlushTimer.current = setTimeout(flushStream, 0);
+  }, [flushStream]);
+
   /**
    * Factory: builds a DeliberationOrchestrator with standard callbacks.
    * Eliminates ~300 lines of duplicated construction across handlers.
@@ -45,11 +66,14 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
             availableTools: mcpTools,
             workingDirectory: invocation.workingDirectory,
             timeoutMs: invocation.timeoutMs,
+            signal: invocation.signal,
+            onEvent: invocation.onEvent,
             routePhase: roleToPhase(persona.preferredDeliberationRole || 'consultant'),
           });
           console.log('[Council] invokeAgent completed', { personaName: persona.name, tokensUsed: result.tokensUsed });
           return result;
         },
+        onAgentEvent,
         ...(opts?.includePhaseChange ? {
           onPhaseChange: (from: string, to: string) => console.log(`[Deliberation] Phase: ${from} → ${to}`),
         } : {}),
@@ -67,11 +91,12 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
           onAgentThinkingEnd: (persona: Persona) => {
             console.log(`[Deliberation] ${persona.name} finished thinking`);
             setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+            clearStream(persona.id);
           },
         } : {}),
       });
     },
-    [availableTools],
+    [availableTools, onAgentEvent, clearStream],
   );
 
   // ───── Legacy freeform handlers ─────
@@ -133,10 +158,13 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
           availableTools: mcpTools,
           workingDirectory: invocation.workingDirectory,
           timeoutMs: invocation.timeoutMs,
+          signal: invocation.signal,
+          onEvent: invocation.onEvent,
           routePhase: roleToPhase(persona.preferredDeliberationRole || 'worker'),
         });
         return result;
       },
+      onAgentEvent,
       onPhaseChange: (from: string, to: string) => console.log(`[Coding] Phase: ${from} → ${to}`),
       onError: (err: Error, ctx: string) => console.error(`[Coding Error] ${ctx}:`, err),
       onAgentThinkingStart: (persona: Persona, startedAt: number) => {
@@ -147,6 +175,7 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
       },
       onAgentThinkingEnd: (persona: Persona) => {
         setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+        clearStream(persona.id);
       },
       // Same shape the pipeline executor's platform adapter returns. The old
       // version sent `cwd` (the Tauri param is `workingDir`) and returned
@@ -306,6 +335,9 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
     setCurrentCouncilId,
     thinkingPersonas,
     setThinkingPersonas,
+    streamingContent,
+    onAgentEvent,
+    clearStream,
     onGenerateTurn,
     onGenerateRound,
     onGenerateSynthesis,

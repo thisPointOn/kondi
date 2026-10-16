@@ -7,6 +7,7 @@
  */
 
 import { anySignal, timeoutSignal, raceSignal } from '../agent-runtime/signals';
+import type { AgentStreamEvent } from '../agent-runtime/types';
 import { simpleCompletion } from '../services/llm-router';
 import { LOCAL_SERVER_ID } from '../services/localTools';
 import { BUILTIN_SERVER_IDS, countTools } from '../utils/filterTools';
@@ -92,6 +93,8 @@ export interface CallLLMOptions {
    *  one signal that is passed to the provider client AND raced here, so the
    *  call returns promptly even when a buffered transport ignores the signal. */
   signal?: AbortSignal;
+  /** Live stream events for display (text deltas, tool calls). */
+  onEvent?: (e: AgentStreamEvent) => void;
 }
 
 // ============================================================================
@@ -268,6 +271,7 @@ function routeToProvider(opts: CallLLMOptions): Promise<CallerResult> {
       allowedToolNames: opts.skipTools ? undefined : opts.allowedTools,
       skipTools: opts.skipTools,
       signal,
+      onEvent: opts.onEvent,
     }),
     signal,
   );

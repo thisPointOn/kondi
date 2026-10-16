@@ -22,6 +22,8 @@ interface PipelineExecutionViewProps {
   activeCouncilId?: string | null;
   /** Personas currently thinking */
   thinkingPersonas?: Persona[];
+  /** Live per-persona stream tails (see useCouncilHandlers.streamingContent). */
+  streamingContent?: Map<string, string>;
   /** Lifted council selection — persists across navigation */
   selectedCouncilId?: string | null;
   onSelectedCouncilChange?: (id: string | null) => void;
@@ -72,6 +74,7 @@ export default function PipelineExecutionView({
   gateResolvers,
   activeCouncilId,
   thinkingPersonas = [],
+  streamingContent,
   selectedCouncilId: selectedCouncilIdProp,
   onSelectedCouncilChange,
   selectedStepId: selectedStepIdProp,
@@ -290,6 +293,7 @@ export default function PipelineExecutionView({
           <DeliberationView
             councilId={displayCouncilId}
             thinkingPersonas={thinkingPersonas}
+            streamingContent={streamingContent}
             onPause={onPauseDeliberation}
             onResume={onResumeDeliberation}
             onForceDecision={onForceDecision}

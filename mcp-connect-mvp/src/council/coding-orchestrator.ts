@@ -62,6 +62,7 @@ import { resolveWorkerQuestion, buildWorkerQuestionAnswerPrompt, MAX_QUESTIONS_P
 import type { WorkerQuestionHandler } from './ask-back';
 import type { WorkOrderQA } from './work-order';
 import { anySignal, timeoutSignal, raceSignal, throwIfAborted, isAbortError, isTimeoutError, AbortError } from '../agent-runtime/signals';
+import type { AgentStreamEvent } from '../agent-runtime/types';
 
 export interface CodingOrchestratorConfig {
   invokeAgent: AgentInvoker;
@@ -79,6 +80,8 @@ export interface CodingOrchestratorConfig {
   askBack?: { maxQuestionsPerPhase?: number };
   /** Run-level cancellation (see OrchestratorConfig.signal). */
   signal?: AbortSignal;
+  /** Live stream events per persona call (see OrchestratorConfig.onAgentEvent). */
+  onAgentEvent?: (persona: Persona, event: AgentStreamEvent, context: string) => void;
   onPhaseChange?: (from: DeliberationPhase, to: DeliberationPhase) => void;
   onEntryAdded?: (entry: LedgerEntry) => void;
   onError?: (error: Error, context: string) => void;
@@ -1305,7 +1308,8 @@ export class CodingOrchestrator {
       ]);
       try {
         this.config.onAgentThinkingStart?.(persona, Date.now());
-        const response = await raceSignal(this.config.invokeAgent({ ...invocation, signal: callSignal }, persona), callSignal);
+        const onEvent = this.config.onAgentEvent ? (e: AgentStreamEvent) => this.config.onAgentEvent!(persona, e, context) : invocation.onEvent;
+        const response = await raceSignal(this.config.invokeAgent({ ...invocation, signal: callSignal, onEvent }, persona), callSignal);
         this.config.onAgentThinkingEnd?.(persona);
         // Per-call metadata for the ledger (self-improvement loop) — mirrors
         // DeliberationOrchestrator.invokeAgentSafe.

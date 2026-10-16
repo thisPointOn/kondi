@@ -70,6 +70,8 @@ interface DeliberationViewProps {
   };
   /** Personas currently thinking/generating responses */
   thinkingPersonas?: Persona[];
+  /** Live stream tail per persona id (text deltas + `→ tool(args)` lines). */
+  streamingContent?: Map<string, string>;
 }
 
 interface ComposerModelOption { provider: string; model: string; name: string }
@@ -190,6 +192,7 @@ export default function DeliberationView({
     deepseek: true
   },
   thinkingPersonas: rawThinkingPersonas = [],
+  streamingContent,
 }: DeliberationViewProps) {
   const [council, setCouncil] = useState<Council | null>(null);
 
@@ -1743,21 +1746,30 @@ export default function DeliberationView({
                 <div className="thinking-indicators">
                   {thinkingPersonas.map((persona) => {
                     const elapsed = formatElapsed((persona as any).thinkingStartedAt);
+                    const tail = streamingContent?.get(persona.id);
                     return (
-                      <div key={persona.id} className="thinking-indicator">
-                        <span
-                          className="thinking-avatar"
-                          style={{ backgroundColor: persona.color + '30', color: persona.color }}
-                        >
-                          {persona.avatar || '🤖'}
-                        </span>
-                        <span className="thinking-name">{persona.name}</span>
-                        {elapsed && <span className="thinking-elapsed">{elapsed}</span>}
-                        <span className="thinking-dots">
-                          <span className="dot" />
-                          <span className="dot" />
-                          <span className="dot" />
-                        </span>
+                      <div key={persona.id} className={`thinking-indicator${tail ? ' has-stream' : ''}`}>
+                        <div className="thinking-indicator-row">
+                          <span
+                            className="thinking-avatar"
+                            style={{ backgroundColor: persona.color + '30', color: persona.color }}
+                          >
+                            {persona.avatar || '🤖'}
+                          </span>
+                          <span className="thinking-name">{persona.name}</span>
+                          {elapsed && <span className="thinking-elapsed">{elapsed}</span>}
+                          <span className="thinking-dots">
+                            <span className="dot" />
+                            <span className="dot" />
+                            <span className="dot" />
+                          </span>
+                        </div>
+                        {tail && (
+                          <details className="thinking-stream" open>
+                            <summary>live</summary>
+                            <pre>{tail}</pre>
+                          </details>
+                        )}
                       </div>
                     );
                   })}

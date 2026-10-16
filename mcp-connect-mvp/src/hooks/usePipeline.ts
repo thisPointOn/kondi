@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import type { AgentStreamEvent } from '../agent-runtime/types';
 import { PipelineExecutor, type PlatformAdapter } from '../pipeline';
 import type { PipelineExecutorCallbacks } from '../pipeline/executor';
 import { syncWorkflowPipeline } from '../council/workflow-runner';
@@ -23,9 +24,12 @@ interface UsePipelineParams {
   setThinkingPersonas: React.Dispatch<React.SetStateAction<Persona[]>>;
   /** Which providers are configured — drives launch-time model validation for workflow runs. */
   configuredProviders?: Record<string, boolean>;
+  /** Live stream sink shared with the council view (see useCouncilHandlers). */
+  onAgentEvent?: (persona: Persona, e: AgentStreamEvent, context: string) => void;
+  clearStream?: (personaId?: string) => void;
 }
 
-export function usePipeline({ availableTools, setThinkingPersonas, configuredProviders }: UsePipelineParams) {
+export function usePipeline({ availableTools, setThinkingPersonas, configuredProviders, onAgentEvent, clearStream }: UsePipelineParams) {
   const [currentPipelineId, setCurrentPipelineId] = useState<string | null>(null);
   const [pipelineMode, setPipelineMode] = useState<'library' | 'builder' | 'execution' | 'results'>('library');
   // Per-step resolvers for whatever the step is waiting for: a gate (boolean)
@@ -97,6 +101,8 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
       availableTools: filteredTools,
       timeoutMs: invocation.timeoutMs, // set by invokeAgentSafe based on role
       workingDirectory: invocation.workingDirectory,
+      signal: invocation.signal,
+      onEvent: invocation.onEvent,
       routePhase: roleToPhase(persona.preferredDeliberationRole || 'worker'),
     });
     return result;
@@ -223,7 +229,9 @@ export function usePipeline({ availableTools, setThinkingPersonas, configuredPro
         ? () => {}
         : (persona) => {
             setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
+            clearStream?.(persona.id);
           },
+      onAgentEvent: background ? undefined : onAgentEvent,
       ...overrides,
     }, tauriPlatform);
 

@@ -17,6 +17,7 @@
  */
 
 import { pickUsage } from './usage';
+import type { AgentStreamEvent } from '../agent-runtime/types';
 import type { Message, ToolCall, MCPTool } from '../types/mcp';
 import { anthropicClient } from './anthropicClient';
 import { claudeCliChat } from './claudeCliClient';
@@ -81,6 +82,10 @@ export interface ChatCompletionParams {
    *  OpenAI-style clients (request aborted) and the Claude CLI (process killed);
    *  buffered transports (Anthropic/Gemini via Rust) check it between turns. */
   signal?: AbortSignal;
+  /** Live stream events for display. When set and `onToken` is not, streaming
+   *  providers get an onToken that forwards text deltas as `text` events; the
+   *  Claude CLI forwards its stream-json events (text, tool calls, results). */
+  onEvent?: (e: AgentStreamEvent) => void;
 }
 
 /** Input for simple single-shot completion (council/pipeline) */
@@ -97,6 +102,7 @@ export interface SimpleCompletionParams {
   allowedToolNames?: string[];
   skipTools?: boolean;
   signal?: AbortSignal;
+  onEvent?: (e: AgentStreamEvent) => void;
 }
 
 export interface SimpleCompletionResult {
@@ -184,6 +190,13 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
     await mcpClient.ensureProxiesForServers(toolServerIds);
   }
 
+  // Live display: an `onEvent` listener without an explicit `onToken` still
+  // streams text deltas from the OpenAI-style providers.
+  if (!params.onToken && params.onEvent) {
+    const emit = params.onEvent;
+    params = { ...params, onToken: (delta: string) => emit({ kind: 'text', delta }) };
+  }
+
   // The whole dispatch is wrapped so a "model not supported / not found" error
   // from any provider auto-hides that model (modelProbe), and a success clears
   // any stale broken flag. See modelProbe.recordModelCallFailure.
@@ -198,7 +211,7 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
       params.systemPrompt,
       params.workingDirectory,
       params.chatId,
-      { timeoutMs: params.timeoutMs, allowedToolNames: params.allowedToolNames, skipTools: params.skipTools, signal: params.signal },
+      { timeoutMs: params.timeoutMs, allowedToolNames: params.allowedToolNames, skipTools: params.skipTools, signal: params.signal, onEvent: params.onEvent },
     );
   }
 
@@ -321,6 +334,7 @@ export async function simpleCompletion(params: SimpleCompletionParams): Promise<
     allowedToolNames: params.allowedToolNames,
     skipTools: params.skipTools,
     signal: params.signal,
+    onEvent: params.onEvent,
   });
 
   const latencyMs = Date.now() - startTime;

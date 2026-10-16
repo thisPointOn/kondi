@@ -131,6 +131,7 @@ pub async fn run_claude_streaming(
     stdin_input: Option<String>,
     timeout_ms: Option<u64>,
     cancel_id: Option<String>,
+    on_line: tauri::ipc::Channel<String>,
 ) -> Result<ClaudeCommandResult, String> {
     use std::process::Stdio;
     use tokio::process::Command;
@@ -215,6 +216,9 @@ pub async fn run_claude_streaming(
                         Ok(Some(text)) => {
                             full_output.push_str(&text);
                             full_output.push('\n');
+                            // Live stream: forward the raw line AS IT ARRIVES (the
+                            // webview turns it into display events).
+                            let _ = on_line.send(text.clone());
 
                             // Try to parse as JSON and extract session_id, result, or errors
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
