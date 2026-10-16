@@ -239,9 +239,25 @@ export function scoreStep(step: PipelineStep, ctx: StepScoreContext = {}): StepS
       score.costUsd = estimateCostUsd(undefined, score.tokens);
     }
 
+    const feedback: string[] = [];
+    const head = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, 300);
     for (const e of entries) {
       if (e.entryType === 'review' && e.authorRole === 'manager' && e.reviewOutcome) {
         score.reviewOutcomes[e.reviewOutcome]++;
+      }
+      // Reviewer/verification objections (bound ledgers are wiped per run, so
+      // this is the only durable record of WHY work was sent back).
+      if (feedback.length < 12) {
+        if (e.entryType === 'revision_request' || e.entryType === 're_deliberation') {
+          feedback.push(head(e.content));
+        } else if (e.entryType === 'code_review') {
+          const issues = (e.structured as { issues?: Array<{ description?: string }> } | undefined)?.issues;
+          if (Array.isArray(issues)) for (const i of issues.slice(0, 4)) if (i?.description && feedback.length < 12) feedback.push(head(i.description));
+          else if (/fail|issue|revise/i.test(e.content)) feedback.push(head(e.content));
+        } else if (e.entryType === 'test_result') {
+          const exit = (e.structured as { exitCode?: number } | undefined)?.exitCode;
+          if (exit != null && exit !== 0) feedback.push(head(`Verification failed (exit ${exit}): ${e.content.slice(-400)}`));
+        }
       }
       if (e.entryType === 'error') score.errors++;
       if ((e.attempts || 1) > 1 && !flags.includes('retries')) flags.push('retries');
@@ -271,6 +287,7 @@ export function scoreStep(step: PipelineStep, ctx: StepScoreContext = {}): StepS
     }
     if (score.seats.some((s) => s.role === 'consultant' && s.errors > 0)) flags.push('consultant_errors');
     if (score.testResults && score.testResults.passed < score.testResults.runs) flags.push('tests_failed');
+    if (feedback.length) score.reviewFeedback = feedback;
   }
 
   if (step.status === 'completed' && content.trim().length === 0) flags.push('empty_output');

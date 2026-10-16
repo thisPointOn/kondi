@@ -3069,6 +3069,11 @@ export class DeliberationOrchestrator {
     if (budgetLine) {
       invocation = { ...invocation, userMessage: `${invocation.userMessage}\n\n${budgetLine}` };
     }
+    // Seat self-view for the MANAGER lands where it matters most — the directive
+    // (the worker's brief is rendered inside the work order itself).
+    if (context === 'directive' && this.config.seatBriefs?.manager) {
+      invocation = { ...invocation, userMessage: `${invocation.userMessage}\n\n${this.config.seatBriefs.manager}` };
+    }
 
     // Thread working directory from council so each invocation uses its own dir
     const councilDir = council?.deliberation?.workingDirectory;

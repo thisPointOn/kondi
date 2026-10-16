@@ -51,6 +51,7 @@ import { AbortError, raceSignal, anySignal } from '../agent-runtime/signals';
 import { BudgetMeter, hasBudget, formatBudgetLine, isBudgetExceededError } from './budget';
 import type { BudgetState } from './budget';
 import { buildLessonBundle } from '../improve/lessons';
+import { buildSeatBriefs } from '../improve/seat-brief';
 import { runImprovementCycle, liveSettings } from '../improve/cycle';
 import type { RunScorecard, ImproveEvent } from '../improve/types';
 import {
@@ -910,6 +911,12 @@ export class PipelineExecutor {
     const lessons = improveSettings.lessons.enabled
       ? buildLessonBundle(improveStore.get(pipelineId), step.id, improveSettings.lessons.maxChars)
       : undefined;
+    // Seat self-view: each role's own track record in THIS step over the last
+    // runs (first-try acceptance, revisions, recurring objections). Needs ≥2
+    // prior runs; rendered into the worker's work order / module directive.
+    const seatBriefs = improveSettings.lessons.enabled
+      ? buildSeatBriefs(improveStore.listScorecards(pipelineId, 10), step.id)
+      : undefined;
 
     // Work-order facts only the executor knows: the step's TASK alone (the raw
     // problem is task + input), its name, the run dir and upstream input refs.
@@ -969,6 +976,7 @@ export class PipelineExecutor {
       onAgentThinkingEnd: this.callbacks.onAgentThinkingEnd,
       onAgentEvent: this.callbacks.onAgentEvent,
       lessons,
+      seatBriefs,
     };
 
     if (config.type === 'coding') {

@@ -165,6 +165,10 @@ export interface StepScore {
   completionSummaryPresent: boolean;
   /** condition steps: how many loop_to_stage iterations fired */
   loopIterations?: number;
+  /** What reviewers/verification objected to in this run (revision requests,
+   *  re-deliberation reasons, code-review issues, failing test tails; each ≤300
+   *  chars, ≤12 lines). Feeds the seat self-view (`seat-brief.ts`). */
+  reviewFeedback?: string[];
   seats: SeatMetrics[];
   /** Mechanical flags the retrospective can key on. */
   flags: StepFlag[];
