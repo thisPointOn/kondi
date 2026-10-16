@@ -72,6 +72,7 @@ import { formatLessonsBlock } from '../improve/lessons';
 import { buildWorkOrder, stripTaskPrefix, extractAcceptanceCriteria as extractAcceptanceCriteriaSection } from './work-order';
 import type { WorkOrderInput, WorkOrderQA, ToolScope } from './work-order';
 import { parseWorkerSignals, signalsForLedger } from './worker-signals';
+import { detectTestCommand } from '../pipeline/test-detect';
 
 import {
   buildManagerFramingPrompt,
@@ -149,6 +150,10 @@ export interface OrchestratorConfig {
   /** Platform hooks for verification/diffs (pipeline executor passes the platform's). */
   runCommand?: RunCommandFn;
   readFile?: (path: string) => Promise<string | null>;
+  /** Worker-owned verification: the command the worker runs itself (and the
+   *  orchestrator re-runs as the final check). Defaults: `deliberation.testCommand`,
+   *  else auto-detected for file/directory outputs when readFile is available. */
+  verify?: { command?: string; autoDetect?: boolean; maxWorkerTries?: number };
   /** Whether this runtime can actually EXECUTE tools for a persona's provider.
    *  Default true (app, where API clients run tool loops). The headless CLI
    *  runner returns true only for the claude/codex binaries so API-provider
@@ -271,6 +276,8 @@ export class DeliberationOrchestrator {
   private activeCouncilId: string | null = null;
   /** councilId → the raw problem this run was started with (work order Source). */
   private rawProblems = new Map<string, string>();
+  /** councilId → resolved verify command (null = none), resolved once per run. */
+  private verifyCommands = new Map<string, string | null>();
 
   constructor(config: OrchestratorConfig) {
     this.config = config;
@@ -1576,6 +1583,61 @@ export class DeliberationOrchestrator {
    * positioning decision). Re-attach the original problem/input as
    * authoritative source material so the deliverable stays grounded in it.
    */
+  /**
+   * The verify command for this council: explicit config → `deliberation.testCommand`
+   * → auto-detected (file/directory outputs, when a readFile hook exists). Cached.
+   */
+  private async resolveVerifyCommand(council: Council): Promise<string | undefined> {
+    if (this.verifyCommands.has(council.id)) return this.verifyCommands.get(council.id) || undefined;
+    let cmd: string | null = this.config.verify?.command?.trim() || council.deliberation?.testCommand?.trim() || null;
+    const outputType = council.deliberation?.outputType;
+    const wd = council.deliberation?.workingDirectory;
+    const auto = this.config.verify?.autoDetect ?? (outputType === 'file' || outputType === 'directory');
+    if (!cmd && auto && wd && this.config.readFile) {
+      try {
+        const detected = await detectTestCommand(wd, this.config.readFile);
+        if (detected) cmd = detected.command;
+      } catch { /* no detection */ }
+    }
+    this.verifyCommands.set(council.id, cmd);
+    return cmd || undefined;
+  }
+
+  /** Attach the verify command to a FULL-tools worker's permissions (text workers can't run it). */
+  private async withVerify(council: Council, perms: WorkerPermissions): Promise<WorkerPermissions> {
+    if (!perms.writePermissions) return perms;
+    const cmd = await this.resolveVerifyCommand(council);
+    if (!cmd) return perms;
+    return { ...perms, verifyCommand: cmd, verifyMaxTries: this.config.verify?.maxWorkerTries ?? 3 };
+  }
+
+  /**
+   * Final check the orchestrator runs itself (the worker's own report is not
+   * trusted): the verify command in the council's working dir. Records a
+   * `test_result` entry. Returns undefined when nothing can be run.
+   */
+  private async runFinalVerification(council: Council, phase: DeliberationPhase): Promise<{ passed: boolean; exitCode: number; tail: string; command: string } | undefined> {
+    const cmd = await this.resolveVerifyCommand(council);
+    const wd = council.deliberation?.workingDirectory;
+    if (!cmd || !wd || !this.config.runCommand) return undefined;
+    const manager = getPersonaByRole(council, 'manager')[0] || getPersonaByRole(council, 'worker')[0];
+    let result: { stdout: string; stderr: string; exit_code: number };
+    try {
+      result = await this.config.runCommand(cmd, wd);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result = { stdout: '', stderr: msg, exit_code: -1 };
+    }
+    const output = `${result.stdout}\n${result.stderr}`.trim();
+    const tail = output.length > 3000 ? `…${output.slice(-3000)}` : output;
+    this.createEntry(
+      council.id, 'manager', manager.id, 'test_result', phase,
+      `Verification: ${cmd}\nExit code: ${result.exit_code}\n\n${tail}`,
+      0, 0, undefined, undefined, { exitCode: result.exit_code, testCommand: cmd, verification: true }
+    );
+    return { passed: result.exit_code === 0, exitCode: result.exit_code, tail, command: cmd };
+  }
+
   /** The raw problem this run started with (falls back to the persisted savedProblem). */
   private rawProblemFor(council: Council): string {
     return this.rawProblems.get(council.id) ?? council.deliberation?.savedProblem?.trim() ?? '';
@@ -1649,11 +1711,11 @@ export class DeliberationOrchestrator {
     // Build worker permissions from role assignment + deliberation config.
     // writePermissions is gated by ACTUAL tool capability so a non-tool worker
     // is driven as a text agent (not told to write files it can't write).
-    const workerPermissions: WorkerPermissions = {
+    const workerPermissions: WorkerPermissions = await this.withVerify(council, {
       writePermissions: this.effectiveWrite(assignment, council.deliberation?.outputType),
       workingDirectory: council.deliberation?.workingDirectory,
       directoryConstrained: council.deliberation?.directoryConstrained,
-    };
+    });
 
     // Build prompts per Section 9.7
     const stepType = council.deliberation?.stepType;
@@ -1792,53 +1854,75 @@ export class DeliberationOrchestrator {
       throw new Error('Missing directive or output for review');
     }
 
-    // Collect consultant reviews first
-    const consultantReviews = await this.collectConsultantReviews(council);
-
     // Check if worker had write permissions (affects review criteria)
     const worker = this.getWorker(council);
     const workerAssignment = getRoleAssignment(council, worker.id);
     const hasWritePermissions = this.effectiveWrite(workerAssignment, council.deliberation?.outputType);
     const stepType = council.deliberation?.stepType;
 
-    // Build prompts per Section 9.8
-    const systemPrompt = manager.predisposition.systemPrompt;
-    const expectedOutput = council.deliberation?.expectedOutput;
-    const userMessage = buildManagerReviewPrompt(
-      output.content,
-      directive.content,
-      decision?.acceptanceCriteria,
-      expectedOutput,
-      hasWritePermissions,
-      stepType,
-      consultantReviews,
-    );
+    // FINAL VERIFICATION before any LLM review: the orchestrator runs the verify
+    // command itself (the worker's own "**Verification:** exit 0" is not trusted).
+    // A failure skips the manager call entirely — the verdict is a mechanical
+    // `revise` whose feedback is the real test tail (honours maxRevisions).
+    const verification = hasWritePermissions ? await this.runFinalVerification(council, 'reviewing') : undefined;
 
-    const response = await this.invokeAgentSafe(
-      { personaId: manager.id, systemPrompt, userMessage },
-      manager,
-      'review'
-    );
+    let review: ManagerReview;
+    let entry: LedgerEntry;
+    if (verification && !verification.passed) {
+      review = {
+        verdict: 'revise',
+        reasoning: `Verification command \`${verification.command}\` failed with exit code ${verification.exitCode}.`,
+        feedback: `The verification command \`${verification.command}\` FAILED (exit code ${verification.exitCode}). Fix the cause so it exits 0, then re-run it yourself and report the real result.\n\nOutput tail:\n${verification.tail || '(no output)'}`,
+      };
+      entry = this.createEntry(
+        council.id, 'manager', manager.id, 'review', 'reviewing',
+        `Verdict: revise\n\n${review.reasoning}\n\nFeedback: ${review.feedback}`,
+        0, 0, undefined, undefined, { verification: { exitCode: verification.exitCode, command: verification.command }, automatic: true }, undefined, 'revise'
+      );
+    } else {
+      // Collect consultant reviews first
+      const consultantReviews = await this.collectConsultantReviews(council);
 
-    // Parse review
-    const review = this.parseManagerReview(response.content);
+      // Build prompts per Section 9.8
+      const systemPrompt = manager.predisposition.systemPrompt;
+      const expectedOutput = council.deliberation?.expectedOutput;
+      const userMessage = buildManagerReviewPrompt(
+        output.content,
+        directive.content,
+        decision?.acceptanceCriteria,
+        expectedOutput,
+        hasWritePermissions,
+        stepType,
+        consultantReviews,
+        verification ? `PASSED — the orchestrator ran \`${verification.command}\` and it exited 0.` : undefined,
+      );
 
-    // Create ledger entry
-    const entry = this.createEntry(
-      council.id,
-      'manager',
-      manager.id,
-      'review',
-      'reviewing',
-      response.content,
-      response.tokensUsed,
-      response.latencyMs,
-      undefined,
-      undefined,
-      response.structured,
-      undefined,
-      review.verdict
-    );
+      const response = await this.invokeAgentSafe(
+        { personaId: manager.id, systemPrompt, userMessage },
+        manager,
+        'review'
+      );
+
+      // Parse review
+      review = this.parseManagerReview(response.content);
+
+      // Create ledger entry
+      entry = this.createEntry(
+        council.id,
+        'manager',
+        manager.id,
+        'review',
+        'reviewing',
+        response.content,
+        response.tokensUsed,
+        response.latencyMs,
+        undefined,
+        undefined,
+        response.structured,
+        undefined,
+        review.verdict
+      );
+    }
 
     // Handle verdict
     if (review.verdict === 'accept') {
@@ -1931,11 +2015,11 @@ export class DeliberationOrchestrator {
     const suppressPersona = assignment?.suppressPersona !== false;
 
     // Build worker permissions from role assignment + deliberation config
-    const workerPermissions: WorkerPermissions = {
+    const workerPermissions: WorkerPermissions = await this.withVerify(council, {
       writePermissions: this.effectiveWrite(assignment, council.deliberation?.outputType),
       workingDirectory: council.deliberation?.workingDirectory,
       directoryConstrained: council.deliberation?.directoryConstrained,
-    };
+    });
 
     // Build prompts per Section 9.7.1
     const stepType = council.deliberation?.stepType;
@@ -1946,10 +2030,13 @@ export class DeliberationOrchestrator {
     // incrementRevisionCount already ran in reviewWork → this is attempt revisionCount+1.
     const revisionCount = council.deliberationState?.revisionCount || 0;
     const maxRevisions = council.deliberation?.maxRevisions ?? 3;
+    const lastTest = getLatestOfType(council.id, 'test_result');
+    const isFix = (lastTest?.structured as { verification?: boolean } | undefined)?.verification === true
+      && revisionRequest.timestamp <= lastTest!.timestamp;
     const order = this.composeWorkOrder(council, assignment, workerPermissions, directive.content, {
-      number: revisionCount + 1, max: maxRevisions + 1, mode: 'revise',
+      number: revisionCount + 1, max: maxRevisions + 1, mode: isFix ? 'fix' : 'revise',
       previousOutput: previousOutput.content, feedback: revisionRequest.content,
-    });
+    }, { lastTestTail: isFix ? lastTest!.content : undefined });
     const userMessage = buildWorkerRevisionPrompt(
       order,
       previousOutput.content,
@@ -2049,11 +2136,11 @@ export class DeliberationOrchestrator {
     );
 
     // Build worker permissions
-    const workerPermissions: WorkerPermissions = {
+    const workerPermissions: WorkerPermissions = await this.withVerify(council, {
       writePermissions: this.effectiveWrite(assignment, council.deliberation?.outputType),
       workingDirectory: council.deliberation?.workingDirectory,
       directoryConstrained: council.deliberation?.directoryConstrained,
-    };
+    });
 
     const stepType = council.deliberation?.stepType;
     const systemPrompt = suppressPersona
@@ -2085,11 +2172,38 @@ export class DeliberationOrchestrator {
     const effectiveProblem = await this.runSubagents(council, worker, order);
     const userMessage = buildWorkerExecutionPrompt(effectiveProblem, workerPermissions, stepType);
 
-    const response = await this.invokeAgentSafe(
+    let response = await this.invokeAgentSafe(
       { personaId: worker.id, systemPrompt, userMessage },
       worker,
       'execution'
     );
+
+    // Manager-less final verification: run the verify command ourselves; on
+    // failure give the worker bounded fix attempts (maxRevisions) with the tail.
+    if (workerPermissions.verifyCommand) {
+      const maxFix = council.deliberation?.maxRevisions ?? 0;
+      for (let fix = 0; ; fix++) {
+        const v = await this.runFinalVerification(council, 'executing');
+        if (!v || v.passed || fix >= maxFix) {
+          if (v && !v.passed) console.warn(`[Orchestrator] Direct execution: verification still failing (exit ${v.exitCode}) after ${fix} fix attempt(s)`);
+          break;
+        }
+        const fixOrder = buildWorkOrder({
+          objective: { task: this.config.brief?.task, stepName: this.config.brief?.stepName, stepType: this.config.brief?.stepType ?? stepType },
+          deliverable: { outputType: council.deliberation?.outputType, expectedOutput: council.deliberation?.expectedOutput },
+          acceptance: {},
+          directive: enrichedProblem,
+          constraints: { writePermissions: true, toolScope: 'full', workingDirectory: workerPermissions.workingDirectory, directoryConstrained: workerPermissions.directoryConstrained, codebase: workerPermissions.codebase },
+          verification: { command: v.command, maxTries: workerPermissions.verifyMaxTries ?? 3, lastOutputTail: v.tail },
+          attempt: { number: fix + 2, max: maxFix + 1, mode: 'fix', previousOutput: response.content, feedback: `The verification command \`${v.command}\` failed with exit code ${v.exitCode}. Fix the cause and re-run it.` },
+        });
+        response = await this.invokeAgentSafe(
+          { personaId: worker.id, systemPrompt, userMessage: buildWorkerExecutionPrompt(fixOrder, workerPermissions, stepType) },
+          worker,
+          'revision'
+        );
+      }
+    }
 
     // Create output artifact
     const output = createOutput(council.id, workerPermissions.writePermissions ? response.content : sanitizeDeliverable(response.content), directive.id);

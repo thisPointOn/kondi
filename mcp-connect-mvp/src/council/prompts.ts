@@ -348,6 +348,9 @@ export function getMinimalWorkerSystemPrompt(permissions?: WorkerPermissions, st
     const saveNote = permissions?.workingDirectory
       ? `\nIf you need to save output, you may write files to: ${permissions.workingDirectory}`
       : '';
+    const verifyNote = permissions?.verifyCommand
+      ? `\n- VERIFY YOUR WORK: run \`${permissions.verifyCommand}\` with your shell tool when done and iterate until it exits 0 (max ${permissions.verifyMaxTries ?? 3} tries); report the real result as **Verification:** exit <code> in your summary`
+      : '';
     return `You are an execution agent. Your job is to PERFORM the task using your available tools — not to write code, not to plan, not to describe what should be done.
 
 You have MCP tools available to you. USE THEM DIRECTLY to accomplish the task.
@@ -360,7 +363,7 @@ CRITICAL RULES:
 - DO NOT describe what tools you would use — actually call them
 - ACTUALLY EXECUTE the task and return the real results
 - If a tool call fails, report the error and try an alternative approach
-- Your response should contain the ACTUAL DATA or RESULTS from executing the task${saveNote}
+- Your response should contain the ACTUAL DATA or RESULTS from executing the task${saveNote}${verifyNote}
 
 When DONE, end with:
 ## COMPLETION SUMMARY
@@ -470,7 +473,9 @@ CRITICAL RULES:
 - If the directive says to create files, CREATE THEM by calling write_file
 - If anything is unclear, flag it explicitly — do not guess
 - If something seems incorrect or impossible, say so — do not silently deviate
-- Do not add features, optimizations, or changes not specified in the directive
+- Do not add features, optimizations, or changes not specified in the directive${permissions.verifyCommand
+  ? `\n- VERIFY YOUR WORK: run \`${permissions.verifyCommand}\` with run_command when done and iterate until it exits 0 (max ${permissions.verifyMaxTries ?? 3} tries). Report the real result as **Verification:** exit <code> — <last lines> in your summary; never fabricate it. The orchestrator re-runs the same command afterwards.`
+  : ''}
 - When DONE, you MUST end with a ## COMPLETION SUMMARY section (status, files created/modified, what was built, known issues)`;
   }
 
@@ -782,9 +787,13 @@ export function buildManagerReviewPrompt(
   hasWritePermissions?: boolean,
   stepType?: CouncilStepType,
   consultantReviews?: string,
+  verification?: string,
 ): string {
   const criteriaSection = acceptanceCriteria
     ? `\nACCEPTANCE CRITERIA (from your decision):\n${acceptanceCriteria}\n`
+    : '';
+  const verificationSection = verification
+    ? `\nVERIFICATION (run by the orchestrator, not the worker): ${verification}\nTreat this as the authoritative test result.\n`
     : '';
 
   const expectedOutputSection = expectedOutput
@@ -827,7 +836,7 @@ Only use REVISE if the worker truly did not invoke any file-writing tools.\n`
 
   return `WORK DIRECTIVE:
 ${directive}
-${criteriaSection}${expectedOutputSection}${implementationNote}
+${criteriaSection}${expectedOutputSection}${implementationNote}${verificationSection}
 WORKER OUTPUT:
 ${workOutput}
 ${consultantSection}

@@ -1168,12 +1168,14 @@ function CouncilConfig({
         </div>
       </div>
 
-      {/* Testing Config (coding steps only) */}
-      {config.type === 'coding' && (
+      {/* Testing / verification — coding steps, and any step whose worker writes files
+          (the worker runs this command itself and iterates; the orchestrator re-runs it
+          as the final check before the manager review). */}
+      {(config.type === 'coding' || config.outputType === 'file' || config.outputType === 'directory') && (
         <div className="config-section">
-          <div className="config-section-title">Testing</div>
+          <div className="config-section-title">{config.type === 'coding' ? 'Testing' : 'Verification'}</div>
           <div className="config-field">
-            <label>Test Command</label>
+            <label>{config.type === 'coding' ? 'Test Command' : 'Verify command'}</label>
             <div className="directory-input-row">
               <input
                 type="text"
@@ -1204,8 +1206,13 @@ function CouncilConfig({
                 Detect
               </button>
             </div>
-            <span className="hint">Leave empty to skip testing or use Detect to auto-discover</span>
+            <span className="hint">
+              {config.type === 'coding'
+                ? 'Leave empty to skip testing or use Detect to auto-discover'
+                : 'The worker runs this after writing files and iterates until it passes; a failing final check sends the work back for revision. Leave empty to auto-detect (or skip).'}
+            </span>
           </div>
+          {config.type === 'coding' && (
           <div className="inline-fields">
             <div className="config-field">
               <label>Max Debug Cycles</label>
@@ -1228,6 +1235,7 @@ function CouncilConfig({
               />
             </div>
           </div>
+          )}
         </div>
       )}
 

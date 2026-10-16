@@ -105,6 +105,8 @@ const CODING_PHASE_TRANSITIONS: Record<string, {
 
 export class CodingOrchestrator {
   private config: CodingOrchestratorConfig;
+  /** councilId → verify command (install && build && test) or null; resolved before implementation. */
+  private verifyCommands = new Map<string, string | null>();
   /** Active council ID for the current workflow */
   private activeCouncilId: string | null = null;
   /** Phase-level rate limit retry count (reset per workflow start) */
@@ -193,6 +195,19 @@ export class CodingOrchestrator {
         ? `${spec}\n\n---\nCONSULTANT GUIDANCE (consider during implementation):\n${guidance}`
         : spec;
 
+      // Resolve the verify command (install && build && test) BEFORE implementing
+      // so module workers can run it themselves and iterate to green; the test
+      // loop below reuses the same command as the orchestrator's final check.
+      council = councilStore.get(council.id)!;
+      {
+        const decomposition = council.deliberationState?.moduleDecomposition;
+        const installCommand = decomposition?.installCommand || await this.autoDetectInstallCommand(council);
+        const buildCommand = decomposition?.buildCommand || await this.autoDetectBuildCommand(council);
+        const testCommand = council.deliberation?.testCommand || await this.autoDetectTestCommand(council);
+        const parts = [installCommand, buildCommand, testCommand].filter(Boolean);
+        this.verifyCommands.set(council.id, parts.length > 0 ? parts.join(' && ') : null);
+      }
+
       // Phase 2+3: Implement → Review loop
       let reviewCycleCount = 0;
       while (true) {
@@ -250,16 +265,9 @@ export class CodingOrchestrator {
         council = councilStore.get(council.id)!;
       }
 
-      // Phase 4: Test loop (build + test verification)
+      // Phase 4: Test loop (build + test verification) — same command the workers were told to run
       council = councilStore.get(council.id)!;
-      const decomposition = council.deliberationState?.moduleDecomposition;
-      const installCommand = decomposition?.installCommand || await this.autoDetectInstallCommand(council);
-      const buildCommand = decomposition?.buildCommand || await this.autoDetectBuildCommand(council);
-      const testCommand = council.deliberation?.testCommand || await this.autoDetectTestCommand(council);
-
-      // Combine install + build + test into one verification command
-      const commandParts = [installCommand, buildCommand, testCommand].filter(Boolean);
-      const verifyCommand = commandParts.length > 0 ? commandParts.join(' && ') : null;
+      const verifyCommand = this.verifyCommands.get(council.id) ?? null;
 
       if (verifyCommand) {
         let debugCycleCount = 0;
@@ -529,6 +537,8 @@ export class CodingOrchestrator {
           writePermissions: assignment?.writePermissions,
           workingDirectory: council.deliberation?.workingDirectory,
           directoryConstrained: council.deliberation?.directoryConstrained,
+          verifyCommand: assignment?.writePermissions ? (this.verifyCommands.get(council.id) || undefined) : undefined,
+          verifyMaxTries: 3,
         };
 
         const systemPrompt = suppressPersona
@@ -738,6 +748,8 @@ export class CodingOrchestrator {
           writePermissions: assignment?.writePermissions,
           workingDirectory: council.deliberation?.workingDirectory,
           directoryConstrained: council.deliberation?.directoryConstrained,
+          verifyCommand: assignment?.writePermissions ? (this.verifyCommands.get(council.id) || undefined) : undefined,
+          verifyMaxTries: 3,
         };
 
         const systemPrompt = suppressPersona
@@ -785,6 +797,8 @@ export class CodingOrchestrator {
         writePermissions: assignment?.writePermissions,
         workingDirectory: council.deliberation?.workingDirectory,
         directoryConstrained: council.deliberation?.directoryConstrained,
+        verifyCommand: assignment?.writePermissions ? (this.verifyCommands.get(council.id) || undefined) : undefined,
+        verifyMaxTries: 3,
       };
 
       const systemPrompt = suppressPersona
