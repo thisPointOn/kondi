@@ -105,7 +105,8 @@ async function clearProjectSessions(workingDirectory: string): Promise<void> {
   try {
     const pathKey = workingDirectory.replace(/\//g, '-');
     const cmd = `rm -f "$HOME/.claude/projects/${pathKey}/"*.jsonl 2>/dev/null; true`;
-    await invoke('run_command', { command: cmd, cwd: workingDirectory });
+    // The Tauri param is `workingDir` (the old `cwd` key was silently ignored).
+    await invoke('run_command', { command: cmd, workingDir: workingDirectory });
     console.log(`[ClaudeCliClient] Cleared project sessions for ${workingDirectory}`);
   } catch (err) {
     console.warn('[ClaudeCliClient] Failed to clear project sessions:', err);
@@ -127,6 +128,14 @@ export async function claudeCliChat(
   additionalSystemPrompt?: string,
   workingDirectory?: string,
   chatId?: string,
+  opts?: {
+    /** Per-call timeout (council workers get 30 min from invokeAgentSafe; the old hardcoded 10 min cut them off). */
+    timeoutMs?: number;
+    /** Abstract tool names allowed for this call (Read/Write/Edit/Bash/Glob/Grep/mcp__*). Undefined = CLI default set. */
+    allowedToolNames?: string[];
+    /** No tools at all (text-only persona). */
+    skipTools?: boolean;
+  },
 ): Promise<ChatResult> {
   const existingSessionId = chatId ? sessionMap.get(chatId) : undefined;
   const lastSyncedLen = chatId ? sessionSyncMap.get(chatId) : undefined;
@@ -164,6 +173,16 @@ export async function claudeCliChat(
 
   if (resume && existingSessionId) {
     args.push('--resume', existingSessionId);
+  }
+
+  // Honour the orchestrator's tool scoping (rule 5): a text-deliverable or
+  // read-only persona must not get Write/Edit/Bash just because the binary runs
+  // under bypassPermissions. One comma-joined value (rule 3: variadic flag —
+  // never a bare positional). `none` disables tools entirely.
+  if (opts?.skipTools) {
+    args.push('--allowedTools', 'none');
+  } else if (opts?.allowedToolNames && opts.allowedToolNames.length > 0) {
+    args.push('--allowedTools', opts.allowedToolNames.join(','));
   }
 
   // System prompt only when NOT resuming (a fresh session needs it again)
@@ -226,7 +245,7 @@ export async function claudeCliChat(
     args,
     cwd: workingDirectory || undefined,
     stdinInput,
-    timeoutMs: 600_000,
+    timeoutMs: opts?.timeoutMs ?? 600_000,
   });
 
   const latencyMs = Date.now() - startTime;
@@ -266,9 +285,11 @@ export async function claudeCliChat(
       role: 'assistant',
       content: parsed.text || '[No content returned from Claude CLI]',
       timestamp: new Date(),
+      // Real usage from the stream-json `assistant` events (was hardcoded 0/0,
+      // so every anthropic-cli ledger entry fell back to a chars/4 estimate).
       usage: {
-        inputTokens: 0,
-        outputTokens: 0,
+        inputTokens: parsed.inputTokens ?? 0,
+        outputTokens: parsed.outputTokens ?? 0,
         payloadChars: stdinInput.length,
         apiTurns: 1,
       },

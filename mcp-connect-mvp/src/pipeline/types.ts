@@ -76,6 +76,8 @@ export interface StepArtifact {
     /** Condition steps: the evaluation result ("TRUE ... → continue") — the
      *  artifact content itself is the PASSED-THROUGH upstream data. */
     conditionNote?: string;
+    /** Council steps that FAILED: the council's terminal phase ('failed' | 'paused' | 'cancelled'). */
+    terminalPhase?: string;
   };
   createdAt: string;
 }

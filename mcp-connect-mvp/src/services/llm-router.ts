@@ -70,6 +70,12 @@ export interface ChatCompletionParams {
    * leave it unset (buffered).
    */
   onToken?: (delta: string) => void;
+  /** Per-call timeout for providers that run a subprocess (CLI binaries). */
+  timeoutMs?: number;
+  /** Abstract tool names (Read/Write/Edit/Bash/Glob/Grep/mcp__*) the CLI binaries may use; undefined = default set. */
+  allowedToolNames?: string[];
+  /** Text-only call: no tools advertised to CLI binaries. */
+  skipTools?: boolean;
 }
 
 /** Input for simple single-shot completion (council/pipeline) */
@@ -82,6 +88,9 @@ export interface SimpleCompletionParams {
   workingDirectory?: string;
   /** Router phase hint for routed profiles (see ChatCompletionParams). */
   routePhase?: LedgerPhase;
+  timeoutMs?: number;
+  allowedToolNames?: string[];
+  skipTools?: boolean;
 }
 
 export interface SimpleCompletionResult {
@@ -183,6 +192,7 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
       params.systemPrompt,
       params.workingDirectory,
       params.chatId,
+      { timeoutMs: params.timeoutMs, allowedToolNames: params.allowedToolNames, skipTools: params.skipTools },
     );
   }
 
@@ -301,6 +311,9 @@ export async function simpleCompletion(params: SimpleCompletionParams): Promise<
     systemPrompt: params.systemPrompt,
     workingDirectory: params.workingDirectory,
     routePhase: params.routePhase,
+    timeoutMs: params.timeoutMs,
+    allowedToolNames: params.allowedToolNames,
+    skipTools: params.skipTools,
   });
 
   const latencyMs = Date.now() - startTime;

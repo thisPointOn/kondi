@@ -15,6 +15,7 @@
     "tauri:dev": "WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev",
     "dev:server": "node server/index.js",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json; tsc --noEmit -p tsconfig.cli.json",
     "council": "npx tsx cli/run-council.ts",
     "pipeline": "npx tsx cli/run-pipeline.ts",
     "improve": "npx tsx cli/improve.ts"

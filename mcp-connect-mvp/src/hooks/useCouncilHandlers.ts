@@ -43,13 +43,12 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
             skipTools: invocation.skipTools,
             allowedTools: invocation.allowedTools,
             availableTools: mcpTools,
-            conversationId: invocation.conversationId,
             workingDirectory: invocation.workingDirectory,
             timeoutMs: invocation.timeoutMs,
             routePhase: roleToPhase(persona.preferredDeliberationRole || 'consultant'),
           });
           console.log('[Council] invokeAgent completed', { personaName: persona.name, tokensUsed: result.tokensUsed });
-          return { ...result, sessionId: result.sessionId };
+          return result;
         },
         ...(opts?.includePhaseChange ? {
           onPhaseChange: (from: string, to: string) => console.log(`[Deliberation] Phase: ${from} → ${to}`),
@@ -132,12 +131,11 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
           skipTools: invocation.skipTools,
           allowedTools: invocation.allowedTools,
           availableTools: mcpTools,
-          conversationId: invocation.conversationId,
           workingDirectory: invocation.workingDirectory,
           timeoutMs: invocation.timeoutMs,
           routePhase: roleToPhase(persona.preferredDeliberationRole || 'worker'),
         });
-        return { ...result, sessionId: result.sessionId };
+        return result;
       },
       onPhaseChange: (from: string, to: string) => console.log(`[Coding] Phase: ${from} → ${to}`),
       onError: (err: Error, ctx: string) => console.error(`[Coding Error] ${ctx}:`, err),
@@ -150,12 +148,16 @@ export function useCouncilHandlers({ availableTools, configuredProviders }: UseC
       onAgentThinkingEnd: (persona: Persona) => {
         setThinkingPersonas(prev => prev.filter(p => p.id !== persona.id));
       },
-      runCommand: async (cmd: string, cwd?: string) => {
-        const result = await invoke<{ stdout: string; stderr: string; exit_code: number }>('run_command', {
+      // Same shape the pipeline executor's platform adapter returns. The old
+      // version sent `cwd` (the Tauri param is `workingDir`) and returned
+      // `exitCode` (the orchestrator reads `exit_code`), so standalone coding
+      // councils always saw tests as failing.
+      runCommand: async (cmd: string, cwd: string) => {
+        const result = await invoke<{ stdout: string; stderr: string; exit_code: number; success: boolean }>('run_command', {
           command: cmd,
-          cwd: cwd || undefined,
+          workingDir: cwd,
         });
-        return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exit_code };
+        return { stdout: result.stdout, stderr: result.stderr, exit_code: result.exit_code, success: result.exit_code === 0 };
       },
       readFile: async (path: string) => {
         return invoke<string>('read_local_file', { path });

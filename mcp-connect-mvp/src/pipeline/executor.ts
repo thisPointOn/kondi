@@ -83,6 +83,10 @@ export interface PipelineExecutorCallbacks {
   onImprovementEvent?: (event: ImproveEvent) => void;
   /** Which providers are configured — lets auto-applied proposals be validated like the builder does. */
   getConfiguredProviders?: () => Record<string, boolean> | undefined;
+  /** Whether this runtime can EXECUTE tools for a persona's provider. Forwarded
+   *  to both orchestrators (default true). The headless CLI runner returns false
+   *  for providers it has no tool loop for, so they aren't told they have tools. */
+  canUseTools?: (persona: Persona) => boolean;
 }
 
 // ============================================================================
@@ -497,10 +501,11 @@ export class PipelineExecutor {
     if (this.runningPipelineId) {
       const pipeline = pipelineStore.get(this.runningPipelineId);
       if (pipeline) {
-        // Mark any running steps as failed
+        // Mark any running (or gate/question-waiting) steps as failed — a step
+        // parked on a gate would otherwise stay 'waiting_approval' forever.
         for (const stage of pipeline.stages) {
           for (const step of stage.steps) {
-            if (step.status === 'running') {
+            if (step.status === 'running' || step.status === 'waiting_approval') {
               pipelineStore.setStepStatus(this.runningPipelineId, step.id, 'failed', 'Aborted by user');
             }
           }
@@ -706,11 +711,13 @@ export class PipelineExecutor {
       // For steps that created a council before failing, write a partial
       // artifact so the UI can still link to the deliberation ledger
       if (stepCtx.councilId) {
+        const terminalPhase = (error as { terminalPhase?: string })?.terminalPhase
+          || councilStore.get(stepCtx.councilId)?.deliberationState?.currentPhase;
         pipelineStore.setStepArtifact(pipelineId, step.id, {
           stepId: step.id,
           content: `Step failed: ${message}`,
           artifactType: 'output',
-          metadata: { councilId: stepCtx.councilId, stepName: step.name, stepType: step.config.type },
+          metadata: { councilId: stepCtx.councilId, stepName: step.name, stepType: step.config.type, terminalPhase },
           createdAt: new Date().toISOString(),
         });
       }
@@ -870,6 +877,7 @@ export class PipelineExecutor {
     // Branch: coding steps use CodingOrchestrator, planning uses DeliberationOrchestrator
     const orchestratorCallbacks = {
       invokeAgent: this.callbacks.invokeAgent,
+      canUseTools: this.callbacks.canUseTools,
       onPhaseChange: (from: any, to: any) =>
         console.log(`[Pipeline:Council] Phase: ${from} -> ${to}`),
       onError: (err: Error, ctx: string) =>
@@ -889,6 +897,21 @@ export class PipelineExecutor {
     } else {
       const deliberator = new DeliberationOrchestrator(orchestratorCallbacks);
       await deliberator.runFullDeliberation(council, rawProblem);
+    }
+
+    // HONEST STEP OUTCOME: a council that ended in the 'failed' phase (rule 17:
+    // the worker produced nothing usable) or was left 'paused' is NOT a
+    // completed step. Previously the executor built an artifact from whatever
+    // output existed ("FAILED ..." text) and the pipeline marched on.
+    const terminalPhase = councilStore.get(council.id)?.deliberationState?.currentPhase;
+    if (terminalPhase === 'failed' || terminalPhase === 'paused' || terminalPhase === 'cancelled') {
+      const summary = councilStore.get(council.id)?.deliberationState?.completionSummary?.trim();
+      const reason = terminalPhase === 'failed'
+        ? (summary || 'Council ended in the failed phase without a usable deliverable')
+        : `Council ended in the '${terminalPhase}' phase`;
+      const err = new Error(reason) as Error & { terminalPhase?: string };
+      err.terminalPhase = terminalPhase;
+      throw err;
     }
 
     // Generate summary and save to disk (normally done by React useEffect, but

@@ -539,30 +539,44 @@ async function main() {
   const executor = new PipelineExecutor({
     invokeAgent: async (invocation, persona) => {
       log(C.cyan, persona.name, `Invoking (${persona.model})...`);
-      // Build allowedTools from allowedServerIds if set
-      const allowedTools = invocation.allowedServerIds
-        ? ['Edit', 'Write', 'Read', 'Bash', 'Glob', 'Grep', ...invocation.allowedServerIds.map(id => `mcp__${id}`)]
-        : undefined;
-      // Use generous timeouts: workers get 30 min, Opus models get 20 min, others get 15 min.
-      // Complex deliberation phases (deciding, planning) with large context can take a long time.
+      // HONOUR the orchestrator's tool scoping (read-only phases, manager tools,
+      // text-deliverable workers — rule 5): previously this rebuilt a full tool
+      // list from the server ids, so every CLI phase got Edit/Write/Bash.
+      const mcpNames = (invocation.allowedServerIds || []).map(id => `mcp__${id}`);
+      const allowedTools = invocation.skipTools
+        ? undefined
+        : invocation.allowedTools
+          ? [...invocation.allowedTools, ...mcpNames]
+          : invocation.allowedServerIds
+            ? ['Edit', 'Write', 'Read', 'Bash', 'Glob', 'Grep', ...mcpNames]
+            : undefined;
+      // Timeouts come from invokeAgentSafe's role defaults (worker 30 min, others
+      // 10 min); the old hand-rolled heuristic is kept only as a fallback.
       const isWorker = persona.preferredDeliberationRole === 'worker';
-      const isOpus = persona.model?.includes('opus');
-      const timeoutMs = isWorker ? 1_800_000 : isOpus ? 1_200_000 : 900_000;
+      const timeoutMs = invocation.timeoutMs ?? (isWorker ? 1_800_000 : 900_000);
       const result = await callLLM({
         provider: persona.provider || 'anthropic-cli',
         systemPrompt: invocation.systemPrompt,
         userMessage: invocation.userMessage,
         model: persona.model,
-        workingDir: platform.getWorkingDir(),
+        // The council's own directory (differs from the pipeline dir when
+        // directoryConstrained === false, and in worktree mode).
+        workingDir: invocation.workingDirectory || platform.getWorkingDir(),
         skipTools: invocation.skipTools,
-        conversationId: invocation.conversationId,
+        // No conversationId: council calls are stateless one-shots (rule 2/10).
+        // A synthetic `council-<uuid>` id made claude run `--resume <fake id>`.
         allowedTools,
         timeoutMs,
         routePhase: roleToPhase(persona.preferredDeliberationRole || 'worker'),
       });
       log(C.cyan, persona.name, `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);
-      return { ...result, sessionId: result.sessionId };
+      return result;
     },
+
+    // The headless runner executes tools only via the claude/codex binaries
+    // (API providers get no tool loop yet — see src/agent-runtime, phase 1), so
+    // don't advertise tools to personas that can't use them (REPORT #5).
+    canUseTools: (p) => p.provider === 'anthropic-cli' || p.provider === 'openai-cli',
 
     onStageStart: (idx) => {
       const stage = pipelineStore.get(pipeline.id)?.stages[idx];

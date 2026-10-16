@@ -25,6 +25,7 @@ import { storage } from './localStorage-shim';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ensureWorkdirGitInit } from './workdir-isolate';
+import { createNodePlatform } from './node-platform';
 import { councilStore } from '../src/council/store';
 import { createCouncilFromSetup } from '../src/council/factory';
 import { DeliberationOrchestrator } from '../src/council/deliberation-orchestrator';
@@ -37,8 +38,8 @@ import { loadCouncilConfig, mergeConfigWithArgs } from './council-config';
 import { writeCouncilArtifacts, buildJsonResult } from './council-artifacts';
 import { exportCouncilSession } from './council-session-export';
 import type { CouncilCliArgs, OutputFormat } from './council-config';
-import type { CallerResult } from './claude-caller';
-import type { Council, Persona, CouncilStepType } from '../src/council/types';
+import type { Council, Persona } from '../src/council/types';
+import type { CouncilStepType } from '../src/pipeline/types';
 
 // ── ANSI colors ──
 const C = {
@@ -200,7 +201,7 @@ async function main() {
   let council: Council;
   let councilType: CouncilStepType = args.type || 'council';
   let task: string;
-  let workingDir = args.workingDir;
+  const workingDir = args.workingDir;
   let outputFormat: OutputFormat = args.outputFormat || 'full';
   let outputDir = args.outputDir;
   let sessionExport = !args.noSessionExport;
@@ -372,7 +373,7 @@ async function main() {
     });
 
     log(C.cyan, persona.name, `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);
-    return { ...result, sessionId: result.sessionId };
+    return result;
   };
 
   const callbacks = {
@@ -393,20 +394,15 @@ async function main() {
 
   try {
     if (councilType === 'coding') {
+      // Reuse the Node platform adapter: correct {exit_code, success} shape (the
+      // old inline adapter returned `exitCode`, so tests always read as failing)
+      // and an async, timeout-bounded spawn.
+      const effectiveWd = workingDir || process.cwd();
+      const nodePlatform = createNodePlatform(effectiveWd);
       const orchestrator = new CodingOrchestrator({
         ...callbacks,
-        runCommand: async (cmd: string, cwd?: string) => {
-          const { execSync } = await import('node:child_process');
-          try {
-            const stdout = execSync(cmd, { cwd: cwd || workingDir, encoding: 'utf-8', timeout: 120_000 });
-            return { stdout, stderr: '', exitCode: 0 };
-          } catch (err: any) {
-            return { stdout: err.stdout || '', stderr: err.stderr || err.message, exitCode: err.status || 1 };
-          }
-        },
-        readFile: async (filePath: string) => {
-          return fs.readFileSync(filePath, 'utf-8');
-        },
+        runCommand: (cmd: string, cwd: string) => nodePlatform.runCommand!(cmd, cwd || effectiveWd),
+        readFile: (filePath: string) => nodePlatform.readFile!(filePath),
       });
       await orchestrator.runCodingWorkflow(council, rawProblem);
     } else {

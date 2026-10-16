@@ -53,32 +53,16 @@ import { detectTestCommand } from '../pipeline/test-detect';
 import { detectBuildCommand } from '../pipeline/build-detect';
 import { detectInstallCommand } from '../pipeline/install-detect';
 
-// Re-use the same agent invocation types from deliberation-orchestrator
-export interface AgentInvocation {
-  personaId: string;
-  systemPrompt: string;
-  userMessage: string;
-  skipTools?: boolean;
-  /** MCP servers this invocation can access (undefined = all servers) */
-  allowedServerIds?: string[];
-}
-
-export interface AgentResponse {
-  content: string;
-  tokensUsed: number;
-  latencyMs: number;
-  structured?: Record<string, unknown>;
-  /** Concrete model/provider actually used (invokers fill these when known). */
-  model?: string;
-  provider?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-}
-
-export type AgentInvoker = (invocation: AgentInvocation, persona: Persona) => Promise<AgentResponse>;
+// ONE shared definition of the agent invocation contract (was a drifting
+// private copy here that lacked allowedTools/workingDirectory/timeoutMs).
+import type { AgentInvocation, AgentResponse, AgentInvoker } from './deliberation-orchestrator';
+export type { AgentInvocation, AgentResponse, AgentInvoker } from './deliberation-orchestrator';
 
 export interface CodingOrchestratorConfig {
   invokeAgent: AgentInvoker;
+  /** Whether this runtime can EXECUTE tools for a persona's provider (see
+   *  OrchestratorConfig.canUseTools). Default true. */
+  canUseTools?: (persona: Persona) => boolean;
   runCommand?: (cmd: string, cwd: string) => Promise<{ stdout: string; stderr: string; exit_code: number; success: boolean }>;
   readFile?: (path: string) => Promise<string | null>;
   onPhaseChange?: (from: DeliberationPhase, to: DeliberationPhase) => void;
@@ -278,6 +262,11 @@ export class CodingOrchestrator {
           this.transitionPhase(council.id, 'testing');
           const testResult = await this.runTests(council, verifyCommand);
 
+          if (testResult.skipped) {
+            console.warn('[CodingOrchestrator] Verification SKIPPED:', testResult.output);
+            warnings.push(`Verification NOT run (${testResult.output}) — "${verifyCommand}" was never executed`);
+            break;
+          }
           if (testResult.passed) {
             console.log('[CodingOrchestrator] Tests passed!');
             break;
@@ -443,7 +432,7 @@ export class CodingOrchestrator {
 
     const advices: string[] = [];
     for (const consultant of consultants) {
-      const systemPrompt = consultant.predisposition?.systemPrompt || consultant.systemPrompt || '';
+      const systemPrompt = consultant.predisposition?.systemPrompt || '';
       const userMessage =
         `An implementation is about to begin. From your perspective, give concise, actionable guidance ` +
         `(risks, better approaches, edge cases, things to verify). Do NOT write code or call tools — advise only.\n\n` +
@@ -651,11 +640,13 @@ export class CodingOrchestrator {
   private async runTests(
     council: Council,
     testCommand: string
-  ): Promise<{ passed: boolean; output: string }> {
+  ): Promise<{ passed: boolean; output: string; skipped?: boolean }> {
     const workingDir = council.deliberation?.workingDirectory;
+    // No way to run the command → the verification is SKIPPED, not passed. The
+    // caller records a warning so the completion summary says so honestly.
     if (!workingDir) {
       console.warn('[CodingOrchestrator] No working directory set — cannot run tests');
-      return { passed: true, output: 'No working directory configured' };
+      return { passed: true, skipped: true, output: 'Verification skipped: no working directory configured' };
     }
 
     console.log(`[CodingOrchestrator] Running tests: ${testCommand} in ${workingDir}`);
@@ -663,7 +654,7 @@ export class CodingOrchestrator {
     try {
       if (!this.config.runCommand) {
         console.warn('[CodingOrchestrator] No runCommand callback — cannot run tests');
-        return { passed: true, output: 'No runCommand configured' };
+        return { passed: true, skipped: true, output: 'Verification skipped: this runtime cannot run commands' };
       }
       const result = await this.config.runCommand(testCommand, workingDir);
 
@@ -1067,7 +1058,14 @@ export class CodingOrchestrator {
     const toolPhases = ['module_implementation', 'debug_fix'];
     const readOnlyToolPhases = ['code_review', 'decomposition'];
 
-    if (toolPhases.includes(context)) {
+    // The runtime must be able to EXECUTE tools for this provider (the headless
+    // CLI runner only runs tools via the claude/codex binaries) — otherwise the
+    // persona would be told it has tools it can't use and narrate fake calls.
+    const runtimeCanExecute = this.config.canUseTools ? this.config.canUseTools(persona) : true;
+
+    if (!runtimeCanExecute) {
+      invocation = { ...invocation, skipTools: true, allowedTools: undefined };
+    } else if (toolPhases.includes(context)) {
       // Workers keep default full tool access (no change needed)
     } else if (readOnlyToolPhases.includes(context)) {
       invocation = { ...invocation, allowedTools: READ_ONLY_TOOLS, skipTools: undefined };
@@ -1099,6 +1097,12 @@ export class CodingOrchestrator {
     } else if (roleAssignment?.toolAccess === 'full') {
       const { skipTools: _, ...rest } = invocation;
       invocation = rest as AgentInvocation;
+    }
+
+    // The runtime gate wins over any per-role "full" override: if this runtime
+    // cannot execute tools for the provider, the persona gets none (final say).
+    if (!runtimeCanExecute) {
+      invocation = { ...invocation, skipTools: true, allowedTools: undefined };
     }
 
     if (roleAssignment?.allowedServerIds) {
@@ -1137,6 +1141,18 @@ export class CodingOrchestrator {
     if (councilDir) {
       invocation = { ...invocation, workingDirectory: councilDir };
     }
+
+    // Role-based default timeouts (the deliberation orchestrator has had these
+    // for a while; the coding path previously set none, so GUI CLI workers were
+    // cut off by the client's own 10-minute default mid-implementation).
+    const DEFAULT_TIMEOUTS: Record<string, number> = {
+      module_implementation: 1_800_000,
+      debug_fix: 1_800_000,
+      decomposition: 600_000,
+      code_review: 600_000,
+      consultation: 600_000,
+    };
+    invocation = { ...invocation, timeoutMs: invocation.timeoutMs ?? DEFAULT_TIMEOUTS[context] ?? 600_000 };
 
     // Retry transient errors (rate limits, overload) with exponential backoff.
     // This covers ALL roles (manager, worker, reviewer) uniformly.

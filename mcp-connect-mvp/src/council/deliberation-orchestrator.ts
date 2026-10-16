@@ -514,7 +514,7 @@ export class DeliberationOrchestrator {
       }
 
       // Phase 4: Execution loop
-      const maxRevisions = council.deliberation?.maxRevisions || 3;
+      const maxRevisions = council.deliberation?.maxRevisions ?? 3;
       let revisionCount = council.deliberationState?.revisionCount || 0;
 
       while (revisionCount < maxRevisions + 1) {
@@ -1451,7 +1451,7 @@ export class DeliberationOrchestrator {
     let text = '';
     try {
       const resp = await this.invokeAgentSafe(
-        { personaId: persona.id, systemPrompt, userMessage, skipTools: true, conversationId: `council-${crypto.randomUUID()}` },
+        { personaId: persona.id, systemPrompt, userMessage, skipTools: true },
         persona, 'subagent'
       );
       text = (resp.content || '').trim();
@@ -1506,7 +1506,6 @@ export class DeliberationOrchestrator {
               systemPrompt,
               userMessage: `TASK:\n${task}`,
               skipTools: true,
-              conversationId: `council-${crypto.randomUUID()}`,
             },
             subPersona,
             'subagent'
@@ -1763,7 +1762,7 @@ export class DeliberationOrchestrator {
       councilStore.setStatus(council.id, 'resolved');
     } else if (review.verdict === 'revise') {
       const revisionCount = council.deliberationState?.revisionCount || 0;
-      const maxRevisions = council.deliberation?.maxRevisions || 3;
+      const maxRevisions = council.deliberation?.maxRevisions ?? 3;
 
       if (revisionCount >= maxRevisions) {
         // Max revisions reached - complete with best effort

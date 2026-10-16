@@ -67,8 +67,9 @@ export interface CallerResult {
   tokensUsed: number;
   latencyMs: number;
   /** Concrete provider/model that answered (passed through from simpleCompletion). */
-  provider?: string;
-  model?: string;
+  /** Required: every caller passes the persona's provider/model (routed `route:*` resolve in llm-router). */
+  provider: string;
+  model: string;
   inputTokens?: number;
   outputTokens?: number;
 }
@@ -277,6 +278,11 @@ function routeToProvider(opts: CallLLMOptions): Promise<CallerResult> {
       availableTools: tools,
       workingDirectory: opts.workingDirectory,
       routePhase: opts.routePhase,
+      // CLI binaries (anthropic-cli) get the real per-call timeout and the
+      // orchestrator's abstract tool scope instead of a hardcoded 10 min + all tools.
+      timeoutMs: opts.timeoutMs,
+      allowedToolNames: opts.skipTools ? undefined : opts.allowedTools,
+      skipTools: opts.skipTools,
     }),
     opts.timeoutMs,
     'LLM call',
