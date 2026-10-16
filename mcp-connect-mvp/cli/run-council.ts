@@ -378,10 +378,9 @@ async function main() {
 
   const callbacks = {
     invokeAgent,
-    // Headless runner executes tools only via the claude/codex binaries. API
-    // providers (deepseek/gemini/*-api) get no tool loop here, so don't advertise
-    // tools to them — otherwise they hallucinate tool results and drift off-task.
-    canUseTools: (p: Persona) => p.provider === 'anthropic-cli' || p.provider === 'openai-cli',
+    // Every provider can execute tools headlessly now (CLI binaries natively;
+    // API/local models via src/agent-runtime). Gemini stays text-only for now.
+    canUseTools: (p: Persona) => p.provider !== 'google',
     onPhaseChange: (from: string, to: string) => log(C.yellow, 'Phase', `${from} → ${to}`),
     onError: (err: Error, ctx: string) => log(C.red, 'Error', `${ctx}: ${err.message}`),
     onAgentThinkingStart: (_persona: Persona) => {},

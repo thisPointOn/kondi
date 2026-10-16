@@ -17,14 +17,8 @@ import type { LedgerPhase } from '../router/types';
  * The orchestrator uses names like 'Read', 'Write', 'Bash' but
  * the actual local tools are 'read_file', 'write_file', 'run_command'.
  */
-const ABSTRACT_TO_LOCAL: Record<string, string[]> = {
-  'Read': ['read_file'],
-  'Write': ['write_file'],
-  'Edit': ['write_file'],   // Edit maps to write_file (overwrite)
-  'Bash': ['run_command'],
-  'Glob': ['list_directory'],
-  'Grep': ['run_command'],   // Grep via run_command (grep/rg)
-};
+// Shared with the Node runtime (src/agent-runtime/local-tool-defs.ts).
+import { ABSTRACT_TO_LOCAL } from '../agent-runtime/local-tool-defs';
 
 /**
  * Filter available tools based on the orchestrator's allowedTools list.
@@ -67,19 +61,20 @@ export interface CallerResult {
   tokensUsed: number;
   latencyMs: number;
   /** Concrete provider/model that answered (passed through from simpleCompletion). */
-  /** Required: every caller passes the persona's provider/model (routed `route:*` resolve in llm-router). */
-  provider: string;
-  model: string;
+  provider?: string;
+  model?: string;
   inputTokens?: number;
   outputTokens?: number;
+  usageReported?: boolean;
 }
 
 /** Options accepted by all callLLM variants */
 export interface CallLLMOptions {
   systemPrompt: string;
   userMessage: string;
-  model?: string;
-  provider?: string;
+  /** Required: every caller passes the persona's provider/model (routed `route:*` resolve in llm-router). */
+  model: string;
+  provider: string;
   skipTools?: boolean;
   temperature?: number;
   /** MCP tools from GUI-connected servers (passed through to API providers) */

@@ -13,6 +13,8 @@ import { getProfile } from '../src/router/profiles';
 import { isRoutedModel, routeProfileName } from '../src/router/profile-options';
 import type { LedgerPhase } from '../src/router/types';
 import type { ModelProvider } from '../src/config/models';
+import { callApiProvider, isApiToolProvider } from './api-tool-caller';
+import type { AgentStreamEvent } from '../src/agent-runtime/types';
 
 interface CallLLMOpts {
   provider: string;
@@ -22,10 +24,17 @@ interface CallLLMOpts {
   workingDir?: string;
   allowedTools?: string[];
   skipTools?: boolean;
+  /** Chat only (session resumption for the CLI binaries). Council calls never set it. */
   conversationId?: string;
   timeoutMs?: number;
   /** Router phase hint for routed (`route:<profile>`) models. */
   routePhase?: LedgerPhase;
+  /** Real cancellation (API tool loop + binaries). */
+  signal?: AbortSignal;
+  /** Live events (text deltas, tool calls) for the CLI status line. */
+  onEvent?: (e: AgentStreamEvent) => void;
+  /** Deny local-tool reads/writes outside workingDir for API providers (default true). */
+  confineToDir?: boolean;
 }
 
 /**
@@ -109,112 +118,7 @@ async function resolveCliRoute(
   return { provider: decision.model.provider, model: decision.model.id };
 }
 
-/**
- * Make a direct HTTP API call to an OpenAI-compatible endpoint.
- */
-async function callOpenAICompatible(
-  baseUrl: string,
-  apiKey: string,
-  model: string,
-  systemPrompt: string,
-  userMessage: string,
-): Promise<CallerResult> {
-  const start = Date.now();
-  const body = {
-    model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userMessage },
-    ],
-    max_tokens: 16384,
-  };
 
-  const resp = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`HTTP ${resp.status}: ${text.substring(0, 500)}`);
-  }
-
-  const data = await resp.json();
-  const content = data.choices?.[0]?.message?.content || '';
-  const usage = data.usage || {};
-
-  return {
-    content,
-    tokensUsed: (usage.prompt_tokens || 0) + (usage.completion_tokens || 0),
-    latencyMs: Date.now() - start,
-    inputTokens: usage.prompt_tokens || 0,
-    outputTokens: usage.completion_tokens || 0,
-  };
-}
-
-/**
- * Make a direct HTTP API call to Anthropic Messages API.
- * System prompt gets cache_control so repeated council calls with the same
- * persona prompt hit the cache instead of re-processing tokens.
- */
-async function callAnthropicAPI(
-  apiKey: string,
-  model: string,
-  systemPrompt: string,
-  userMessage: string,
-): Promise<CallerResult> {
-  const start = Date.now();
-  const body = {
-    model,
-    max_tokens: 16384,
-    // Array format with cache_control enables prompt caching
-    system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
-    messages: [{ role: 'user', content: userMessage }],
-  };
-
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'anthropic-version': '2023-06-01',
-      'anthropic-beta': 'prompt-caching-2024-07-31',
-      'x-api-key': apiKey,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`HTTP ${resp.status}: ${text.substring(0, 500)}`);
-  }
-
-  const data = await resp.json();
-  const content = data.content
-    ?.filter((b: any) => b.type === 'text')
-    .map((b: any) => b.text)
-    .join('\n') || '';
-  const usage = data.usage || {};
-
-  const cacheRead = usage.cache_read_input_tokens || 0;
-  const cacheCreation = usage.cache_creation_input_tokens || 0;
-  if (cacheRead || cacheCreation) {
-    console.log(`[Anthropic API] Cache: ${cacheRead} read, ${cacheCreation} created, ${usage.input_tokens || 0} input`);
-  }
-
-  return {
-    content,
-    tokensUsed: (usage.input_tokens || 0) + (usage.output_tokens || 0),
-    latencyMs: Date.now() - start,
-    cacheRead,
-    cacheCreation,
-    inputTokens: usage.input_tokens || 0,
-    outputTokens: usage.output_tokens || 0,
-  };
-}
 
 /**
  * Make a direct HTTP API call to Google Gemini.
@@ -301,41 +205,32 @@ async function dispatchLLM(opts: CallLLMOpts): Promise<{ provider: string; model
     return wrap(provider, model)(callCodex({ ...opts, model }));
   }
 
-  // API key providers — require env vars
-  const apiKey = getApiKey(provider);
-  if (!apiKey) {
-    throw new Error(
-      `No API key for provider "${provider}". Set the environment variable: ` +
-      `${provider === 'anthropic-api' ? 'ANTHROPIC_API_KEY' : provider === 'openai-api' ? 'OPENAI_API_KEY' : provider === 'deepseek' ? 'DEEPSEEK_API_KEY' : provider === 'xai' ? 'XAI_API_KEY' : provider === 'google' ? 'GOOGLE_API_KEY' : 'API_KEY'}`
-    );
+  // API key providers — a REAL tool loop (src/agent-runtime) with the four
+  // local tools confined to the working dir, scoped by the orchestrator's
+  // allowedTools. Ollama needs no key. (Was a single raw completion with no
+  // tools — TEST-runs REPORT #5.)
+  if (isApiToolProvider(provider)) {
+    const apiKey = provider === 'ollama' ? 'ollama' : getApiKey(provider);
+    if (!apiKey) {
+      throw new Error(
+        `No API key for provider "${provider}". Set the environment variable: ` +
+        `${provider === 'anthropic-api' ? 'ANTHROPIC_API_KEY' : provider === 'openai-api' ? 'OPENAI_API_KEY' : provider === 'deepseek' ? 'DEEPSEEK_API_KEY' : provider === 'xai' ? 'XAI_API_KEY' : provider === 'zai' ? 'ZAI_API_KEY' : provider === 'moonshot' ? 'MOONSHOT_API_KEY' : provider === 'nvidia-router' ? 'NVIDIA_API_KEY' : 'API_KEY'}`
+      );
+    }
+    return wrap(provider, model)(callApiProvider({
+      provider, model, apiKey,
+      systemPrompt: opts.systemPrompt, userMessage: opts.userMessage,
+      workingDir: opts.workingDir, constrained: opts.confineToDir ?? true,
+      allowedTools: opts.allowedTools, skipTools: opts.skipTools,
+      timeoutMs: opts.timeoutMs, signal: opts.signal, onEvent: opts.onEvent,
+    }));
   }
 
-  if (provider === 'anthropic-api') {
-    return wrap(provider, model)(callAnthropicAPI(apiKey, model, opts.systemPrompt, opts.userMessage));
-  }
-  if (provider === 'openai-api') {
-    return wrap(provider, model)(callOpenAICompatible('https://api.openai.com/v1', apiKey, model, opts.systemPrompt, opts.userMessage));
-  }
-  if (provider === 'deepseek') {
-    return wrap(provider, model)(callOpenAICompatible('https://api.deepseek.com/v1', apiKey, model, opts.systemPrompt, opts.userMessage));
-  }
-  if (provider === 'xai') {
-    return wrap(provider, model)(callOpenAICompatible('https://api.x.ai/v1', apiKey, model, opts.systemPrompt, opts.userMessage));
-  }
-  if (provider === 'zai') {
-    return wrap(provider, model)(callOpenAICompatible('https://api.z.ai/api/coding/paas/v4', apiKey, model, opts.systemPrompt, opts.userMessage));
-  }
-  if (provider === 'moonshot') {
-    return wrap(provider, model)(callOpenAICompatible('https://api.moonshot.ai/v1', apiKey, model, opts.systemPrompt, opts.userMessage));
-  }
-  if (provider === 'nvidia-router') {
-    return wrap(provider, model)(callOpenAICompatible(process.env.NVIDIA_ROUTER_URL || 'https://integrate.api.nvidia.com/v1', apiKey, model, opts.systemPrompt, opts.userMessage));
-  }
+  // Gemini (public generativelanguage API) — single completion, no tools yet.
   if (provider === 'google') {
+    const apiKey = getApiKey(provider);
+    if (!apiKey) throw new Error('No API key for provider "google". Set GOOGLE_API_KEY');
     return wrap(provider, model)(callGeminiAPI(apiKey, model, opts.systemPrompt, opts.userMessage));
-  }
-  if (provider === 'ollama') {
-    return wrap(provider, model)(callOpenAICompatible('http://localhost:11434/v1', 'ollama', model, opts.systemPrompt, opts.userMessage));
   }
 
   // Fallback: try Claude CLI

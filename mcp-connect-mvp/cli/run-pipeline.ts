@@ -573,10 +573,10 @@ async function main() {
       return result;
     },
 
-    // The headless runner executes tools only via the claude/codex binaries
-    // (API providers get no tool loop yet — see src/agent-runtime, phase 1), so
-    // don't advertise tools to personas that can't use them (REPORT #5).
-    canUseTools: (p) => p.provider === 'anthropic-cli' || p.provider === 'openai-cli',
+    // Every provider can execute tools headlessly now: CLI binaries natively,
+    // API/local models through src/agent-runtime's loop with Node local tools.
+    // Only Gemini (public API, no adapter yet) is text-only.
+    canUseTools: (p) => p.provider !== 'google',
 
     onStageStart: (idx) => {
       const stage = pipelineStore.get(pipeline.id)?.stages[idx];

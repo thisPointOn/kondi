@@ -158,9 +158,21 @@ export class LocalToolsService {
       });
       return inScope;
     } catch {
-      // If we can't check (path doesn't exist yet for writes), allow if it's clearly within working dir
+      // If we can't check (path doesn't exist yet for writes), allow only if the
+      // NORMALIZED path is within the working dir — `dir/../x` used to pass the
+      // plain prefix test.
       const resolvedPath = this.resolvePath(path, workingDirectory);
-      return resolvedPath.startsWith(dir);
+      const normalize = (p: string) => {
+        const out: string[] = [];
+        for (const seg of p.split('/')) {
+          if (!seg || seg === '.') continue;
+          if (seg === '..') out.pop(); else out.push(seg);
+        }
+        return '/' + out.join('/');
+      };
+      const n = normalize(resolvedPath);
+      const d = normalize(dir);
+      return n === d || n.startsWith(d + '/');
     }
   }
 
