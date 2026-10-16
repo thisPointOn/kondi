@@ -415,6 +415,28 @@ runCouncilStep (codebaseMode: 'worktree')
 
 Why: the change becomes a first-class artifact (branch, base to head, files, diff) that a later script step can merge or open a PR from, and reviewers judge what actually changed. Workers never commit because a sandboxed CLI worker (Codex) cannot write the main repo's `.git` from inside a worktree; the executor, outside the sandbox, does. The step artifact flows downstream as the diff. See SPEC.md §4a-6.
 
+### Chat Front Door (`services/councilRunService.ts`)
+
+The chat can hand a hard task to a council without the user leaving the conversation. The council runs in the background on the normal pipeline runtime; the chat only owns a live card.
+
+```
+ChatArea (button / "/council" / intent / "Second opinion" / convene_council tool)
+  |- escalateFromChat: post card message, one active escalation per chat
+  v
+councilRunService.escalate   (React-free, never throws)
+  |- thread summary (tool bodies stripped, 6k cap) + task + focus
+  |- generateCouncilSetup -> createCouncilFromSetup -> ensurePipelineForCouncil
+  v
+runner (registered by App = usePipeline.runBackground)
+  v
+PipelineExecutor  --callbacks (phase, thinking, stream tail)-->  card updates
+  v
+Message.councilRun patched in place (useChats.handleChatMessagePatch)
+  |- result text lands in the card/message; "Open deliberation" -> COUNCIL_OPEN_EVENT -> council view
+```
+
+Design points: the service is decoupled from React via the registered runner, so the same code serves UI entry points and the model-driven `convene_council` tool. That tool is deliberately CHAT-ONLY (merged in only at the chat's provider call), so council workers cannot spawn councils recursively. Councils take minutes, so tool timeouts are per tool (`getToolTimeoutMs`) and escalation progress pings `chatActivity` to keep the chat's idle watchdog from killing the call. Because the council gets a home pipeline, it is a normal, reopenable deliberation, not a throwaway. Detail: SPEC section 4a-7.
+
 ### Build/Test/Install Detection
 
 ```

@@ -128,6 +128,19 @@ Each chat has its own working directory that scopes `read_file`, `write_file`, `
 
 Click the **X** button next to the directory to clear the per-chat override and fall back to the global working directory.
 
+### Escalating a Chat to a Council
+
+When a question is hard or high-stakes, you can hand it to a council without leaving the chat. The council runs in the background while you keep working; its result comes back into the conversation.
+
+- **Button:** type the task in the input box and click the **⚖** button next to Send (instead of sending it to the model).
+- **Slash command:** `/council <task>`. Asking naturally ("create a council to ...") also runs one in the chat.
+- **Second opinion:** click **⚖ Second opinion** on any assistant answer; an analysis council checks the answer and writes an improved one.
+- **Let the model decide:** the chat model can convene a council itself (the `convene_council` tool) when it judges a task needs one. This only works from chat, never inside a council.
+
+The recent conversation is passed to the council as background context. Only one council can run per chat at a time.
+
+A **council card** appears in the chat showing status (generating, running, done, failed, cancelled), the current phase, which personas are thinking, elapsed time, and a live tail of output. For councils that work in a git worktree it also shows the branch and patch. The final output is written into the card/message when the council finishes. Click **Open deliberation** to jump to the full council view (ledger, personas, outputs); Back returns to Pipelines. The council is saved as a one-step pipeline, so you can find and rerun it later. See SPEC section 4a-7 for details.
+
 ### Chat Management
 
 - **Switch chats**: Click any chat in the sidebar list.
