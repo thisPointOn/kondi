@@ -6,6 +6,7 @@
  * Provider routing is handled entirely by llm-router.ts.
  */
 
+import { anySignal, timeoutSignal, raceSignal } from '../agent-runtime/signals';
 import { simpleCompletion } from '../services/llm-router';
 import { LOCAL_SERVER_ID } from '../services/localTools';
 import { BUILTIN_SERVER_IDS, countTools } from '../utils/filterTools';
@@ -87,25 +88,10 @@ export interface CallLLMOptions {
   workingDirectory?: string;
   /** Router phase hint for routed (`route:<profile>`) models. */
   routePhase?: LedgerPhase;
-}
-
-// ============================================================================
-// Timeout Helper
-// ============================================================================
-
-/**
- * Race a promise against a timeout. If the timeout fires first, the returned
- * promise rejects with a descriptive error. Passing `undefined` or `0` for
- * `ms` disables the timeout and returns the original promise unchanged.
- */
-function withTimeout<T>(promise: Promise<T>, ms: number | undefined, label: string): Promise<T> {
-  if (!ms) return promise;
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms)
-    ),
-  ]);
+  /** Cancellation from the caller (run abort). Composed with `timeoutMs` into
+   *  one signal that is passed to the provider client AND raced here, so the
+   *  call returns promptly even when a buffered transport ignores the signal. */
+  signal?: AbortSignal;
 }
 
 // ============================================================================
@@ -264,7 +250,10 @@ function routeToProvider(opts: CallLLMOptions): Promise<CallerResult> {
     ? undefined
     : applyAllowedToolsFilter(opts.availableTools || new Map(), opts.allowedTools);
 
-  return withTimeout(
+  // One signal = caller's abort ∪ per-call timeout (a TimeoutError reason).
+  // Clients that honour it stop for real; the race covers the ones that don't.
+  const signal = anySignal([opts.signal, opts.timeoutMs ? timeoutSignal(opts.timeoutMs, 'LLM call') : undefined]);
+  return raceSignal(
     simpleCompletion({
       provider: opts.provider,
       model: opts.model,
@@ -278,9 +267,9 @@ function routeToProvider(opts: CallLLMOptions): Promise<CallerResult> {
       timeoutMs: opts.timeoutMs,
       allowedToolNames: opts.skipTools ? undefined : opts.allowedTools,
       skipTools: opts.skipTools,
+      signal,
     }),
-    opts.timeoutMs,
-    'LLM call',
+    signal,
   );
 }
 

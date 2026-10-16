@@ -105,6 +105,24 @@ pub async fn run_claude_command(
     }
 }
 
+/// Cancellation registry for `run_claude_streaming`: cancel_id → sender.
+/// `cancel_claude_streaming(cancel_id)` fires the sender; the running command
+/// kills its child process and returns `success:false` with a cancelled error.
+fn claude_cancels() -> &'static Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>> {
+    static CANCELS: std::sync::OnceLock<Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>> = std::sync::OnceLock::new();
+    CANCELS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Cancel a running `run_claude_streaming` call by its `cancel_id` (kills the process).
+#[tauri::command]
+pub async fn cancel_claude_streaming(cancel_id: String) -> Result<bool, String> {
+    let sender = claude_cancels().lock().map_err(|e| e.to_string())?.remove(&cancel_id);
+    match sender {
+        Some(tx) => { let _ = tx.send(()); println!("[Claude CLI Streaming] cancel requested: {}", cancel_id); Ok(true) }
+        None => Ok(false),
+    }
+}
+
 /// Run Claude Code with streaming output, calling back for each event
 #[tauri::command]
 pub async fn run_claude_streaming(
@@ -112,10 +130,20 @@ pub async fn run_claude_streaming(
     cwd: Option<String>,
     stdin_input: Option<String>,
     timeout_ms: Option<u64>,
+    cancel_id: Option<String>,
 ) -> Result<ClaudeCommandResult, String> {
     use std::process::Stdio;
     use tokio::process::Command;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    // Register the cancel handle (if the caller wants one) before spawning.
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    if let Some(id) = &cancel_id {
+        if let Ok(mut m) = claude_cancels().lock() { m.insert(id.clone(), cancel_tx); }
+    } else {
+        drop(cancel_tx); // never fires; the select arm below stays pending forever
+    }
+    let mut cancelled = false;
 
     let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(300_000)); // 5 min default
     println!("[Claude CLI Streaming] Running: claude {} (timeout: {}s)", args.join(" "), timeout.as_secs());
@@ -174,10 +202,14 @@ pub async fn run_claude_streaming(
     let mut final_result: Option<String> = None;
     let mut stream_errors: Vec<String> = Vec::new();
 
-    // Read stdout line by line (stream-json format) with timeout
+    // Read stdout line by line (stream-json format) with timeout (+ cancel)
     let read_result = tokio::time::timeout(timeout, async {
         loop {
             tokio::select! {
+                _ = &mut cancel_rx => {
+                    cancelled = true;
+                    break;
+                }
                 line = stdout_reader.next_line() => {
                     match line {
                         Ok(Some(text)) => {
@@ -252,6 +284,21 @@ pub async fn run_claude_streaming(
             }
         }
     }).await;
+
+    if let Some(id) = &cancel_id {
+        if let Ok(mut m) = claude_cancels().lock() { m.remove(id); }
+    }
+
+    if cancelled {
+        let _ = child.kill().await;
+        println!("[Claude CLI Streaming] CANCELLED by caller");
+        return Ok(ClaudeCommandResult {
+            success: false,
+            output: final_result.unwrap_or(full_output),
+            error: Some("Claude CLI call cancelled".to_string()),
+            session_id,
+        });
+    }
 
     if read_result.is_err() {
         // Timeout — kill the child process and return error

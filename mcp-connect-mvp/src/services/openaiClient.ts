@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { throwIfAborted } from '../agent-runtime/signals';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 import { LOCAL_SERVER_ID, localToolsService } from './localTools';
@@ -171,11 +172,17 @@ export class OpenAIClient {
   private async streamOnce(
     params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
     onToken: (delta: string) => void,
-  ): Promise<{ content: string | null; tool_calls?: any[] }> {
-    const stream = await this.client!.chat.completions.create({ ...params, stream: true });
+    signal?: AbortSignal,
+  ): Promise<{ content: string | null; tool_calls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number } | null }> {
+    const stream = await this.client!.chat.completions.create(
+      { ...params, stream: true, stream_options: { include_usage: true } },
+      { signal },
+    );
     let content = '';
+    let usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
     const toolCallsAcc: any[] = [];
     for await (const chunk of stream as any) {
+      if (chunk.usage) usage = chunk.usage; // trailing usage chunk (empty choices)
       const delta = chunk.choices?.[0]?.delta;
       if (!delta) continue;
       if (delta.content) { content += delta.content; onToken(delta.content); }
@@ -189,7 +196,7 @@ export class OpenAIClient {
         }
       }
     }
-    return { content: content || null, tool_calls: toolCallsAcc.length ? toolCallsAcc : undefined };
+    return { content: content || null, tool_calls: toolCallsAcc.length ? toolCallsAcc : undefined, usage };
   }
 
   async chat(
@@ -200,6 +207,7 @@ export class OpenAIClient {
     workingDirectory?: string,
     provId?: string,
     onToken?: (delta: string) => void,
+    signal?: AbortSignal,
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     console.log('[OpenAI] chat() called', { model, provId });
 
@@ -262,10 +270,22 @@ export class OpenAIClient {
     let currentMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [...openaiMessages];
     let turnCount = 0;
     let finalContent = '';
+    // Usage summed across tool-loop turns (billedInput = every turn's prompt;
+    // inputTokens = last turn's context). `stream_options.include_usage` makes
+    // the streaming path report it too (final chunk, empty choices).
+    const usageAcc = { lastInput: 0, billedInput: 0, output: 0, turns: 0 };
+    const addUsage = (u: { prompt_tokens?: number; completion_tokens?: number } | null | undefined) => {
+      if (!u) return;
+      usageAcc.lastInput = u.prompt_tokens || 0;
+      usageAcc.billedInput += u.prompt_tokens || 0;
+      usageAcc.output += u.completion_tokens || 0;
+      usageAcc.turns++;
+    };
 
     try {
       while (turnCount < MAX_TOOL_TURNS) {
         turnCount++;
+        throwIfAborted(signal);
         const createParams = {
           model: model || 'gpt-4o',
           messages: currentMessages,
@@ -273,9 +293,16 @@ export class OpenAIClient {
           tool_choice: (turnCount === 1 && tools.length > 0 ? 'auto' : undefined) as any,
         };
 
-        const response = onToken
-          ? await this.streamOnce(createParams, onToken)
-          : (await this.client!.chat.completions.create(createParams)).choices[0].message;
+        let response: { content: string | null; tool_calls?: any[] };
+        if (onToken) {
+          const streamed = await this.streamOnce(createParams, onToken, signal);
+          addUsage(streamed.usage);
+          response = streamed;
+        } else {
+          const completion = await this.client!.chat.completions.create(createParams, { signal });
+          addUsage(completion.usage);
+          response = completion.choices[0].message;
+        }
 
         if (!response.tool_calls || response.tool_calls.length === 0) {
           finalContent = typeof response.content === 'string'
@@ -381,6 +408,12 @@ export class OpenAIClient {
         role: 'assistant',
         content: finalContent || '[No content returned]',
         timestamp: new Date(),
+        usage: usageAcc.turns > 0 ? {
+          inputTokens: usageAcc.lastInput,
+          outputTokens: usageAcc.output,
+          billedInputTokens: usageAcc.billedInput,
+          apiTurns: usageAcc.turns,
+        } : undefined,
       },
       toolCalls,
     };

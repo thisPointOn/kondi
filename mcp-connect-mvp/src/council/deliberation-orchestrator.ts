@@ -78,6 +78,7 @@ import {
   MAX_QUESTIONS_PER_PHASE, BUDGET_EXHAUSTED_ANSWER,
 } from './ask-back';
 import type { WorkerQuestionHandler } from './ask-back';
+import { anySignal, timeoutSignal, raceSignal, throwIfAborted, isAbortError, isTimeoutError, AbortError } from '../agent-runtime/signals';
 
 import {
   buildManagerFramingPrompt,
@@ -116,6 +117,9 @@ export interface AgentInvocation {
   workingDirectory?: string;
   /** Timeout in ms — set by invokeAgentSafe based on role/context defaults */
   timeoutMs?: number;
+  /** Cancellation: run abort ∪ this call's timeout (set by invokeAgentSafe).
+   *  Invokers pass it to the client; a TimeoutError reason means the timeout. */
+  signal?: AbortSignal;
 }
 
 export interface AgentResponse {
@@ -165,6 +169,11 @@ export interface OrchestratorConfig {
    *  in `waiting_approval` while this is pending. */
   onWorkerQuestion?: WorkerQuestionHandler;
   askBack?: { maxQuestionsPerPhase?: number };
+  /** Run-level cancellation (the pipeline executor's AbortController). Checked
+   *  at every phase boundary and composed into every agent call; an abort ends
+   *  the council in the `cancelled` phase with a `cancellation` entry (no
+   *  `error` entry, no `failed`). */
+  signal?: AbortSignal;
   /** Whether this runtime can actually EXECUTE tools for a persona's provider.
    *  Default true (app, where API clients run tool loops). The headless CLI
    *  runner returns true only for the claude/codex binaries so API-provider
@@ -193,23 +202,24 @@ const PHASE_TRANSITIONS: Record<DeliberationPhase, {
   validNext: DeliberationPhase[];
   terminal: boolean;
 }> = {
-  created: { validNext: ['problem_framing', 'executing'], terminal: false },
-  problem_framing: { validNext: ['round_independent', 'deciding'], terminal: false },
-  round_independent: { validNext: ['round_waiting_for_manager'], terminal: false },
-  round_interactive: { validNext: ['round_waiting_for_manager'], terminal: false },
-  round_waiting_for_manager: { validNext: ['round_interactive', 'deciding', 'planning'], terminal: false },
-  planning: { validNext: ['directing'], terminal: false },
-  deciding: { validNext: ['planning', 'directing', 'completed'], terminal: false },
-  directing: { validNext: ['executing'], terminal: false },
-  executing: { validNext: ['reviewing', 'completed', 'failed'], terminal: false },
-  reviewing: { validNext: ['completed', 'revising', 'round_interactive', 'failed'], terminal: false },
-  revising: { validNext: ['reviewing', 'completed', 'failed'], terminal: false },
-  decomposing: { validNext: [], terminal: false },
-  implementing: { validNext: [], terminal: false },
-  code_reviewing: { validNext: [], terminal: false },
-  testing: { validNext: [], terminal: false },
-  debugging: { validNext: [], terminal: false },
-  paused: { validNext: ['created', 'problem_framing', 'round_independent', 'round_interactive', 'round_waiting_for_manager', 'planning', 'deciding', 'directing', 'executing', 'reviewing', 'revising', 'decomposing', 'implementing', 'code_reviewing', 'testing', 'debugging'], terminal: false },
+  // 'cancelled' is reachable from EVERY non-terminal phase (user abort).
+  created: { validNext: ['problem_framing', 'executing', 'failed', 'cancelled'], terminal: false },
+  problem_framing: { validNext: ['round_independent', 'deciding', 'failed', 'cancelled'], terminal: false },
+  round_independent: { validNext: ['round_waiting_for_manager', 'failed', 'cancelled'], terminal: false },
+  round_interactive: { validNext: ['round_waiting_for_manager', 'failed', 'cancelled'], terminal: false },
+  round_waiting_for_manager: { validNext: ['round_interactive', 'deciding', 'planning', 'failed', 'cancelled'], terminal: false },
+  planning: { validNext: ['directing', 'failed', 'cancelled'], terminal: false },
+  deciding: { validNext: ['planning', 'directing', 'completed', 'failed', 'cancelled'], terminal: false },
+  directing: { validNext: ['executing', 'failed', 'cancelled'], terminal: false },
+  executing: { validNext: ['reviewing', 'completed', 'failed', 'cancelled'], terminal: false },
+  reviewing: { validNext: ['completed', 'revising', 'round_interactive', 'failed', 'cancelled'], terminal: false },
+  revising: { validNext: ['reviewing', 'completed', 'failed', 'cancelled'], terminal: false },
+  decomposing: { validNext: ['failed', 'cancelled'], terminal: false },
+  implementing: { validNext: ['failed', 'cancelled'], terminal: false },
+  code_reviewing: { validNext: ['failed', 'cancelled'], terminal: false },
+  testing: { validNext: ['failed', 'cancelled'], terminal: false },
+  debugging: { validNext: ['failed', 'cancelled'], terminal: false },
+  paused: { validNext: ['created', 'problem_framing', 'round_independent', 'round_interactive', 'round_waiting_for_manager', 'planning', 'deciding', 'directing', 'executing', 'reviewing', 'revising', 'decomposing', 'implementing', 'code_reviewing', 'testing', 'debugging', 'failed', 'cancelled'], terminal: false },
   completed: { validNext: [], terminal: true },
   cancelled: { validNext: [], terminal: true },
   failed: { validNext: [], terminal: true },
@@ -380,7 +390,13 @@ export class DeliberationOrchestrator {
     // Special path: 0 managers → direct execution (worker-only council)
     if (managerAssignments.length === 0) {
       console.log('[Orchestrator] No manager — running direct execution path');
-      await this.runDirectExecution(council, rawProblem);
+      try {
+        await this.runDirectExecution(council, rawProblem);
+      } catch (error) {
+        if (this.isUserAbort(error)) this.markCancelled(council.id);
+        else this.markFailed(council.id, error);
+        throw error;
+      }
       return;
     }
 
@@ -393,6 +409,54 @@ export class DeliberationOrchestrator {
     // round/revision counts already cap the depth. (The only direct-execution
     // path remaining is the structural manager-less case handled above.)
 
+    try {
+      await this.runPhases(council, rawProblem, deliberationStart);
+    } catch (error) {
+      // A user abort ends the council HONESTLY as `cancelled` (not failed): a
+      // `cancellation` entry, no `error` entry. Timeouts are not cancels.
+      if (this.isUserAbort(error)) this.markCancelled(council.id);
+      else this.markFailed(council.id, error);
+      throw error;
+    }
+  }
+
+  /** Error entry + `failed` phase for an error that escaped the phase loops
+   *  (e.g. during problem framing); no-op when the council already ended. */
+  private markFailed(councilId: string, error: unknown): void {
+    const council = councilStore.get(councilId);
+    const phase = council?.deliberationState?.currentPhase;
+    if (!council || !phase || PHASE_TRANSITIONS[phase]?.terminal) return;
+    try {
+      const author = getPersonaByRole(council, 'manager')[0] || council.personas[0];
+      if (author) {
+        this.createEntry(councilId, author.preferredDeliberationRole || 'manager', author.id, 'error', phase,
+          `Deliberation error during ${phase}: ${(error as Error)?.message || String(error)}`, 0, 0);
+      }
+    } catch { /* best effort */ }
+    this.transitionPhase(councilId, 'failed');
+  }
+
+  /** True for a run-level abort (not a per-call timeout). */
+  private isUserAbort(error: unknown): boolean {
+    return (isAbortError(error) && !isTimeoutError(error)) || !!this.config.signal?.aborted;
+  }
+
+  /** Cancellation entry + `cancelled` phase (idempotent). */
+  private markCancelled(councilId: string): void {
+    const council = councilStore.get(councilId);
+    const phase = council?.deliberationState?.currentPhase;
+    if (!council || !phase || PHASE_TRANSITIONS[phase]?.terminal) return;
+    const author = getPersonaByRole(council, 'manager')[0] || council.personas[0];
+    if (author) {
+      this.createEntry(councilId, author.preferredDeliberationRole || 'manager', author.id, 'cancellation', phase,
+        'Deliberation cancelled by user', 0, 0);
+    }
+    this.transitionPhase(councilId, 'cancelled');
+    councilStore.setStatus(councilId, 'resolved');
+  }
+
+  private async runPhases(council: Council, rawProblem: string, deliberationStart: number): Promise<void> {
+    throwIfAborted(this.config.signal);
     // Phase 1: Frame the problem
     const t0 = Date.now();
     await this.frameProblem(council, rawProblem);
@@ -420,6 +484,7 @@ export class DeliberationOrchestrator {
     const maxLoopIterations = maxRounds * 3 + 10; // Safety limit
 
     while (loopGuard++ < maxLoopIterations) {
+      throwIfAborted(this.config.signal);
       council = councilStore.get(councilId)!;
       const phase = council.deliberationState?.currentPhase;
 
@@ -465,6 +530,7 @@ export class DeliberationOrchestrator {
           break;
         }
       } catch (error) {
+        if (this.isUserAbort(error)) throw error;
         const errMsg = (error as Error).message || String(error);
         const isRateLimit = /\b(429|rate.limit|too many requests)\b/i.test(errMsg);
 
@@ -568,6 +634,7 @@ export class DeliberationOrchestrator {
       let revisionCount = council.deliberationState?.revisionCount || 0;
 
       while (revisionCount < maxRevisions + 1) {
+        throwIfAborted(this.config.signal);
         council = councilStore.get(councilId)!;
         phase = council.deliberationState?.currentPhase;
 
@@ -625,6 +692,7 @@ export class DeliberationOrchestrator {
     break;
 
     } catch (error) {
+      if (this.isUserAbort(error)) throw error; // handled by runFullDeliberation (cancelled, not failed)
       const errMsg = (error as Error).message || String(error);
       const isRateLimit = /\b(429|rate.limit|too many requests)\b/i.test(errMsg);
 
@@ -864,6 +932,7 @@ export class DeliberationOrchestrator {
           this.runConsultantWithRetry(council, consultant, () => runOne(consultant))
         )
       );
+      for (const r of results) if (r.status === 'rejected' && this.isUserAbort(r.reason)) throw r.reason;
       for (const result of results) {
         if (result.status === 'fulfilled' && result.value) {
           entries.push(result.value);
@@ -1004,6 +1073,7 @@ export class DeliberationOrchestrator {
           )
         )
       );
+      for (const r of results) if (r.status === 'rejected' && this.isUserAbort(r.reason)) throw r.reason;
       for (const result of results) {
         if (result.status === 'fulfilled' && result.value) {
           entries.push(result.value);
@@ -1918,6 +1988,7 @@ export class DeliberationOrchestrator {
     };
 
     const results = await Promise.allSettled(consultants.map(c => reviewOne(c)));
+    for (const r of results) if (r.status === 'rejected' && this.isUserAbort(r.reason)) throw r.reason;
 
     const reviews: string[] = [];
     for (const result of results) {
@@ -3050,10 +3121,18 @@ export class DeliberationOrchestrator {
     );
 
     for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
+      // Real cancellation: run abort ∪ this attempt's timeout, passed to the
+      // invoker AND raced here (so a transport that ignores the signal still
+      // returns control; no orphan retry runs concurrently with a live call).
+      throwIfAborted(this.config.signal);
+      const callSignal = anySignal([
+        this.config.signal,
+        invocation.timeoutMs ? timeoutSignal(invocation.timeoutMs, `${persona.name} (${context})`) : undefined,
+      ]);
       try {
         const startedAt = Date.now();
         this.config.onAgentThinkingStart?.(persona, startedAt, invocation.userMessage);
-        const response = await this.config.invokeAgent(invocation, persona);
+        const response = await raceSignal(this.config.invokeAgent({ ...invocation, signal: callSignal }, persona), callSignal);
         this.config.onAgentThinkingEnd?.(persona);
         const callDuration = ((Date.now() - startedAt) / 1000).toFixed(1);
         console.log(`[Orchestrator:Call] ${persona.name} (${context}) completed in ${callDuration}s — ${response.tokensUsed} tokens`);
@@ -3074,6 +3153,12 @@ export class DeliberationOrchestrator {
       } catch (error) {
         this.config.onAgentThinkingEnd?.(persona);
 
+        // Abort FIRST: a user cancel is never retried, whatever the message says
+        // (an aborted fetch often surfaces as "terminated", which looks transient).
+        if (this.isUserAbort(error)) {
+          throw isAbortError(error) ? error : new AbortError(this.config.signal?.reason ?? 'Aborted');
+        }
+
         const errMsg = error instanceof Error ? error.message : String(error);
         // Cause chains (Node fetch wraps the real network error in error.cause).
         const causeMsg = (error as any)?.cause?.message || (error as any)?.cause?.code || '';
@@ -3083,7 +3168,7 @@ export class DeliberationOrchestrator {
         const isTransient =
           /\b(429|500|502|503|504|529)\b/.test(full) ||
           /rate.?limit|overloaded|too many requests|fetch failed|networkerror|network error|socket hang up|connection (reset|refused|closed|error)|econnreset|etimedout|econnrefused|enotfound|eai_again|epipe|und_err|terminated/i.test(full);
-        const isTimeout = /\btimed?\s*out\b/i.test(full);
+        const isTimeout = isTimeoutError(error) || callSignal.aborted || /\btimed?\s*out\b/i.test(full);
 
         // Timeout: retry once, then fail
         if (isTimeout && attempt === 0) {

@@ -61,6 +61,7 @@ import { parseWorkerSignals, signalsForLedger } from './worker-signals';
 import { resolveWorkerQuestion, buildWorkerQuestionAnswerPrompt, MAX_QUESTIONS_PER_PHASE, BUDGET_EXHAUSTED_ANSWER } from './ask-back';
 import type { WorkerQuestionHandler } from './ask-back';
 import type { WorkOrderQA } from './work-order';
+import { anySignal, timeoutSignal, raceSignal, throwIfAborted, isAbortError, isTimeoutError, AbortError } from '../agent-runtime/signals';
 
 export interface CodingOrchestratorConfig {
   invokeAgent: AgentInvoker;
@@ -76,6 +77,8 @@ export interface CodingOrchestratorConfig {
   /** Ask-back human hook (see OrchestratorConfig.onWorkerQuestion). */
   onWorkerQuestion?: WorkerQuestionHandler;
   askBack?: { maxQuestionsPerPhase?: number };
+  /** Run-level cancellation (see OrchestratorConfig.signal). */
+  signal?: AbortSignal;
   onPhaseChange?: (from: DeliberationPhase, to: DeliberationPhase) => void;
   onEntryAdded?: (entry: LedgerEntry) => void;
   onError?: (error: Error, context: string) => void;
@@ -96,10 +99,10 @@ const CODING_PHASE_TRANSITIONS: Record<string, {
 }> = {
   created:        { validNext: ['decomposing'], terminal: false },
   decomposing:    { validNext: ['implementing'], terminal: false },
-  implementing:   { validNext: ['code_reviewing', 'completed', 'failed'], terminal: false },
-  code_reviewing: { validNext: ['implementing', 'testing', 'completed', 'failed'], terminal: false },
-  testing:        { validNext: ['completed', 'debugging', 'failed'], terminal: false },
-  debugging:      { validNext: ['testing', 'failed'], terminal: false },
+  implementing:   { validNext: ['code_reviewing', 'completed', 'failed', 'cancelled'], terminal: false },
+  code_reviewing: { validNext: ['implementing', 'testing', 'completed', 'failed', 'cancelled'], terminal: false },
+  testing:        { validNext: ['completed', 'debugging', 'failed', 'cancelled'], terminal: false },
+  debugging:      { validNext: ['testing', 'failed', 'cancelled'], terminal: false },
   completed:      { validNext: [], terminal: true },
   failed:         { validNext: [], terminal: true },
   cancelled:      { validNext: [], terminal: true },
@@ -164,6 +167,7 @@ export class CodingOrchestrator {
       await this.ensureWorkspaceDir(council);
 
       // Phase 1: Decompose
+      throwIfAborted(this.config.signal);
       this.transitionPhase(council.id, 'decomposing');
       try {
         await this.decomposeSpec(council, enrichedSpec);
@@ -217,6 +221,7 @@ export class CodingOrchestrator {
       // Phase 2+3: Implement → Review loop
       let reviewCycleCount = 0;
       while (true) {
+        throwIfAborted(this.config.signal);
         council = councilStore.get(council.id)!;
 
         this.transitionPhase(council.id, 'implementing');
@@ -235,6 +240,7 @@ export class CodingOrchestrator {
         try {
           verdict = await this.reviewCode(council, spec);
         } catch (reviewError) {
+          if (this.isUserAbort(reviewError)) throw reviewError;
           const errMsg = (reviewError as Error).message || String(reviewError);
           console.error('[CodingOrchestrator] Review failed, skipping:', errMsg);
           warnings.push(`Code review skipped (${errMsg})`);
@@ -278,6 +284,7 @@ export class CodingOrchestrator {
       if (verifyCommand) {
         let debugCycleCount = 0;
         while (true) {
+          throwIfAborted(this.config.signal);
           this.transitionPhase(council.id, 'testing');
           const testResult = await this.runTests(council, verifyCommand);
 
@@ -304,6 +311,7 @@ export class CodingOrchestrator {
           try {
             await this.debugFix(council, testResult.output, spec);
           } catch (debugError) {
+            if (this.isUserAbort(debugError)) throw debugError;
             const errMsg = (debugError as Error).message || String(debugError);
             console.error('[CodingOrchestrator] Debug fix failed, proceeding with current code:', errMsg);
             warnings.push(`Debug fix failed (${errMsg}) — proceeding with existing code`);
@@ -329,11 +337,23 @@ export class CodingOrchestrator {
       await this.mergeAndComplete(council, spec, warnings);
 
     } catch (error) {
-      const errMsg = (error as Error).message || String(error);
-      const isRateLimit = /\b(429|rate.limit|too many requests)\b/i.test(errMsg);
-
       council = councilStore.get(council.id)!;
       const currentPhase = council.deliberationState?.currentPhase;
+
+      // User abort → `cancelled` with a cancellation entry (no error, no failed).
+      if (this.isUserAbort(error)) {
+        if (currentPhase && !CODING_PHASE_TRANSITIONS[currentPhase]?.terminal) {
+          try {
+            this.createEntry(council.id, 'manager', this.getManager(council).id, 'cancellation', currentPhase, 'Coding workflow cancelled by user', 0, 0);
+          } catch { /* best effort */ }
+          this.transitionPhase(council.id, 'cancelled');
+          councilStore.setStatus(council.id, 'resolved');
+        }
+        throw error;
+      }
+
+      const errMsg = (error as Error).message || String(error);
+      const isRateLimit = /\b(429|rate.limit|too many requests)\b/i.test(errMsg);
 
       // Rate limit: wait and retry from the current phase instead of failing
       if (isRateLimit && this.phaseRetryCount < 3) {
@@ -597,6 +617,7 @@ export class CodingOrchestrator {
 
         moduleOutputs[module.name] = response.content;
       } catch (error) {
+        if (this.isUserAbort(error)) throw error;
         failureCount++;
         console.error(`[CodingOrchestrator] Worker failed on module ${module.name}:`, error);
       }
@@ -898,6 +919,11 @@ export class CodingOrchestrator {
     return response;
   }
 
+  /** True for a run-level abort (not a per-call timeout). */
+  private isUserAbort(error: unknown): boolean {
+    return (isAbortError(error) && !isTimeoutError(error)) || !!this.config.signal?.aborted;
+  }
+
   private async mergeAndComplete(council: Council, spec: string, warnings: string[] = []): Promise<void> {
     const state = council.deliberationState;
     const moduleOutputs = state?.moduleOutputs || {};
@@ -1145,7 +1171,7 @@ export class CodingOrchestrator {
 
     // Validate transition
     const rule = CODING_PHASE_TRANSITIONS[from];
-    if (rule && !rule.validNext.includes(to) && to !== 'failed') {
+    if (rule && !rule.validNext.includes(to) && to !== 'failed' && to !== 'cancelled') {
       console.warn(`[CodingOrchestrator] Unexpected phase transition: ${from} -> ${to}`);
     }
 
@@ -1272,9 +1298,14 @@ export class CodingOrchestrator {
     const BASE_DELAY_MS = 15_000; // 15 seconds
 
     for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
+      throwIfAborted(this.config.signal);
+      const callSignal = anySignal([
+        this.config.signal,
+        invocation.timeoutMs ? timeoutSignal(invocation.timeoutMs, `${persona.name} (${context})`) : undefined,
+      ]);
       try {
         this.config.onAgentThinkingStart?.(persona, Date.now());
-        const response = await this.config.invokeAgent(invocation, persona);
+        const response = await raceSignal(this.config.invokeAgent({ ...invocation, signal: callSignal }, persona), callSignal);
         this.config.onAgentThinkingEnd?.(persona);
         // Per-call metadata for the ledger (self-improvement loop) — mirrors
         // DeliberationOrchestrator.invokeAgentSafe.
@@ -1293,8 +1324,21 @@ export class CodingOrchestrator {
       } catch (error) {
         this.config.onAgentThinkingEnd?.(persona);
 
+        // Abort FIRST — a user cancel is never retried.
+        if (this.isUserAbort(error)) {
+          throw isAbortError(error) ? error : new AbortError(this.config.signal?.reason ?? 'Aborted');
+        }
+
         const errMsg = error instanceof Error ? error.message : String(error);
         const isTransient = /\b(429|529|rate.limit|overloaded|too many requests)\b/i.test(errMsg);
+        const isTimeout = isTimeoutError(error) || callSignal.aborted || /\btimed?\s*out\b/i.test(errMsg);
+
+        // Timeout: retry once (the timeout itself was the wait), then fail.
+        if (isTimeout && attempt === 0) {
+          console.warn(`[CodingOrchestrator] ${persona.name} (${context}) timed out after ${Math.round((invocation.timeoutMs || 0) / 1000)}s, retrying once...`);
+          this.config.onAgentTimeout?.(persona, context, invocation.timeoutMs || 0);
+          continue;
+        }
 
         if (isTransient && attempt < MAX_TRANSIENT_RETRIES) {
           const delayMs = BASE_DELAY_MS * Math.pow(2, attempt);

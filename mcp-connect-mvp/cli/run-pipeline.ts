@@ -584,6 +584,7 @@ async function main() {
         // A synthetic `council-<uuid>` id made claude run `--resume <fake id>`.
         allowedTools,
         timeoutMs,
+        signal: invocation.signal,
         routePhase: roleToPhase(persona.preferredDeliberationRole || 'worker'),
       });
       log(C.cyan, persona.name, `Done (${result.tokensUsed} tokens, ${(result.latencyMs / 1000).toFixed(1)}s)`);
@@ -722,6 +723,19 @@ async function main() {
       // Intentionally quiet
     },
   }, platform);
+
+  // Ctrl-C: abort the run (councils end `cancelled`, no scorecard); a second
+  // Ctrl-C exits immediately.
+  let sigints = 0;
+  process.on('SIGINT', () => {
+    sigints++;
+    if (sigints === 1) {
+      log(C.yellow, 'Pipeline', 'Aborting run (Ctrl-C again to force exit)…');
+      executor.abort();
+    } else {
+      process.exit(130);
+    }
+  });
 
   // Run!
   log(C.bold, 'Pipeline', `Starting execution: ${pipeline.name}`);

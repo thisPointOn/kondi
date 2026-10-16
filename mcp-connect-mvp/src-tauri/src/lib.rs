@@ -64,6 +64,7 @@ pub fn run() {
             // Claude Code CLI Wrapper
             commands::run_claude_command,
             commands::run_claude_streaming,
+            commands::cancel_claude_streaming,
             commands::run_claude_login,
             // Codex CLI Wrapper (OpenAI)
             commands::run_codex_command,

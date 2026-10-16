@@ -46,6 +46,7 @@ import { saveStepInput, getStepInput, formatStepInputMarkdown } from '../improve
 import { buildRunScorecard, summarizeCouncilUsage, scorecardJsonlLine } from '../improve/run-metrics';
 import { improveStore } from '../improve/store';
 import { newRunId } from '../improve/hash';
+import { AbortError, raceSignal } from '../agent-runtime/signals';
 import { buildLessonBundle } from '../improve/lessons';
 import { runImprovementCycle, liveSettings } from '../improve/cycle';
 import type { RunScorecard, ImproveEvent } from '../improve/types';
@@ -220,6 +221,9 @@ export class PipelineExecutor {
   private callbacks: PipelineExecutorCallbacks;
   private platform: PlatformAdapter;
   private aborted = false;
+  /** Run-level cancellation: aborted by `abort()`; its signal reaches every
+   *  orchestrator call and pending human prompt (gates/questions). */
+  private runAbort: AbortController | null = null;
   private runningPipelineId: string | null = null;
   /** Set by condition steps to skip the next stage */
   private skipNextStage = false;
@@ -264,6 +268,7 @@ export class PipelineExecutor {
     }
 
     this.aborted = false;
+    this.runAbort = new AbortController();
     this.skipNextStage = false;
     this.stopPipeline = false;
     this.loopRequest = null;
@@ -505,6 +510,7 @@ export class PipelineExecutor {
    */
   abort(): void {
     this.aborted = true;
+    this.runAbort?.abort(new AbortError('Aborted by user'));
     if (this.runningPipelineId) {
       const pipeline = pipelineStore.get(this.runningPipelineId);
       if (pipeline) {
@@ -907,7 +913,7 @@ export class PipelineExecutor {
           pipelineStore.setStepStatus(pipelineId, step.id, 'waiting_approval');
           this.callbacks.onLog?.(`${step.name}: ${ctx.personaName} asks — ${ctx.question.slice(0, 200)}`);
           try {
-            return await this.callbacks.onCouncilQuestion!(step.id, pending);
+            return await raceSignal(this.callbacks.onCouncilQuestion!(step.id, pending), this.runAbort?.signal);
           } finally {
             pipelineStore.setStepPendingInput(pipelineId, step.id, undefined);
             // Only un-park if nothing else moved the step on (abort fails it).
@@ -925,6 +931,7 @@ export class PipelineExecutor {
       runCommand: this.platform.runCommand,
       readFile: this.platform.readFile,
       onWorkerQuestion,
+      signal: this.runAbort?.signal,
       onPhaseChange: (from: any, to: any) =>
         console.log(`[Pipeline:Council] Phase: ${from} -> ${to}`),
       onError: (err: Error, ctx: string) =>
@@ -1259,7 +1266,7 @@ export class PipelineExecutor {
 
     let approved: boolean;
     try {
-      approved = await this.callbacks.onGateWaiting(step.id, config.approvalPrompt);
+      approved = await raceSignal(this.callbacks.onGateWaiting(step.id, config.approvalPrompt), this.runAbort?.signal);
     } finally {
       pipelineStore.setStepPendingInput(pipelineId, step.id, undefined);
     }

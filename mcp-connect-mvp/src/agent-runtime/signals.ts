@@ -70,6 +70,31 @@ export function throwIfAborted(signal?: AbortSignal | null): void {
   throw new AbortError(r);
 }
 
+/**
+ * Settle as soon as EITHER the promise settles or the signal aborts (rejecting
+ * with the signal's reason). Use around callers that may ignore the signal
+ * (buffered transports): control returns to the orchestrator immediately; the
+ * underlying request finishes on its own in the background.
+ */
+export function raceSignal<T>(promise: Promise<T>, signal?: AbortSignal | null): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    promise.catch(() => { /* the losing promise's rejection is not an unhandled error */ });
+    return Promise.reject(signal.reason instanceof Error ? signal.reason : new AbortError(signal.reason));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      promise.catch(() => { /* see above */ });
+      reject(signal.reason instanceof Error ? signal.reason : new AbortError(signal.reason));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+      (e) => { signal.removeEventListener('abort', onAbort); reject(e); },
+    );
+  });
+}
+
 /** Run `fn` with a signal that is `parent ∪ timeout(ms)`; rethrows the real reason on abort. */
 export async function withSignal<T>(
   parent: AbortSignal | undefined,

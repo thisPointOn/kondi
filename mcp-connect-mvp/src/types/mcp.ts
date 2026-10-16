@@ -45,8 +45,13 @@ export interface MessageAttachment {
 }
 
 export interface MessageUsage {
+  /** Input tokens of the LAST API turn (the final context size). */
   inputTokens: number;
+  /** Output tokens summed across all tool-loop turns. */
   outputTokens: number;
+  /** Input tokens SUMMED across all turns (incl. cache read/write) — what was
+   *  actually billed. Prefer this over inputTokens for cost accounting. */
+  billedInputTokens?: number;
   cacheRead?: number;
   cacheCreation?: number;
   /** Estimated payload size in chars (JSON-serialized request body) */

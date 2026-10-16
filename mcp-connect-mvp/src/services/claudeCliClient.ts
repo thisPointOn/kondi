@@ -135,6 +135,8 @@ export async function claudeCliChat(
     allowedToolNames?: string[];
     /** No tools at all (text-only persona). */
     skipTools?: boolean;
+    /** Cancellation: kills the claude process via `cancel_claude_streaming`. */
+    signal?: AbortSignal;
   },
 ): Promise<ChatResult> {
   const existingSessionId = chatId ? sessionMap.get(chatId) : undefined;
@@ -241,12 +243,29 @@ export async function claudeCliChat(
 
   const startTime = Date.now();
 
-  const result = await invoke<ClaudeCommandResult>('run_claude_streaming', {
-    args,
-    cwd: workingDirectory || undefined,
-    stdinInput,
-    timeoutMs: opts?.timeoutMs ?? 600_000,
-  });
+  // Cancellation: register a cancel id with the backend; aborting the signal
+  // kills the child process (the command then returns success:false).
+  const cancelId = opts?.signal ? crypto.randomUUID() : undefined;
+  const onAbort = () => { void invoke('cancel_claude_streaming', { cancelId }).catch(() => {}); };
+  if (opts?.signal) {
+    if (opts.signal.aborted) throw (opts.signal.reason instanceof Error ? opts.signal.reason : new Error('Aborted'));
+    opts.signal.addEventListener('abort', onAbort, { once: true });
+  }
+  let result: ClaudeCommandResult;
+  try {
+    result = await invoke<ClaudeCommandResult>('run_claude_streaming', {
+      args,
+      cwd: workingDirectory || undefined,
+      stdinInput,
+      timeoutMs: opts?.timeoutMs ?? 600_000,
+      cancelId,
+    });
+  } finally {
+    opts?.signal?.removeEventListener('abort', onAbort);
+  }
+  if (opts?.signal?.aborted) {
+    throw (opts.signal.reason instanceof Error ? opts.signal.reason : new Error('Claude CLI call aborted'));
+  }
 
   const latencyMs = Date.now() - startTime;
   console.log(`[ClaudeCliClient] Completed in ${latencyMs}ms, success=${result.success}, sessionId=${result.session_id}`);

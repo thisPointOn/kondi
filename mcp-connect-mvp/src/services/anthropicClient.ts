@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { throwIfAborted } from '../agent-runtime/signals';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
 import { LOCAL_SERVER_ID, localToolsService } from './localTools';
@@ -167,6 +168,7 @@ class AnthropicClient {
     additionalSystemPrompt?: string,
     workingDirectory?: string,
     provId?: string,
+    signal?: AbortSignal,
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     const authMethod = this.getAuthMethod();
     console.log('[Anthropic] chat() called', { authMethod, model, provId });
@@ -259,10 +261,14 @@ class AnthropicClient {
     let turnCount = 0;
     let lastUsage: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
     let totalOutputTokens = 0;
+    let totalBilledInput = 0; // input + cache read + cache write, summed over turns
     let lastPayloadChars = 0;
 
     while (turnCount < MAX_TOOL_TURNS) {
       turnCount++;
+      // The Rust `anthropic_request` is buffered (uncancellable mid-request), so
+      // cancellation is honoured between tool turns.
+      throwIfAborted(signal);
       // Estimate payload size before sending
       const payloadBody = {
         model: model || 'claude-sonnet-4-5-20250929',
@@ -351,6 +357,7 @@ class AnthropicClient {
       // Capture usage from API response
       if (response.usage) {
         totalOutputTokens += response.usage.output_tokens || 0;
+        totalBilledInput += (response.usage.input_tokens || 0) + (response.usage.cache_read_input_tokens || 0) + (response.usage.cache_creation_input_tokens || 0);
         lastUsage = response.usage;
         console.log(`[Anthropic] Turn ${turnCount} usage: ${response.usage.input_tokens} in / ${response.usage.output_tokens} out` +
           (response.usage.cache_read_input_tokens ? ` / ${response.usage.cache_read_input_tokens} cache-read` : '') +
@@ -487,6 +494,7 @@ class AnthropicClient {
         usage: lastUsage ? {
           inputTokens: lastUsage.input_tokens || 0,
           outputTokens: totalOutputTokens,  // sum across all tool turns
+          billedInputTokens: totalBilledInput,
           cacheRead: lastUsage.cache_read_input_tokens,
           cacheCreation: lastUsage.cache_creation_input_tokens,
           payloadChars: lastPayloadChars,

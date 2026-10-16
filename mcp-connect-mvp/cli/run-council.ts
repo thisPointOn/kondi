@@ -370,6 +370,7 @@ async function main() {
       skipTools: invocation.skipTools,
       allowedTools: invocation.allowedTools,
       timeoutMs: invocation.timeoutMs || 900_000,
+      signal: invocation.signal,
       routePhase: roleToPhase(persona.preferredDeliberationRole || 'consultant'),
     });
 

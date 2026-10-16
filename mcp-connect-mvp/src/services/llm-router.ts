@@ -16,6 +16,7 @@
  * the OpenAI API with an API key.
  */
 
+import { pickUsage } from './usage';
 import type { Message, ToolCall, MCPTool } from '../types/mcp';
 import { anthropicClient } from './anthropicClient';
 import { claudeCliChat } from './claudeCliClient';
@@ -76,6 +77,10 @@ export interface ChatCompletionParams {
   allowedToolNames?: string[];
   /** Text-only call: no tools advertised to CLI binaries. */
   skipTools?: boolean;
+  /** Cancellation (run abort ∪ per-call timeout). Honoured natively by the
+   *  OpenAI-style clients (request aborted) and the Claude CLI (process killed);
+   *  buffered transports (Anthropic/Gemini via Rust) check it between turns. */
+  signal?: AbortSignal;
 }
 
 /** Input for simple single-shot completion (council/pipeline) */
@@ -91,6 +96,7 @@ export interface SimpleCompletionParams {
   timeoutMs?: number;
   allowedToolNames?: string[];
   skipTools?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface SimpleCompletionResult {
@@ -192,7 +198,7 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
       params.systemPrompt,
       params.workingDirectory,
       params.chatId,
-      { timeoutMs: params.timeoutMs, allowedToolNames: params.allowedToolNames, skipTools: params.skipTools },
+      { timeoutMs: params.timeoutMs, allowedToolNames: params.allowedToolNames, skipTools: params.skipTools, signal: params.signal },
     );
   }
 
@@ -206,6 +212,7 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
       params.systemPrompt,
       params.workingDirectory,
       prov,
+      params.signal,
     );
   }
 
@@ -231,41 +238,42 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
       params.workingDirectory,
       prov,
       params.onToken,
+      params.signal,
     );
   }
 
   if (prov === 'deepseek') {
-    return deepseekClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
+    return deepseekClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken, params.signal);
   }
 
   if (prov === 'xai') {
-    return xaiClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
+    return xaiClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken, params.signal);
   }
 
   if (prov === 'zai') {
-    return zaiClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
+    return zaiClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken, params.signal);
   }
 
   if (prov === 'moonshot') {
-    return moonshotClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
+    return moonshotClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken, params.signal);
   }
 
   if (prov === 'nvidia-router') {
-    return nvidiaRouterClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
+    return nvidiaRouterClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken, params.signal);
   }
 
   if (prov === 'ollama') {
-    return ollamaClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken);
+    return ollamaClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.onToken, params.signal);
   }
 
   if (prov === 'google') {
-    return geminiClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov);
+    return geminiClient.chat(params.messages, tools, model, params.systemPrompt, params.workingDirectory, prov, params.signal);
   }
 
   // Default fallback: Anthropic API
   return anthropicClient.chat(
     params.messages, tools, model,
-    params.serverSummary, params.systemPrompt, params.workingDirectory, prov,
+    params.serverSummary, params.systemPrompt, params.workingDirectory, prov, params.signal,
   );
   };
 
@@ -285,9 +293,7 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
 // ============================================================================
 
 /** Rough token estimate from character count */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
+export { estimateTokens } from './usage';
 
 /**
  * Single-shot completion: creates a one-message conversation, routes to the
@@ -314,15 +320,16 @@ export async function simpleCompletion(params: SimpleCompletionParams): Promise<
     timeoutMs: params.timeoutMs,
     allowedToolNames: params.allowedToolNames,
     skipTools: params.skipTools,
+    signal: params.signal,
   });
 
   const latencyMs = Date.now() - startTime;
-  // Prefer the provider-reported usage (API clients fill message.usage); fall
-  // back to a chars/4 estimate when absent or all-zero (CLI clients report 0).
-  const usage = result.message.usage;
-  const reported = !!usage && ((usage.inputTokens || 0) > 0 || (usage.outputTokens || 0) > 0);
-  const inputTokens = reported ? (usage!.inputTokens || 0) : estimateTokens(params.systemPrompt + params.userMessage);
-  const outputTokens = reported ? (usage!.outputTokens || 0) : estimateTokens(result.message.content);
+  // Prefer the provider-reported usage (billed input summed across tool turns
+  // when available); fall back to a chars/4 estimate when nothing was reported.
+  const { inputTokens, outputTokens, reported } = pickUsage(result.message.usage, {
+    input: params.systemPrompt + params.userMessage,
+    output: result.message.content,
+  });
 
   return {
     content: result.message.content,

@@ -5,6 +5,7 @@
  * expose an OpenAI-compatible API (DeepSeek, x.ai/Grok, Ollama, etc.)
  */
 
+import { anySignal, throwIfAborted } from '../agent-runtime/signals';
 import OpenAI from 'openai';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
@@ -226,7 +227,8 @@ export class OpenAICompatibleClient {
   private async streamOnce(
     params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
     onToken: (delta: string) => void,
-  ): Promise<{ content: string | null; tool_calls?: any[] }> {
+    outerSignal?: AbortSignal,
+  ): Promise<{ content: string | null; tool_calls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number } | null }> {
     // Idle-abort watchdog: GLM/z.ai (and other OpenAI-compatible streams) sometimes
     // stall mid-stream — no further tokens, no error — and `for await` waits forever
     // (the SDK's default timeout is 10 min). If no chunk arrives for IDLE_TIMEOUT_MS
@@ -241,11 +243,16 @@ export class OpenAICompatibleClient {
       }
     }, 5000);
     try {
-      const stream = await this.client!.chat.completions.create({ ...params, stream: true }, { signal: ac.signal });
+      const stream = await this.client!.chat.completions.create(
+        { ...params, stream: true, stream_options: { include_usage: true } },
+        { signal: anySignal([ac.signal, outerSignal]) },
+      );
       let content = '';
+      let usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
       const toolCallsAcc: any[] = [];
       for await (const chunk of stream as any) {
         lastChunk = Date.now();
+        if (chunk.usage) usage = chunk.usage; // trailing usage chunk (empty choices)
         const delta = chunk.choices?.[0]?.delta;
         if (!delta) continue;
         if (delta.content) { content += delta.content; onToken(delta.content); }
@@ -259,8 +266,9 @@ export class OpenAICompatibleClient {
           }
         }
       }
-      return { content: content || null, tool_calls: toolCallsAcc.length ? toolCallsAcc : undefined };
+      return { content: content || null, tool_calls: toolCallsAcc.length ? toolCallsAcc : undefined, usage };
     } catch (err: any) {
+      if (outerSignal?.aborted) throw err; // caller's cancel/timeout — not a stall
       if (ac.signal.aborted) {
         throw new Error(
           `${this.config.providerName} stream stalled — no data for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s (the request hung). Try again, or switch the model for this chat.`
@@ -280,6 +288,7 @@ export class OpenAICompatibleClient {
     workingDirectory?: string,
     provId?: string,
     onToken?: (delta: string) => void,
+    signal?: AbortSignal,
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     const authMethod = this.getAuthMethod();
     console.log(`[${this.config.providerName}] chat() called`, { authMethod, model, provId });
@@ -348,10 +357,22 @@ export class OpenAICompatibleClient {
     let currentMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [...openaiMessages];
     let turnCount = 0;
     let finalContent = '';
+    // Usage summed across tool-loop turns (billedInput = every turn's prompt;
+    // inputTokens = last turn's context). `stream_options.include_usage` makes
+    // the streaming path report it too (final chunk, empty choices).
+    const usageAcc = { lastInput: 0, billedInput: 0, output: 0, turns: 0 };
+    const addUsage = (u: { prompt_tokens?: number; completion_tokens?: number } | null | undefined) => {
+      if (!u) return;
+      usageAcc.lastInput = u.prompt_tokens || 0;
+      usageAcc.billedInput += u.prompt_tokens || 0;
+      usageAcc.output += u.completion_tokens || 0;
+      usageAcc.turns++;
+    };
 
     try {
       while (turnCount < MAX_TOOL_TURNS) {
         turnCount++;
+        throwIfAborted(signal);
         const createParams = {
           model: model || this.config.defaultModel,
           messages: currentMessages,
@@ -360,9 +381,16 @@ export class OpenAICompatibleClient {
         };
 
         // Stream the response when a token callback is provided (live chat).
-        const response = onToken
-          ? await this.streamOnce(createParams, onToken)
-          : (await this.client!.chat.completions.create(createParams)).choices[0].message;
+        let response: { content: string | null; tool_calls?: any[] };
+        if (onToken) {
+          const streamed = await this.streamOnce(createParams, onToken, signal);
+          addUsage(streamed.usage);
+          response = streamed;
+        } else {
+          const completion = await this.client!.chat.completions.create(createParams, { signal });
+          addUsage(completion.usage);
+          response = completion.choices[0].message;
+        }
 
         if (!response.tool_calls || response.tool_calls.length === 0) {
           finalContent = typeof response.content === 'string'
@@ -436,6 +464,12 @@ export class OpenAICompatibleClient {
         role: 'assistant',
         content: finalContent || '[No content returned]',
         timestamp: new Date(),
+        usage: usageAcc.turns > 0 ? {
+          inputTokens: usageAcc.lastInput,
+          outputTokens: usageAcc.output,
+          billedInputTokens: usageAcc.billedInput,
+          apiTurns: usageAcc.turns,
+        } : undefined,
       },
       toolCalls,
     };

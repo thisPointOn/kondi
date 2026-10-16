@@ -6,6 +6,7 @@
  * Requests are proxied through Tauri to avoid CORS.
  */
 
+import { throwIfAborted } from '../agent-runtime/signals';
 import { invoke } from '@tauri-apps/api/core';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
 import { mcpClient } from './mcpClient';
@@ -147,6 +148,7 @@ class GeminiClient {
     additionalSystemPrompt?: string,
     workingDirectory?: string,
     provId?: string,
+    signal?: AbortSignal,
   ): Promise<{ message: Message; toolCalls: ToolCall[] }> {
     const authMethod = this.getAuthMethod();
     console.log('[Gemini] chat() called', { authMethod, model, provId });
@@ -218,10 +220,14 @@ class GeminiClient {
     let currentContents = [...contents];
     let turnCount = 0;
     let finalContent = '';
+    // Usage from `usageMetadata` (summed over tool turns; last turn's prompt = context size).
+    const usageAcc = { lastInput: 0, billedInput: 0, output: 0, turns: 0 };
 
     try {
       while (turnCount < MAX_TOOL_TURNS) {
         turnCount++;
+        // The Rust `gemini_request` is buffered — cancellation applies between turns.
+        throwIfAborted(signal);
 
         const requestBody: any = {
           project: cred.projectId,
@@ -253,6 +259,12 @@ class GeminiClient {
 
         if (parsed.error) {
           throw new Error(parsed.error);
+        }
+        if (parsed.usage) {
+          usageAcc.lastInput = parsed.usage.promptTokenCount || 0;
+          usageAcc.billedInput += parsed.usage.promptTokenCount || 0;
+          usageAcc.output += parsed.usage.candidatesTokenCount || 0;
+          usageAcc.turns++;
         }
 
         // Extract text and function calls
@@ -345,6 +357,12 @@ class GeminiClient {
         role: 'assistant',
         content: finalContent || '[No content returned]',
         timestamp: new Date(),
+        usage: usageAcc.turns > 0 ? {
+          inputTokens: usageAcc.lastInput,
+          outputTokens: usageAcc.output,
+          billedInputTokens: usageAcc.billedInput,
+          apiTurns: usageAcc.turns,
+        } : undefined,
       },
       toolCalls,
     };
@@ -353,9 +371,11 @@ class GeminiClient {
   private parseSSEResponse(text: string): {
     candidates: Array<{ parts: Array<{ text?: string; functionCall?: { name: string; args: any } }> }>;
     error?: string;
+    usage?: { promptTokenCount?: number; candidatesTokenCount?: number };
   } {
     const candidates: Array<{ parts: Array<{ text?: string; functionCall?: { name: string; args: any } }> }> = [];
     const allParts: Array<{ text?: string; functionCall?: { name: string; args: any } }> = [];
+    let usage: { promptTokenCount?: number; candidatesTokenCount?: number } | undefined;
 
     const lines = text.split('\n');
     for (const line of lines) {
@@ -371,6 +391,7 @@ class GeminiClient {
         if (err) {
           return { candidates: [], error: `Gemini API error ${err.code}: ${err.message}` };
         }
+        if ((chunk as any).usageMetadata) usage = (chunk as any).usageMetadata; // last chunk carries the totals
         if (chunk.candidates) {
           for (const c of chunk.candidates) {
             if (c.content?.parts) {
@@ -397,6 +418,7 @@ class GeminiClient {
           if (err) {
             return { candidates: [], error: `Gemini API error ${err.code}: ${err.message}` };
           }
+          if ((response as any).usageMetadata) usage = (response as any).usageMetadata;
           if (response.candidates) {
             for (const c of response.candidates) {
               if (c.content?.parts) {
@@ -416,7 +438,7 @@ class GeminiClient {
       candidates.push({ parts: allParts });
     }
 
-    return { candidates };
+    return { candidates, usage };
   }
 
   /**
