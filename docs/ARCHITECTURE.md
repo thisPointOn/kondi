@@ -533,10 +533,26 @@ Provenance header format:
 ### Abort Handling
 
 `PipelineExecutor.abort()`:
-1. Sets abort flag
-2. Immediately marks pipeline as `failed`
-3. Marks all running (and `waiting_approval`) steps as `failed`
-4. Does not wait for current step to finish
+1. Aborts the run-level `AbortController` (`runAbort`). Its signal reaches both orchestrators and races pending gate/question prompts.
+2. Marks the pipeline and all running (and `waiting_approval`) steps as `failed` ("Aborted by user").
+3. In-flight LLM calls actually stop: each call gets `anySignal([run signal, timeout])`, which the clients honour (SDK request abort; between tool turns for the buffered Anthropic/Gemini transports; for the Claude CLI the `cancel_claude_streaming` Tauri command kills the child process). The orchestrator also races the signal so a transport that ignores it cannot hang the run.
+4. The council ends in the `cancelled` phase with a `cancellation` ledger entry (not `failed`, no error entry); aborted runs write no scorecard. Timeouts are different: retried once, then a normal failure.
+
+**Budget breaches are not aborts.** `Pipeline.settings.budget` (USD / tokens / minutes) is tracked by a per-run `BudgetMeter` wrapped around every agent call. Exceeding it fails the breaching step honestly (error entry, `failed` phase), skips the remaining stages, and still writes the scorecard. `finish_call` lets the current call complete; `abort_now` cancels in-flight calls through the same run signal, with the budget error as the reason so it is never mistaken for a user abort. Every persona sees a one-line budget status in its prompt.
+
+### Live Streaming Path
+
+Display only, never the source of results:
+
+```
+client (SSE deltas / claude stream-json lines via Channel)
+  -> llm-router onEvent -> gui-caller -> AgentInvocation.onEvent
+  -> orchestrator onAgentEvent(persona, event, context)
+  -> PipelineExecutorCallbacks.onAgentEvent -> useCouncilHandlers tail map (throttled)
+  -> DeliberationView ".thinking-stream"
+```
+
+The Claude CLI is run with `--include-partial-messages` when a listener is attached, and Rust forwards each stdout line over a Tauri channel; `createStreamJsonAccumulator` turns lines into text / tool-call / tool-result events. The final answer is still parsed from the full output. The CLI runner prints tool calls live instead of a tail.
 
 ---
 

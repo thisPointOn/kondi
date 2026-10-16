@@ -450,7 +450,7 @@ During a running council:
 - **Pause** — freeze the deliberation; you can review the ledger and artifacts
 - **Resume** — continue from where you paused
 - **Force Decision** — skip remaining rounds and go straight to the deciding phase
-- **Abort** — terminate the council and mark it as failed
+- **Abort** — stop the council immediately; in-flight model calls are cancelled and the council is marked cancelled (not failed)
 - **Send Message** — while paused, send a message; the last responding persona will reply
 
 ### Multi-Step Council Workflows
@@ -768,10 +768,16 @@ Loops are bounded by **Max Loops** (default 3) so they can never run forever. On
    - Each step shows its status (pending, running, completed, failed, waiting_approval)
    - Active council steps show the embedded deliberation view
    - Gate steps display an approval form
+   - Under each thinking persona a collapsible live tail shows what it is doing: streamed text plus tool calls (`→ Read(...)`) and their results (`✓`/`✗`). It is display only; the final output is unchanged.
+   - If the pipeline has a run budget, a chip in the header shows spend against it (ok / warning / over)
 3. Use the controls to:
    - **Pause/Resume** — halt execution at the current point
    - **Force Decision** — skip remaining rounds in the active council
-   - **Abort** — terminate the pipeline
+   - **Abort** — cancel the run now; running model calls are stopped, active steps show "Aborted by user", and no run metrics are recorded for the aborted run
+#### Run budget
+
+In the pipeline builder's settings panel, **Run budget** lets you cap a run by dollars, tokens and/or minutes (leave blank for no limit), and choose what happens on a breach: **finish the current call** (default) or **abort now** (cancel in-flight calls). Exceeding a budget is a failure, not a cancel: the current step fails with "Budget exceeded", later stages are skipped, and the run is still scored so self-improvement can see it. Each persona is told how much budget is left and to prefer a smaller correct deliverable. See `docs/SPEC.md` §5b and §4a-4.
+
 4. Once a run finishes (or fails), click **View Results** to open a read-only summary: steps grouped by stage, collapsed by default so you can expand just the ones you want to read, each output clearly labeled (decision / worker deliverable / approval, with type, token count, and where it was saved), and a stage-output footer showing exactly what fed into the next stage. A still-running pipeline opens the live execution view instead.
 
 ### Gate Steps
@@ -828,6 +834,10 @@ npx tsx cli/run-pipeline.ts <pipeline.json> [--working-dir <path>] [--model <mod
 | `--dry-run` | Validate the pipeline without executing |
 | `--improve` | After the run, review suggested pipeline improvements (see section 14) |
 | `--auto-approve` | With `--improve`: apply suggestions without asking |
+| `--budget-usd <n>`, `--budget-tokens <n>`, `--budget-minutes <n>` | Cap this run's spend/time (overrides the pipeline's budget); a breach fails the run |
+| `--budget-abort-now` | On breach, cancel in-flight calls instead of finishing the current one |
+
+Press Ctrl-C once to abort the run cleanly (running model calls are stopped); press it again to force-exit. Tool calls are printed as they happen.
 
 ### How It Works
 

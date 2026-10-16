@@ -177,7 +177,7 @@ Optional phases: `planning` (before directing), `paused`, `cancelled`, `failed`
 
 Entry types: `problem_statement`, `analysis`, `proposal`, `response`, `context_acceptance`, `context_rejection`, `manager_question`, `manager_redirect`, `round_summary`, `decision`, `plan`, `work_directive`, `work_output`, `review`, `revision_request`, `re_deliberation`, `cancellation`, `error`
 
-Phase transitions: `executing`, `reviewing` and `revising` may also go to `failed` (blocked worker, §4a-2). Council calls (all roles, subagents) are stateless one-shots carrying NO `conversationId`; `AgentInvocation`/`AgentResponse` are defined once in `deliberation-orchestrator.ts` and imported by `coding-orchestrator.ts`. `maxRevisions` defaults with `?? 3` (a configured 0 means 0).
+Phase transitions: `executing`, `reviewing` and `revising` may also go to `failed` (blocked worker, §4a-2). In BOTH orchestrators' `PHASE_TRANSITIONS` every non-terminal phase may go to `cancelled` (user abort, §4a-4) and to `failed`; an error escaping the phase loops (e.g. during framing) leaves the council `failed` with an `error` entry rather than stuck in its last phase. Council calls (all roles, subagents) are stateless one-shots carrying NO `conversationId`; `AgentInvocation`/`AgentResponse` are defined once in `deliberation-orchestrator.ts` and imported by `coding-orchestrator.ts`. `maxRevisions` defaults with `?? 3` (a configured 0 means 0).
 
 **Honest step outcomes.** A council whose final phase is `failed`/`paused`/`cancelled` FAILS its pipeline step (the partial artifact's metadata records `terminalPhase`) rather than passing "FAILED …" text downstream; `PipelineExecutor.abort()` also fails steps parked in `waiting_approval`. `PipelineExecutorCallbacks.canUseTools` is forwarded to both orchestrators (the CLI returns false only for Google). Coding verification that cannot run (no `runCommand`) is reported SKIPPED with a warning, not passed.
 
@@ -214,6 +214,24 @@ Workers that write files own a test loop; the orchestrator re-runs the same comm
 - Manager-less direct execution verifies too and gets `maxRevisions` bounded fix attempts. With `maxRevisions: 0` a failing verification is best effort.
 - Coding: install && build && test is resolved BEFORE `implementModules` and threaded into module/revision/debug worker permissions (the module directive says to RUN it); the final test loop reuses it.
 - UI: `StepConfigPanel` shows the Test/Verify command for any step with file/directory output; debug/review-cycle fields stay coding-only.
+
+### 4a-4. Cancellation and Usage Accounting
+
+**Signal plumbing.** `PipelineExecutor` owns a run-level `AbortController` (`runAbort`); `abort()` aborts it. The signal reaches both orchestrators (`OrchestratorConfig.signal` / `CodingOrchestratorConfig.signal`) and races pending gate/question prompts. Each `invokeAgentSafe` composes `anySignal([run signal, timeoutSignal(timeoutMs)])` PER ATTEMPT, passes it as `AgentInvocation.signal` to the invoker, and also races it (`raceSignal`, `agent-runtime/signals.ts`: settles on abort even when the callee ignores the signal, never leaves the losing rejection unhandled). Abort is classified FIRST and never retried (even if the error text says "terminated"); a `TimeoutError` (or tripped call signal) is a timeout, retried once — coding now retries too. `throwIfAborted` runs at every phase boundary; consultant fan-outs rethrow aborts and the coding per-module / review / debug catches no longer swallow them. `gui-caller`'s former `withTimeout` Promise.race is gone: one composed signal is passed to the client AND raced. `llm-router` threads `signal` (both param types) to every client.
+
+**Outcome.** Abort → `cancellation` ledger entry + `cancelled` phase (idempotent `markCancelled`); NO `error` entry, NOT `failed`. The pipeline step fails with "Aborted by user"; `finishRunHook` still skips aborted runs (no scorecard). Budget breaches are NOT aborts (§5b): `isUserAbort` excludes `BudgetExceededError`, including as the signal reason.
+
+**Transports.** openai / openai-compatible abort the SDK request; anthropic / gemini (buffered Rust transports) check the signal between tool turns; `claudeCliClient` registers a cancel id and the Tauri command `cancel_claude_streaming(cancel_id)` kills the child (`run_claude_streaming` takes `cancel_id`; registry in `commands/llm.rs`). CLI: `invocation.signal` → `callLLM`; `cli/run-pipeline.ts` Ctrl-C aborts the run, a second Ctrl-C force-exits.
+
+**Usage.** `MessageUsage.billedInputTokens` = input summed across turns incl. cache read/write. `services/usage.ts` `pickUsage` prefers billed → last-turn input → chars/4 estimate (`reported: false`); `simpleCompletion` uses it; `estimateTokens` is re-exported from there. openai + openai-compatible now report usage (`stream_options.include_usage` + trailing usage chunk, or `completion.usage` non-streaming), summed per turn; anthropic sums billed input; gemini reads `usageMetadata`.
+
+### 4a-5. Live Streaming (display only)
+
+`AgentInvocation.onEvent` and `OrchestratorConfig` / `CodingOrchestratorConfig.onAgentEvent(persona, event, context)` (forwarded from `PipelineExecutorCallbacks.onAgentEvent`; wired in both `invokeAgentSafe`) deliver stream events: `text`, `tool_call`, `tool_result`, turn/usage. `gui-caller` / `llm-router` accept `onEvent`: an `onEvent` without `onToken` makes OpenAI-style providers stream and forward `text` deltas; the Claude CLI forwards its stream-json events and gets `--include-partial-messages` when a listener is attached.
+
+`createStreamJsonAccumulator` (`pipeline/output-parsers.ts`): text from `stream_event` `content_block_delta`, `tool_call` from `assistant` `tool_use` blocks, `tool_result` from `user` `tool_result` blocks (name/duration via a pending-tool map), per-turn usage. **Display only** — final text still comes from `parseStreamJsonOutput` over the full output, whose dead top-level `content_block_delta` branch was removed so text never doubles. Rust `run_claude_streaming` has a REQUIRED `on_line: Channel<String>` (Tauri channels cannot be `Option`) forwarding each stdout line; the webview client always passes one (no-op when nobody listens). `cli/claude-caller.ts` splits stdout live (`feedChunk`) and honours `signal`.
+
+`council/stream-tail.ts` `appendStreamTail` renders `→ name(args)` and `✓|✗ name (chars, s)` lines and caps the tail at 2000 chars. GUI: `useCouncilHandlers` owns the per-persona tail map (ref + state throttled to ≤100ms) and exposes `streamingContent` / `onAgentEvent` / `clearStream`; `usePipeline` takes the same sink (background runs: none); `DeliberationView` renders a collapsible `.thinking-stream` `<pre>` under each thinking indicator (`CouncilView` / `PipelineExecutionView` pass it through). CLI `run-pipeline` logs tool calls immediately (`→ Read({...})`), flags failed tool results, and prints a 2s-throttled text summary on a TTY. Verification-driven `revision_request` entries are tagged `structured.fromVerification` so `requestRevision` issues a `fix` order (replaced a same-millisecond timestamp compare).
 
 ### 4b. Coding Orchestrator
 
@@ -476,6 +494,8 @@ Key: `mcp-pipelines` — version 5.
 
 Step configs: `CouncilStepConfig | LlmStepConfig | GateStepConfig | ScriptStepConfig | ConditionStepConfig`
 
+**Run budget** — `Pipeline.settings.budget` `{maxUsd, maxTokens, maxMinutes, onExceeded: 'finish_call'|'abort_now'}` (all optional; `hasBudget`). `pipeline/budget.ts`: `BudgetMeter` asserts before each call and records after via `costForCall`; `check` enforces the wall clock; `signal` is armed with a `BudgetExceededError` under `abort_now` (composed into the run signal); `estimatedCallsLeft`; `formatBudgetLine` (one-line status injected as `OrchestratorConfig.budgetLine` after the lessons block in both `invokeAgentSafe`: spent, left, "prefer a smaller CORRECT deliverable"); `isBudgetExceededError`. The executor builds a meter per run, wraps `invokeAgent` for both orchestrators, and the stage loop throws "Budget exceeded" before the next stage (its steps `skipped`); `onBudgetTick` feeds the UI. A breach is an HONEST FAILURE, not a cancel: `error` entry with `structured.budget {kind, usd, tokens}` + `failed` phase; the scorecard IS written. GUI: PipelineBuilder settings "Run budget" fields; `PipelineExecutionView` `BudgetChip` (ok/warn/over); `usePipeline.budgetState`.
+
 Legacy `LlmStepConfig` (flat `model/provider/systemPrompt`) is auto-migrated to `CouncilStepConfig` via `migrateLlmConfig()`.
 
 Input template variables: `{{input}}` (all previous artifacts), `{{input[N]}}` (specific artifact by index), `{{file}}` (all output file paths), `{{file[N]}}` (specific file path).
@@ -549,6 +569,8 @@ Entry point: `npx tsx cli/run-pipeline.ts <pipeline.json> [options]`
 | `--dry-run` | Print structure without executing |
 | `--improve` | After the run, retrospect and review proposals interactively (enables `selfImprove`, manual mode; §4f) |
 | `--auto-approve` | With `--improve`: mode `auto` — apply proposals without asking |
+| `--budget-usd <n>` / `--budget-tokens <n>` / `--budget-minutes <n>` | Override the pipeline's run budget for this run (§5b) |
+| `--budget-abort-now` | On budget breach cancel in-flight calls (default: finish the current call) |
 
 ### Routing
 `callLLM()` checks `isOpenAIModel(model)`:
@@ -564,6 +586,7 @@ Entry point: `npx tsx cli/run-pipeline.ts <pipeline.json> [options]`
 6. **Write containment is enforced by a PreToolUse hook, NOT by Claude Code permission flags.** Empirically (headless `--print`): `--permission-mode acceptEdits` still writes files outside the working dir, absolute `--allowedTools "Write(//abs/**)"` rules silently fail to match, and `bypassPermissions` disables confinement entirely — a worker escaped and wrote into the parent git repo's `docs/`. The fix (`src/services/cli-workdir-guard.ts`) installs a `PreToolUse` hook via `--settings` (matcher `Write|Edit|MultiEdit|NotebookEdit|Bash`) that resolves the real target path and **denies any write whose resolved path is outside the working dir** (root = `KONDI_WORKDIR` env, fallback hook payload `cwd`); Bash redirects/mutations to absolute paths outside the dir are blocked too (reads allowed). **Three non-obvious mechanics make the hook actually fire** (an inline base64 `node -e` hook silently never ran — verified via the raw claude stream): (a) the guard must be a `.cjs` FILE invoked as two UNQUOTED tokens `<node> <file>` — claude splits the hook command on whitespace with no shell, so a quoted `-e "…"` arg is mangled; (b) the FIRST token must be the ABSOLUTE node binary (`process.execPath`) — claude runs hooks with a sanitized PATH that excludes nvm/volta, so bare `node` is not-found and the hook falls open; (c) allow = `exit 0` silently (an explicit `permissionDecision:'allow'` interfered with in-sandbox writes), deny = emit the deny JSON. `cli/claude-caller.ts` (CLI runner) writes the file + uses `process.execPath`; `src/services/claudeCliClient.ts` (webview) installs it via the `run_command` Tauri backend (writes the script, resolves `command -v node`). Workers keep `bypassPermissions` + full tools; they just cannot escape. The system-prompt "working directory override" text is advisory only. **The `openai-cli` (Codex) path needs no such hook** — `codex-caller.ts` runs `--full-auto` (`--sandbox workspace-write` + `--cd <workingDir>`), whose OS-level sandbox (landlock/seatbelt) already confines writes to the working dir (verified: an out-of-dir write is refused). API providers on the CLI runner (`anthropic-api`, `openai-api`, `deepseek`, `xai`, `zai`, `moonshot`, `nvidia-router`, `ollama`) get contained file tools through `cli/api-tool-caller.ts` (§8a); Gemini still has none. **Codex no-sandbox toggle:** Settings → General → "CLI Workers" → "Run Codex without its OS sandbox" (localStorage `kondi-codex-no-sandbox` for the webview, env `KONDI_CODEX_NO_SANDBOX=true` for the CLI) swaps `--sandbox workspace-write`/`--full-auto` for `--dangerously-bypass-approvals-and-sandbox` — for hosts that restrict unprivileged user namespaces (recent Ubuntu/AppArmor) where Codex's bwrap sandbox can't init. Containment then relies ONLY on Kondi git-scoping the working dir (less strict; warned in the UI).
 
 ### Output
+- Ctrl-C aborts the run (§4a-4); a second Ctrl-C force-exits. Tool calls are logged live; streamed text is summarized every 2s on a TTY (§4a-5).
 - Execution report: `<working-dir>/kondi-execution-report.json`
 - Session export: `kondi-session-<pipeline-id>.json` (importable by GUI)
 
@@ -599,7 +622,7 @@ A `route:<profile>` model (or `provider:'router'`) is resolved to a concrete pro
 
 ### CLI Provider Details
 
-OAuth tokens from Claude Code and ChatGPT subscriptions only work from their respective CLI binaries — direct HTTP API calls are rejected (server-side client attestation). The router spawns CLI processes via Tauri commands (`run_claude_streaming`, `run_codex_streaming`).
+OAuth tokens from Claude Code and ChatGPT subscriptions only work from their respective CLI binaries — direct HTTP API calls are rejected (server-side client attestation). The router spawns CLI processes via Tauri commands (`run_claude_streaming`, `run_codex_streaming`). Tauri commands for the Claude CLI: `run_claude_streaming` (required `on_line: Channel<String>` for live stdout lines, `cancel_id`) and `cancel_claude_streaming(cancel_id)` (kills the child; §4a-4/§4a-5).
 
 **Session management (chat only):** First call creates a new session; subsequent calls resume it (`--resume <sessionId>` for Claude, `resume --last` for Codex). Session IDs are stored in-memory per `chatId`. Council/pipeline calls are always fresh one-shot processes.
 
@@ -728,7 +751,7 @@ Feature-verification harness for the pipeline engine, separate from unit tests. 
 
 ### Unit Tests and Typecheck
 
-`cd mcp-connect-mvp && npm test` runs vitest: `tests/council/*.test.ts` (`phase0`, `work-order`, `verify-loop`, `ask-back`), `tests/agent-runtime/*.test.ts` (`adapters`, `api-tool-caller`, `node-tools`, `tool-loop`), `tests/improve/*` (§4f), plus `router`, `auth`, `mcpClient`; shims in `tests/setup/browser-shims.ts`. `npm run typecheck` runs `tsc --noEmit` for BOTH `tsconfig.app.json` and `tsconfig.cli.json` (the CLI runners are covered).
+`cd mcp-connect-mvp && npm test` runs vitest: `tests/council/*.test.ts` (`phase0`, `work-order`, `verify-loop`, `ask-back`, `cancel`, `stream-accumulator`, `budget`), `tests/agent-runtime/*.test.ts` (`adapters`, `api-tool-caller`, `node-tools`, `tool-loop`), `tests/improve/*` (§4f), plus `router`, `auth`, `mcpClient`; shims in `tests/setup/browser-shims.ts`. `npm run typecheck` runs `tsc --noEmit` for BOTH `tsconfig.app.json` and `tsconfig.cli.json` (the CLI runners are covered).
 
 ### Dev Mode
 ```bash
