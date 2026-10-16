@@ -785,6 +785,20 @@ async function main() {
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log();
+    if (sigints > 0) {
+      // Aborted by Ctrl-C: the executor returned early; councils ended
+      // `cancelled`, running steps are failed "Aborted by user", no scorecard.
+      log(C.yellow, 'Pipeline', `Aborted by user after ${elapsed}s`);
+      saveExecutionReport(pipeline, effectiveWorkingDir, startTime, 'failed', 'Aborted by user');
+      exportSession(pipeline.id, storage, {
+        status: 'failed',
+        startedAt: new Date(startTime).toISOString(),
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - startTime,
+        workingDirectory: effectiveWorkingDir,
+      });
+      process.exit(130);
+    }
     log(C.green, 'Pipeline', `Completed successfully in ${elapsed}s`);
 
     // Print final artifacts

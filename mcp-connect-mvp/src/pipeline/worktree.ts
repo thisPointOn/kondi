@@ -62,7 +62,9 @@ export async function prepareWorktree(run: RunCmd, args: { repoRoot: string; run
   const head = await run('git rev-parse HEAD', repoRoot);
   if (head.exit_code !== 0 || !head.stdout.trim()) throw new Error(`Cannot resolve HEAD in ${repoRoot}: ${head.stderr || 'no commits yet?'}`);
   const baseSha = head.stdout.trim();
-  const runTag = args.runId.slice(0, 12);
+  // Run ids are ISO timestamps + random suffix; keep a filesystem/branch-safe tag
+  // (digits + random part), e.g. 20261016t0341-k3f9 → unique per run, no colons.
+  const runTag = args.runId.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(-12) || 'run';
   const worktreePath = `${repoRoot}/.kondi/worktrees/${runTag}-${args.stepSlug}`;
   const base = `kondi/${args.pipelineSlug}/${runTag}`;
   let branch = base;

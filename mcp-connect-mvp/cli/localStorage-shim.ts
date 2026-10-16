@@ -111,9 +111,12 @@ class FileBackedStorage implements Storage {
 const storage = new FileBackedStorage();
 (globalThis as any).localStorage = storage;
 
-// Flush on process exit so nothing is lost
+// Flush on process exit so nothing is lost. The signal handlers are
+// COOPERATIVE: they flush, and only exit when no other listener has claimed
+// the signal (the pipeline runner registers its own SIGINT handler to abort
+// the run gracefully — councils end `cancelled` — before exiting).
 process.on('exit', () => storage.flush());
-process.on('SIGINT', () => { storage.flush(); process.exit(130); });
-process.on('SIGTERM', () => { storage.flush(); process.exit(143); });
+process.on('SIGINT', () => { storage.flush(); if (process.listenerCount('SIGINT') <= 1) process.exit(130); });
+process.on('SIGTERM', () => { storage.flush(); if (process.listenerCount('SIGTERM') <= 1) process.exit(143); });
 
 export { storage };

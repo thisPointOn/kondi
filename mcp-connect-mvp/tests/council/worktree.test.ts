@@ -33,16 +33,16 @@ function gitFake(repo: string, opts: { committed?: boolean; collideBranch?: stri
 
 describe('worktree helpers (fake git)', () => {
   it('isRepoTopLevel / ensureKondiExcluded / prepareWorktree (branch collision → -2)', async () => {
-    const g = gitFake('/repo', { collideBranch: 'kondi/my-pipe/run123456789' });
+    const g = gitFake('/repo', { collideBranch: 'kondi/my-pipe/123456789abc' });
     expect(await isRepoTopLevel(g.run, '/repo')).toBe(true);
     expect(await isRepoTopLevel(g.run, '/repo/sub')).toBe(false);
     await ensureKondiExcluded(g.run, '/repo');
     await ensureKondiExcluded(g.run, '/repo');
     expect(g.calls.filter((c) => c.cmd.startsWith("grep -qxF '.kondi/'")).map((c) => c.cwd)).toEqual(['/repo', '/repo']);
     const wt = await prepareWorktree(g.run, { repoRoot: '/repo/', runId: 'run123456789abc', stepSlug: 'implement', pipelineSlug: 'my-pipe' });
-    expect(wt).toEqual({ mode: 'worktree', repoRoot: '/repo', worktreePath: '/repo/.kondi/worktrees/run123456789-implement', branch: 'kondi/my-pipe/run123456789-2', baseSha: 'base1234' });
+    expect(wt).toEqual({ mode: 'worktree', repoRoot: '/repo', worktreePath: '/repo/.kondi/worktrees/123456789abc-implement', branch: 'kondi/my-pipe/123456789abc-2', baseSha: 'base1234' });
     const add = g.calls.find((c) => c.cmd.startsWith('git worktree add'))!;
-    expect(add.cmd).toBe("git worktree add '/repo/.kondi/worktrees/run123456789-implement' -b 'kondi/my-pipe/run123456789-2'");
+    expect(add.cmd).toBe("git worktree add '/repo/.kondi/worktrees/123456789abc-implement' -b 'kondi/my-pipe/123456789abc-2'");
     expect(add.cwd).toBe('/repo');
     await expect(prepareWorktree(gitFake('/x', { notRepo: true }).run, { repoRoot: '/x', runId: 'r', stepSlug: 's', pipelineSlug: 'p' })).rejects.toThrow(/Cannot resolve HEAD/);
   });
