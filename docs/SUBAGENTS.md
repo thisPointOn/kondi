@@ -38,7 +38,7 @@ worker's own call:
 1. Renders each enabled subagent's `task` (`{{directive}}` → the work directive).
 2. Runs all subagents **in parallel**, each via the existing `invokeAgent` callback (so:
    router dispatch, MCP proxies, no CLI↔API fallover — same rules as personas). Each gets
-   its own isolated `council-<uuid>` conversation id (rule #2). Tools are off for subagents
+   a stateless one-shot call with no conversation id (rule #2). Tools are off for subagents
    in v1 (they advise/produce text; the worker remains the one that writes).
 3. Records each result as a ledger entry attributed to the worker, type `analysis`, phase
    `executing`, content prefixed `[Subagent: <name> · <provider>/<model>] …` (so it's

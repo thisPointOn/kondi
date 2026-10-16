@@ -565,6 +565,10 @@ The Manager evaluates the worker's output against the acceptance criteria. It ca
 - **Accept** — the output meets the criteria; deliberation completes.
 - **Revise** — send the worker back with specific feedback (up to `maxRevisions` times).
 
+If the worker writes files and a test command is known (set in the step's **Test/Verify command**, or auto-detected for file/directory outputs), Kondi runs it before the manager reviews. A failing run sends the worker back automatically with the test output; a pass is shown to the manager as evidence.
+
+**Worker questions.** A worker that lacks information can stop and ask. The manager answers if it can; otherwise a pipeline step pauses (status `waiting_approval`) and shows a question card with an **Answer** box and a **Let the worker decide** button. On the CLI the question appears in the terminal when it is interactive; otherwise the worker proceeds on its best judgment. A worker that reports it is blocked sends the council back to deliberation once before the step fails. A council that ends failed, paused or cancelled now fails its pipeline step instead of passing its text on. See `docs/SPEC.md` §4a-1 to §4a-3 for mechanics.
+
 ### The Ledger
 
 Every action in a deliberation is recorded in an append-only **ledger**:

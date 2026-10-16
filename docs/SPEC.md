@@ -47,6 +47,10 @@ mcp-connect-mvp/
       llm-adapter.ts             # Thin wrapper — delegates to llm-router.ts
       prompts.ts                 # Prompt construction for all roles and step types
       validation.ts              # LLM output parsing/validation
+      work-order.ts              # buildWorkOrder — typed worker brief + WORK_ORDER_PROTOCOL (§4a-1)
+      worker-signals.ts          # parseWorkerSignals — NEEDS INPUT / Blocked / Verification (§4a-1)
+      ask-back.ts                # Worker question ladder: manager → human → auto (§4a-2)
+    agent-runtime/               # Provider-neutral tool loop (§8a): tool-loop, tool-registry, sse, signals, adapters/, node/
     config/
       models.ts                  # ModelProvider type, all model definitions
     services/
@@ -58,6 +62,7 @@ mcp-connect-mvp/
       codexClient.ts             # Legacy Codex HTTP client (validation only)
       geminiClient.ts            # Google Gemini API client
       openaiCompatibleClient.ts  # DeepSeek, xAI, Ollama (OpenAI-compatible)
+      relayFetch.ts              # http_relay_stream → fetch Response adapter (NIM; moved out of openaiCompatibleClient)
       mcpClient.ts               # MCP server connection + proxy management
       proxyService.ts            # MCP proxy lifecycle (start/stop/sync to CLI configs)
     hooks/
@@ -65,11 +70,16 @@ mcp-connect-mvp/
   cli/
     run-pipeline.ts              # CLI entry point
     claude-caller.ts             # Spawns `claude --print --verbose --output-format stream-json`
+    api-tool-caller.ts           # API providers run the agent-runtime tool loop with contained local tools (§8a)
+    llm-caller.ts                # CLI LLM dispatch (CLI binaries vs api-tool-caller)
     codex-caller.ts              # Spawns `codex exec --json`
     node-platform.ts             # Node.js PlatformAdapter (fs, child_process)
     localStorage-shim.ts         # In-memory Storage polyfill for CLI
     session-export.ts            # Export CLI session for GUI import
     improve.ts / improve-cli.ts  # `kondi improve` retrospective CLI + shared review helpers (§4f)
+  tests/                         # vitest (`npm test`): tests/council/*.test.ts (phase0, work-order, verify-loop, ask-back),
+                                 #   tests/agent-runtime/*.test.ts, tests/improve/*, router/auth/mcpClient
+  tsconfig.app.json / tsconfig.cli.json  # `npm run typecheck` checks app AND CLI
   kondi-mcp-proxy/src/           # Node.js MCP proxy process
 docs/
   ARCHITECTURE.md                # Deep architectural rationale (24KB)
@@ -167,7 +177,43 @@ Optional phases: `planning` (before directing), `paused`, `cancelled`, `failed`
 
 Entry types: `problem_statement`, `analysis`, `proposal`, `response`, `context_acceptance`, `context_rejection`, `manager_question`, `manager_redirect`, `round_summary`, `decision`, `plan`, `work_directive`, `work_output`, `review`, `revision_request`, `re_deliberation`, `cancellation`, `error`
 
-**Worker directives are re-grounded in the original source material.** The manager's directive reaching the worker is two lossy summarization hops from the step's actual input (input → framing → decision → directive); a worker with nothing else to go on can invent details a trimmed-down directive dropped (observed: a final brief step contradicting the upstream decision). `runFullDeliberation` persists the raw problem via `councilStore.setSavedProblem(councilId, problem)` (`store.ts`) right after its fresh-store fetch, overwriting `deliberation.savedProblem` with the problem this run was actually started with. The private helper `groundInSource(council, directiveContent)` then appends `deliberation.savedProblem` (capped at 24000 chars) to the directive as an "ORIGINAL TASK & SOURCE MATERIAL (authoritative...)" block — applied in `executeWork` (before subagent fan-out) and in the worker revision path (`buildWorkerRevisionPrompt`'s first argument).
+Phase transitions: `executing`, `reviewing` and `revising` may also go to `failed` (blocked worker, §4a-2). Council calls (all roles, subagents) are stateless one-shots carrying NO `conversationId`; `AgentInvocation`/`AgentResponse` are defined once in `deliberation-orchestrator.ts` and imported by `coding-orchestrator.ts`. `maxRevisions` defaults with `?? 3` (a configured 0 means 0).
+
+**Honest step outcomes.** A council whose final phase is `failed`/`paused`/`cancelled` FAILS its pipeline step (the partial artifact's metadata records `terminalPhase`) rather than passing "FAILED …" text downstream; `PipelineExecutor.abort()` also fails steps parked in `waiting_approval`. `PipelineExecutorCallbacks.canUseTools` is forwarded to both orchestrators (the CLI returns false only for Google). Coding verification that cannot run (no `runCommand`) is reported SKIPPED with a warning, not passed.
+
+### 4a-1. Worker Work Order and Signals
+
+Workers are not handed a bare directive. `buildWorkOrder(WorkOrderInput)` (`council/work-order.ts`) composes a fixed, scannable brief at every worker call site (`executeWork`, `requestRevision`, `runDirectExecution`) — it replaced the former `groundInSource()` (directive + up to 24000 chars of source). Sections, in order: **Objective** (the step task alone, via `stripTaskPrefix`), **Deliverable** (output type + expected output), **Acceptance criteria** (full section, heading-aware `extractAcceptanceCriteria`), **Directive**, **Constraints** (tool scope `none|read_only|full`; never names write tools for a text deliverable — CLAUDE.md rule 5), **Verification** (§4a-3), **Attempt** (N of M; on revisions the prior output, reviewer feedback and any Q&A), **Inputs from earlier steps**, **Source material** (deduplicated against the task), then `WORK_ORDER_PROTOCOL` (how to signal). Size caps in `WORK_ORDER_CAPS`.
+
+`OrchestratorConfig.brief` (`StepBrief`: `task`, `stepName`, `stepType`, `runDir`, `inputs[{stepName,outputType,path}]`) is supplied per run by `PipelineExecutor`; it is NOT a `DeliberationConfig` field, so no `createCouncil()` whitelist change (§10 gotcha 22 is unaffected). Related `OrchestratorConfig` members: `seatBriefs`, `runCommand`, `readFile`. When `brief` is set the orchestrator keeps the raw problem on the instance and does NOT overwrite `deliberation.savedProblem` (a bound council's saved task used to compound input on reruns); standalone runs still persist it via `councilStore.setSavedProblem`.
+
+**Worker signals** (`council/worker-signals.ts`, `parseWorkerSignals` / `signalsForLedger`): `## NEEDS INPUT` heading with a `**Question:** …` line (worker STOPS); `**Status:** Blocked — <reason>` (in `## COMPLETION SUMMARY` or a `## BLOCKED` heading); `**Verification:** exit <N> …` (worker-run tests). A question accompanied by `**Status:** Complete` is a caveat (delivered), not a stop. Signals are stored as `structured.signals` on `work_output` / `module_output` ledger entries — no new entry types or phases.
+
+**Coding orchestrator:** module workers receive the spec head (6000 chars) + `testStrategy`; review issues are routed per module via `structured.issues` on the formatted `code_review` entry; the debugger's prompt contains the ACTUAL files on disk (via `readFile`), not its earlier prose.
+
+### 4a-2. Worker Ask-Back and Re-Deliberation (`council/ask-back.ts`)
+
+Resolution ladder for a worker's `## NEEDS INPUT` question, applied by `handleWorkerSignals` at all three deliberation worker call sites (and an equivalent in the coding orchestrator for `module_implementation` / `debug_fix`, whose Q&A is appended to the module message):
+1. **Manager** — an LLM call in the new manager context `worker_question` (manager tools, 10 min timeout); output JSON `{answer}` or `{escalate}` (`parseManagerAnswer`, prompt `buildWorkerQuestionAnswerPrompt`).
+2. **Human** — `OrchestratorConfig.onWorkerQuestion(ctx) → string|null`, supplied by the executor from `PipelineExecutorCallbacks.onCouncilQuestion(stepId, PendingInput)`.
+3. **Auto** — `AUTO_ANSWER` ("proceed on your best judgment, STATE assumptions").
+`MAX_QUESTIONS_PER_PHASE` = 2; the next question gets `BUDGET_EXHAUSTED_ANSWER` and one last re-invoke. `resolveWorkerQuestion` runs the ladder.
+
+Ledger (no new types): the question is a `manager_question` entry authored by the WORKER; the answer is a `response` entry with `structured.answeredBy` = `manager|user|system`. The worker is re-invoked on the SAME attempt with the Q&A in its work order (`attempt.mode: 'answer'`; subagent findings preserved).
+
+**Blocked workers.** A worker reporting `**Status:** Blocked` is never quality-reviewed. `reviewWork` synthesizes a `re_deliberate` once (through the existing re-deliberation branch, the blocked reason supplied as new information), then a best-effort `revise`; still blocked with the revision budget spent → `error` entry + `failed` phase (thrown → failed step). Manager-less direct execution: blocked → `error` + `failed` + throw.
+
+**Pipeline/UI plumbing.** `PendingInput {kind: 'gate'|'question', prompt, councilId?, personaName?, managerNote?, askedAt}` on `PipelineStep.pendingInput`, written via `pipelineStore.setStepPendingInput`, cleared by `resetStaleExecutionStates` and when the input arrives. While a worker question is pending the step is parked in `waiting_approval` carrying the question and restored to `running` afterwards; gate steps also set a `gate` pendingInput. GUI: `usePipeline` resolvers accept `boolean|string|null`; `WorkerQuestionCard` in `PipelineExecutionView` (textarea, "Answer" / "Let the worker decide"); background runs answer null (= auto). CLI: `run-pipeline` `promptQuestion` and `run-council` `onWorkerQuestion` read from the terminal ONLY when stdin is a TTY (empty = let the worker decide); otherwise the worker proceeds on its best judgment.
+
+### 4a-3. Worker-Owned Verify Loop
+
+Workers that write files own a test loop; the orchestrator re-runs the same command as the final check BEFORE any manager review.
+- `OrchestratorConfig.verify = {command, autoDetect, maxWorkerTries}`. `resolveVerifyCommand` order: `verify.command` → `deliberation.testCommand` → `detectTestCommand` (`pipeline/test-detect`) for `file`/`directory` output types (cached per council).
+- `withVerify` adds `verifyCommand` / `verifyMaxTries` to `WorkerPermissions` ONLY when the worker has write permissions (rule 5; text workers never see it). The work order's Verification section and the minimal worker system prompts carry the rules.
+- `reviewWork` calls `runFinalVerification` first and records a `test_result` entry (`structured {exitCode, testCommand, verification: true}`). On failure it synthesizes a mechanical `revise` (0 tokens, `structured {verification, automatic: true}`) containing the test tail and SKIPS the consultant and manager LLM calls; `requestRevision` detects the verification-driven retry and issues a `fix` work order with the last tail. On pass, `buildManagerReviewPrompt(verification)` adds a VERIFICATION section for the manager.
+- Manager-less direct execution verifies too and gets `maxRevisions` bounded fix attempts. With `maxRevisions: 0` a failing verification is best effort.
+- Coding: install && build && test is resolved BEFORE `implementModules` and threaded into module/revision/debug worker permissions (the module directive says to RUN it); the final test loop reuses it.
+- UI: `StepConfigPanel` shows the Test/Verify command for any step with file/directory output; debug/review-cycle fields stay coding-only.
 
 ### 4b. Coding Orchestrator
 
@@ -515,7 +561,7 @@ Entry point: `npx tsx cli/run-pipeline.ts <pipeline.json> [options]`
 3. **`--print` requires `--verbose`** when using `--output-format stream-json`
 4. **Codex resume**: `codex exec resume <thread_id>` — no `--sandbox`/`--full-auto` flags on resume
 5. **Per-persona session persistence** via `personaSessionIds` Map (cleared on new council/step)
-6. **Write containment is enforced by a PreToolUse hook, NOT by Claude Code permission flags.** Empirically (headless `--print`): `--permission-mode acceptEdits` still writes files outside the working dir, absolute `--allowedTools "Write(//abs/**)"` rules silently fail to match, and `bypassPermissions` disables confinement entirely — a worker escaped and wrote into the parent git repo's `docs/`. The fix (`src/services/cli-workdir-guard.ts`) installs a `PreToolUse` hook via `--settings` (matcher `Write|Edit|MultiEdit|NotebookEdit|Bash`) that resolves the real target path and **denies any write whose resolved path is outside the working dir** (root = `KONDI_WORKDIR` env, fallback hook payload `cwd`); Bash redirects/mutations to absolute paths outside the dir are blocked too (reads allowed). **Three non-obvious mechanics make the hook actually fire** (an inline base64 `node -e` hook silently never ran — verified via the raw claude stream): (a) the guard must be a `.cjs` FILE invoked as two UNQUOTED tokens `<node> <file>` — claude splits the hook command on whitespace with no shell, so a quoted `-e "…"` arg is mangled; (b) the FIRST token must be the ABSOLUTE node binary (`process.execPath`) — claude runs hooks with a sanitized PATH that excludes nvm/volta, so bare `node` is not-found and the hook falls open; (c) allow = `exit 0` silently (an explicit `permissionDecision:'allow'` interfered with in-sandbox writes), deny = emit the deny JSON. `cli/claude-caller.ts` (CLI runner) writes the file + uses `process.execPath`; `src/services/claudeCliClient.ts` (webview) installs it via the `run_command` Tauri backend (writes the script, resolves `command -v node`). Workers keep `bypassPermissions` + full tools; they just cannot escape. The system-prompt "working directory override" text is advisory only. **The `openai-cli` (Codex) path needs no such hook** — `codex-caller.ts` runs `--full-auto` (`--sandbox workspace-write` + `--cd <workingDir>`), whose OS-level sandbox (landlock/seatbelt) already confines writes to the working dir (verified: an out-of-dir write is refused). API providers (deepseek/gemini) have no file tools. **Codex no-sandbox toggle:** Settings → General → "CLI Workers" → "Run Codex without its OS sandbox" (localStorage `kondi-codex-no-sandbox` for the webview, env `KONDI_CODEX_NO_SANDBOX=true` for the CLI) swaps `--sandbox workspace-write`/`--full-auto` for `--dangerously-bypass-approvals-and-sandbox` — for hosts that restrict unprivileged user namespaces (recent Ubuntu/AppArmor) where Codex's bwrap sandbox can't init. Containment then relies ONLY on Kondi git-scoping the working dir (less strict; warned in the UI).
+6. **Write containment is enforced by a PreToolUse hook, NOT by Claude Code permission flags.** Empirically (headless `--print`): `--permission-mode acceptEdits` still writes files outside the working dir, absolute `--allowedTools "Write(//abs/**)"` rules silently fail to match, and `bypassPermissions` disables confinement entirely — a worker escaped and wrote into the parent git repo's `docs/`. The fix (`src/services/cli-workdir-guard.ts`) installs a `PreToolUse` hook via `--settings` (matcher `Write|Edit|MultiEdit|NotebookEdit|Bash`) that resolves the real target path and **denies any write whose resolved path is outside the working dir** (root = `KONDI_WORKDIR` env, fallback hook payload `cwd`); Bash redirects/mutations to absolute paths outside the dir are blocked too (reads allowed). **Three non-obvious mechanics make the hook actually fire** (an inline base64 `node -e` hook silently never ran — verified via the raw claude stream): (a) the guard must be a `.cjs` FILE invoked as two UNQUOTED tokens `<node> <file>` — claude splits the hook command on whitespace with no shell, so a quoted `-e "…"` arg is mangled; (b) the FIRST token must be the ABSOLUTE node binary (`process.execPath`) — claude runs hooks with a sanitized PATH that excludes nvm/volta, so bare `node` is not-found and the hook falls open; (c) allow = `exit 0` silently (an explicit `permissionDecision:'allow'` interfered with in-sandbox writes), deny = emit the deny JSON. `cli/claude-caller.ts` (CLI runner) writes the file + uses `process.execPath`; `src/services/claudeCliClient.ts` (webview) installs it via the `run_command` Tauri backend (writes the script, resolves `command -v node`). Workers keep `bypassPermissions` + full tools; they just cannot escape. The system-prompt "working directory override" text is advisory only. **The `openai-cli` (Codex) path needs no such hook** — `codex-caller.ts` runs `--full-auto` (`--sandbox workspace-write` + `--cd <workingDir>`), whose OS-level sandbox (landlock/seatbelt) already confines writes to the working dir (verified: an out-of-dir write is refused). API providers on the CLI runner (`anthropic-api`, `openai-api`, `deepseek`, `xai`, `zai`, `moonshot`, `nvidia-router`, `ollama`) get contained file tools through `cli/api-tool-caller.ts` (§8a); Gemini still has none. **Codex no-sandbox toggle:** Settings → General → "CLI Workers" → "Run Codex without its OS sandbox" (localStorage `kondi-codex-no-sandbox` for the webview, env `KONDI_CODEX_NO_SANDBOX=true` for the CLI) swaps `--sandbox workspace-write`/`--full-auto` for `--dangerously-bypass-approvals-and-sandbox` — for hosts that restrict unprivileged user namespaces (recent Ubuntu/AppArmor) where Codex's bwrap sandbox can't init. Containment then relies ONLY on Kondi git-scoping the working dir (less strict; warned in the UI).
 
 ### Output
 - Execution report: `<working-dir>/kondi-execution-report.json`
@@ -565,7 +611,18 @@ OAuth tokens from Claude Code and ChatGPT subscriptions only work from their res
 - **Council**: Orchestrator assembles full context (ledger history, patches, expected output) into `systemPrompt` + `userMessage` strings — stateless one-shot per call
 - **Pipeline**: Same as council — `simpleCompletion()` with full context in the prompt
 
-**Conversation ID isolation**: Each council persona call MUST get a unique conversation ID (`council-<uuid>`). Sharing IDs causes context accumulation and failures in round 2+.
+**Council call isolation**: council/pipeline calls (personas and subagents) are stateless one-shots and carry NO `conversationId`; no session is shared or resumed (resumption is chat-only). Sharing/fabricating conversation IDs causes context accumulation and failures in round 2+ (a fake `council-<uuid>` once made claude run `--resume <fake>`).
+
+### 8a. Agent Runtime (`src/agent-runtime/`)
+
+Provider-neutral tool loop. `llm-router` stays the only completion entry point; clients and the CLI may delegate transport to the runtime.
+- `tool-loop.ts` `runToolLoop`: bounded turns, per-tool timeout, result cap with compression of older tool results, summed token usage; tool errors are returned as error tool-results (never thrown).
+- `tool-registry.ts` `ToolRegistry`: short wire names, schema minimization. `local-tool-defs.ts`: the four local tool definitions (+ `ABSTRACT_TO_LOCAL` mapping abstract names Read/Write/Edit/Bash/Glob/Grep onto them, shared with the webview `pipeline/gui-caller.ts`).
+- `sse.ts` SSE parser; `signals.ts`: `AbortError`, `TimeoutError`, `anySignal` (polyfill), `timeoutSignal`, `withSignal`.
+- `adapters/openai-compatible.ts` `openaiCompatibleAdapter` (stream_options usage, `tool_calls` accumulation) and `adapters/anthropic.ts` `anthropicAdapter` (message_start/delta usage, `input_json_delta`, Bearer for OAuth tokens vs `x-api-key`); both accept `fetchImpl`.
+- `node/local-tools-node.ts` `createNodeLocalTools`; `node/path-containment.ts` realpath containment that DENIES reads and writes outside the root (incl. `dir/../x` and symlinked dirs/files); `node/command-rules.ts` `commandViolation` — Bash rules equivalent to `WORKDIR_GUARD_SRC` (a fixture test asserts agreement).
+- `cli/api-tool-caller.ts` (via `cli/llm-caller.ts`): CLI API-provider calls run the loop with the local tools scoped by the orchestrator's `allowedTools`, constrained to the working dir by default, returning real usage. Closes TEST-runs REPORT #5; the dead single-shot callers were removed. The webview `checkScope` fallback normalizes `..`.
+- `src/services/relayFetch.ts` holds `relayFetch` (moved from `openaiCompatibleClient.ts`; unchanged behaviour, §10 gotcha 17).
 
 ---
 
@@ -630,7 +687,7 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 1. **Raw JSON in deliberation output**: `run_claude_streaming` Rust result extraction only handled `.as_str()`. Fixed: non-string handling + JS-side `parseStreamJsonOutput()` fallback.
 2. **Missing consultant contributions**: `addPersona()` didn't create role assignments. Fixed: auto-create consultant role assignment in `addPersona()`, clean up in `removePersona()`.
 3. **Proxy OAuth red dots**: 30s timeout fires during OAuth browser flow; proxy fails after fresh OAuth due to token propagation delay. Fixed: 180s timeout for proxy, 5 retries, stop+restart proxy if stuck in `needs_reauth`.
-4. **CLI session sharing in councils**: `chatViaCli()` shared `currentConversationId` across all persona calls. Fixed: unique `council-<uuid>` conversation ID per call.
+4. **CLI session sharing in councils**: `chatViaCli()` shared `currentConversationId` across all persona calls. Fixed: unique `council-<uuid>` conversation ID per call. (Superseded in Phase 0: council calls now carry no `conversationId` at all — stateless one-shots; the fabricated ids made claude `--resume` a nonexistent session.)
 5. **Abort leaves pipeline "running"**: `abort()` only set a boolean flag. Fixed: immediately sets pipeline to 'failed' and marks running steps as 'failed'.
 6. **Error attribution in deliberation**: Both catch blocks attributed errors to "manager". Fixed: errors during consultant phases attribute to consultant, worker phases to worker.
 7. **localStorage quota exceeded**: Browser's 5MB localStorage cap caused pipeline failures ("Failed to save pipelines to storage", "Failed to save ledger chunk"). Fixed: all stores now route through `CouncilDataStore` — an in-memory Map with no limit. localStorage is a best-effort cache; quota errors are silently ignored. No data is ever destroyed.
@@ -651,6 +708,11 @@ All state goes through `CouncilDataStore` (`council/storage-cleanup.ts`) — an 
 22. **`createCouncil()`'s field whitelist silently dropped `deliberation` fields**: `council/store.ts` `createCouncil()` builds the persisted `deliberation` object from an explicit list of named fields (not a spread of `params.deliberation`); `outputType`, `savedProblem`, and `evolveContext` were missing from that list, so `factory.ts` (and the pipeline executor) could pass them in but the STORED council always had `deliberation.outputType === undefined` at runtime. Consequence: `effectiveWrite` (§4a/§5a-1, CLAUDE.md rule 5) was permanently `false` for every pipeline-launched council regardless of the step's configured `outputType` — every pipeline worker ran in text mode, so a step with `outputType: 'directory'` emitted its files as ```filename: fenced text blocks instead of writing them (this made the earlier "executor forwards outputType" fix, §5a-1, inert). Fixed: added `outputType`, `savedProblem`, and `evolveContext` to the whitelist. Any NEW `DeliberationConfig` field must be added to this same whitelist or it will silently read as `undefined` downstream.
 23. **`createGitSnapshot` adopted a PARENT git repo**: it checked `git rev-parse --is-inside-work-tree`, which is `true` even when the working dir is merely NESTED inside another repo (e.g. an examples workspace living inside the kondi repo itself) — so `git add -A && git commit -m "kondi: pre-pipeline snapshot"` committed the PARENT project's entire tree into the parent's git history (observed: junk snapshot commits on the kondi repo's own main branch sweeping up unrelated uncommitted work). Same failure class as the CLI nearest-repo escape (gotcha 14). Fixed: it now compares `git rev-parse --show-toplevel` against the working dir (trailing-slash-normalized) and `git init`s the working dir as its own repo unless it is itself the top-level (§4b).
 24. **Migrated bound-council steps would have been blocked at launch**: when the standalone Councils UI was removed and every pre-existing council was migrated into a one-step bound pipeline (§4e), the step's own `councilSetup` is an intentionally empty shell (the council record is authoritative). Validating that shell with the ordinary `validateCouncilStep` logic would have reported "No personas configured" on EVERY migrated council/workflow and blocked it from ever running via Pipelines. Fixed pre-emptively (same commit as the migration): `validateCouncilStep` short-circuits to `validateBoundCouncil(councilId, configuredProviders)`, which validates the LIVE council's personas/providers instead (§5a-6).
+25. **Failed/paused/cancelled councils passed as successful steps** (Phase 0): the executor fed "FAILED …" text downstream. Fixed: such a terminal phase FAILS the step (artifact metadata `terminalPhase`); `abort()` also fails `waiting_approval` steps (§4a).
+26. **`maxRevisions || 3` ignored a configured 0** (Phase 0). Fixed: `?? 3`.
+27. **Fake test passes**: coding verification with no `runCommand` reported success, and standalone `runCommand` adapters used the wrong field names (`cwd`/`exitCode` vs `workingDir`/`exit_code`) so tests always failed. Fixed: unrunnable verification is SKIPPED + warning; adapters aligned; Node `runCommand` is an async spawn with process-group kill + output cap.
+28. **API-model workers were told they had tools they didn't** (REPORT #5): headless pipelines on API providers got a single-shot completion. Fixed by the agent runtime (§8a).
+29. **Workers graded on non-deliverables / guessing instead of asking**: a worker that was blocked or needed input produced prose that went to quality review. Fixed by worker signals + ask-back + synthesized `re_deliberate` (§4a-1/§4a-2); test failures are now caught mechanically before the manager review (§4a-3).
 
 ---
 
@@ -663,6 +725,10 @@ Feature-verification harness for the pipeline engine, separate from unit tests. 
 - **12 numbered test folders** (`testing/01-linear-chain` … `testing/12-full-council`), each with a `README.md` describing the pipeline shape/assertions and a `result.json` written by the run (pass/fail per assertion + captured artifacts). Coverage: input chaining, parallel-stage `{{input}}`/`{{input[N]}}` joins, `json` outputType + `{{input.field}}` dot-paths (§5a-2), condition `continue`/`stop`/`skip_next_stage`, loop-back feedback + `maxLoops` + `onLoopExhausted: 'fail'` (§5a-4), script steps, all four `inputSource` kinds (§5a-5), gate approve/reject, `failurePolicy` stop vs skip_step, resume-skips-completed-steps, worker file output + `{{file}}` resolution, and a full manager+worker council through the deliberation engine.
 - LLM steps call NVIDIA NIM's free-credit `nemotron-3-nano` for genuine model calls; personas named `SCRIPTED:...` are answered by the harness with canned text instead, so control-flow assertions (loops, conditions, failures) stay deterministic regardless of live model output.
 - **Known issue (logged, non-fatal):** `council/context-bootstrap.ts` calls the Tauri `invoke()` directly (`run_command`, `read_local_file`) with no Node/CLI fallback, so directory-context bootstrap always fails (caught, doesn't abort the run) when the harness (or the CLI runner) runs a step outside the Tauri webview.
+
+### Unit Tests and Typecheck
+
+`cd mcp-connect-mvp && npm test` runs vitest: `tests/council/*.test.ts` (`phase0`, `work-order`, `verify-loop`, `ask-back`), `tests/agent-runtime/*.test.ts` (`adapters`, `api-tool-caller`, `node-tools`, `tool-loop`), `tests/improve/*` (§4f), plus `router`, `auth`, `mcpClient`; shims in `tests/setup/browser-shims.ts`. `npm run typecheck` runs `tsc --noEmit` for BOTH `tsconfig.app.json` and `tsconfig.cli.json` (the CLI runners are covered).
 
 ### Dev Mode
 ```bash

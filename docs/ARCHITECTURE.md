@@ -328,12 +328,20 @@ Routes orchestrator LLM calls to the appropriate provider:
 ```
 callLlm(model, provider, messages, tools?)
   |
-  +-- CLI path: callViaCli(messages, model, tools, conversationId)
-  |     |-- unique conversation ID per call (council-<uuid>)
-  |     |-- prevents session sharing between personas
+  +-- CLI path: callViaCli(messages, model, tools)
+  |     |-- council calls are stateless one-shots (no conversationId,
+  |     |   no session resume) -> no state shared between personas
   |
   +-- API path: anthropicClient.chat() / openaiClient.chat() / etc.
 ```
+
+### Worker Work Order, Signals and Ask-Back
+
+Workers receive a typed **work order** (`work-order.ts`) instead of a bare directive: Objective, Deliverable, Acceptance criteria, Directive, Constraints (tool scope), Verification, Attempt (with prior output/feedback/Q&A), Inputs from earlier steps, deduplicated Source material, and a signalling protocol. The executor supplies a per-run `brief` (task, step, run dir, inputs) so workers see the step's own task rather than a lossy summary chain.
+
+Workers answer with parseable signals (`worker-signals.ts`): they can stop with a question (`## NEEDS INPUT`), declare themselves blocked, or report a verification exit code. Questions go through an **ask-back ladder** (`ask-back.ts`): the manager answers if it can, otherwise the question is escalated to the human (the pipeline step is parked as `waiting_approval` with a `pendingInput`, answered in the GUI or at a CLI TTY), otherwise the worker is told to proceed on its best judgment (stating assumptions). Two questions per phase, then a budget answer. A worker that reports itself blocked is never quality-reviewed: the council re-deliberates once, tries a best-effort revision, and then fails honestly (a failed/paused/cancelled council now fails its pipeline step).
+
+**Verify loop.** Workers with write permissions run the step's test command themselves; before any manager review the orchestrator re-runs it (explicit command, then `testCommand`, then auto-detection for file/directory outputs). A failure becomes a mechanical `revise` carrying the test output (no manager/consultant tokens); a pass is reported to the manager as verification evidence. Text-only workers are never given a verify command.
 
 ### Context Versioning (`context-store.ts`)
 
@@ -527,7 +535,7 @@ Provenance header format:
 `PipelineExecutor.abort()`:
 1. Sets abort flag
 2. Immediately marks pipeline as `failed`
-3. Marks all running steps as `failed`
+3. Marks all running (and `waiting_approval`) steps as `failed`
 4. Does not wait for current step to finish
 
 ---
@@ -610,6 +618,10 @@ cli/run-pipeline.ts
              spawns: codex exec --json
              pipes prompt via stdin
 ```
+
+### API Providers and the Agent Runtime
+
+For API providers (`anthropic-api`, `openai-api`, `deepseek`, `xai`, `zai`, `moonshot`, `nvidia-router`, `ollama`), `cli/llm-caller.ts` calls `cli/api-tool-caller.ts`, which runs the provider-neutral tool loop from `src/agent-runtime/` (`runToolLoop` + OpenAI-compatible or Anthropic streaming adapter) with four Node local tools (scoped by the orchestrator's abstract allowed tools: Read/Write/Edit/Bash/Glob/Grep map onto them). Paths are realpath-contained: reads and writes outside the working directory are denied, and Bash commands follow rules equivalent to the Claude PreToolUse guard. Headless pipelines on API models can therefore read and write files in the working directory with real token usage. The abort/timeout primitives (`AbortError`, `TimeoutError`, `anySignal`) live in the same package. `llm-router` remains the only completion entry point in the GUI.
 
 ### Session Persistence
 
