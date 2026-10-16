@@ -8,6 +8,7 @@
  * (text_delta, input_json_delta) / `message_delta` (cumulative output usage).
  * Tool results are replayed as `tool_result` user content blocks.
  */
+import { fetchWithRetry } from '../http';
 import type { ToolLoopAdapter, TurnRequest, ModelTurn, LoopMessage, LoopToolCall, TurnUsage } from '../types';
 import { parseSseJson } from '../sse';
 import { anySignal, timeoutSignal, throwIfAborted } from '../signals';
@@ -92,7 +93,7 @@ export function anthropicAdapter(o: AnthropicAdapterOptions): ToolLoopAdapter {
       headers['anthropic-beta'] = betas.join(',');
 
       throwIfAborted(req.signal);
-      const resp = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: req.signal });
+      const resp = await fetchWithRetry(fetchImpl, url, { method: 'POST', headers, body: JSON.stringify(body), signal: req.signal });
       if (!resp.ok) {
         const text = await resp.text().catch(() => '');
         throw new Error(`HTTP ${resp.status} from anthropic: ${text.slice(0, 500)}`);

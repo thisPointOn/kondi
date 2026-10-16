@@ -11,6 +11,7 @@ import { runToolLoop } from '../agent-runtime/tool-loop';
 import { openaiCompatibleAdapter } from '../agent-runtime/adapters/openai-compatible';
 import type { LoopMessage, RunToolLoopResult } from '../agent-runtime/types';
 import { createGuiToolExecutor } from './gui-tool-executor';
+import { getModelById } from '../config/models';
 import { formatToolCallSummary } from './formatToolCallSummary';
 import {
   resolveApiKey,
@@ -255,6 +256,7 @@ export class OpenAICompatibleClient {
       model: model || this.config.defaultModel,
       provider: this.config.authProvider,
       stream: true,
+      requestOverrides: getModelById(model || this.config.defaultModel)?.requestOverrides,
     });
 
     let result: RunToolLoopResult;

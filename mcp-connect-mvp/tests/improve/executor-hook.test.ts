@@ -21,7 +21,7 @@ function memPlatform(workDir: string) {
 }
 
 const worker = (name: string, extra: Partial<PipelinePersona> = {}): PipelinePersona => ({
-  name, role: 'worker', model: 'nvidia/nemotron-3-nano-30b-a3b', provider: 'nvidia-router',
+  name, role: 'worker', model: 'nvidia/nemotron-3.5-lightning-30b-a3b', provider: 'nvidia-router',
   suppressPersona: true, traits: ['thorough'], saveOutput: false, toolAccess: 'none', ...extra,
 });
 
@@ -47,7 +47,7 @@ describe('executor post-run hook (scorecard + step input capture)', () => {
     const executor = new PipelineExecutor({
       invokeAgent: async (inv) => ({
         content: `Drafted from: ${inv.userMessage.slice(0, 20)}`,
-        tokensUsed: 123, latencyMs: 7, model: 'nvidia/nemotron-3-nano-30b-a3b', provider: 'nvidia-router', inputTokens: 100, outputTokens: 23,
+        tokensUsed: 123, latencyMs: 7, model: 'nvidia/nemotron-3.5-lightning-30b-a3b', provider: 'nvidia-router', inputTokens: 100, outputTokens: 23,
       }),
     }, platform);
 
@@ -58,8 +58,8 @@ describe('executor post-run hook (scorecard + step input capture)', () => {
     const step = pipeline.stages[0].steps[0];
     expect(step.status).toBe('completed');
     expect(step.artifact?.metadata?.tokensUsed).toBe(123);
-    expect(step.artifact?.metadata?.models).toEqual(['nvidia/nemotron-3-nano-30b-a3b']);
-    expect(step.artifact?.metadata?.model).toBe('nvidia/nemotron-3-nano-30b-a3b');
+    expect(step.artifact?.metadata?.models).toEqual(['nvidia/nemotron-3.5-lightning-30b-a3b']);
+    expect(step.artifact?.metadata?.model).toBe('nvidia/nemotron-3.5-lightning-30b-a3b');
     expect(step.artifact?.metadata?.costUsd).toBe(0);
 
     // Step input record keyed by the step's council id.
@@ -87,7 +87,7 @@ describe('executor post-run hook (scorecard + step input capture)', () => {
     // ...and on disk beside the run output, plus the JSONL mirror and manifest.
     const paths = [...files.keys()];
     const scorecardPath = paths.find((p) => p.endsWith('/_scorecard.json'))!;
-    expect(scorecardPath).toMatch(/\/virtual\/wd\/kondi-runs\/hooked_run_001_.*\/_scorecard\.json$/);
+    expect(scorecardPath).toMatch(/\/virtual\/wd\/\.kondi\/runs\/hooked_run_001_.*\/_scorecard\.json$/);
     expect(JSON.parse(files.get(scorecardPath)!).runId).toBe(card.runId);
     expect(paths.some((p) => p.endsWith('/_input.md'))).toBe(true);
     expect(files.get(paths.find((p) => p.endsWith('/_input.md'))!)).toContain('Write the thing.');

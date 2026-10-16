@@ -14,6 +14,7 @@ import type {
   RunToolLoopOptions, RunToolLoopResult, LoopMessage, LoopToolCall, UsageTotals, TurnUsage,
 } from './types';
 import { throwIfAborted, withSignal, isAbortError, isTimeoutError } from './signals';
+import { recoverToolCallsFromText, looksLikeToolNarration, FAKE_CALL_NOTE } from './tool-narration';
 
 const DEFAULTS = {
   maxTurns: 25,
@@ -49,6 +50,8 @@ export async function runToolLoop(opts: RunToolLoopOptions): Promise<RunToolLoop
   const texts: string[] = [];
   let turns = 0;
   let hitMaxTurns = false;
+  let recoveredToolCalls = 0;
+  let narrationNudges = 0;
 
   while (true) {
     throwIfAborted(signal);
@@ -73,8 +76,26 @@ export async function runToolLoop(opts: RunToolLoopOptions): Promise<RunToolLoop
     opts.onEvent?.({ kind: 'turn', index: turns, usage: turn.usage });
     if (turn.text.trim()) texts.push(turn.text);
 
-    const calls: LoopToolCall[] = tools.length ? turn.toolCalls : [];
-    messages.push({ role: 'assistant', content: turn.text, toolCalls: calls.length ? calls : undefined, native: turn.native });
+    let calls: LoopToolCall[] = tools.length ? turn.toolCalls : [];
+    let native = turn.native;
+    if (tools.length && calls.length === 0 && turn.text) {
+      // The model WROTE a tool call instead of calling it. Recover unambiguous
+      // ones and run them for real (the assistant message is rebuilt from the
+      // recovered calls, not the provider-native one, so ids line up).
+      const recovered = recoverToolCallsFromText(turn.text, tools.map((t) => t.name));
+      if (recovered.length) {
+        calls = recovered;
+        native = undefined;
+        recoveredToolCalls += recovered.length;
+      } else if (narrationNudges === 0 && looksLikeToolNarration(turn.text, tools.map((t) => t.name))) {
+        // Unparseable narration: tell the model once, then let it try again.
+        narrationNudges++;
+        messages.push({ role: 'assistant', content: turn.text, native: turn.native });
+        messages.push({ role: 'user', content: FAKE_CALL_NOTE.trim() });
+        continue;
+      }
+    }
+    messages.push({ role: 'assistant', content: turn.text, toolCalls: calls.length ? calls : undefined, native });
     if (calls.length === 0) break;
 
     for (const call of calls) {
@@ -112,5 +133,7 @@ export async function runToolLoop(opts: RunToolLoopOptions): Promise<RunToolLoop
     usage,
     turns,
     hitMaxTurns,
+    recoveredToolCalls,
+    narrationNudges,
   };
 }

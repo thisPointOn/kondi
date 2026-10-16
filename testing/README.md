@@ -2,7 +2,7 @@
 
 End-to-end tests of every pipeline feature, run against the REAL
 `PipelineExecutor` with the real stores and the Node platform adapter
-(real filesystem). LLM steps use NVIDIA NIM's `nemotron-3-nano`
+(real filesystem). LLM steps use NVIDIA NIM's `nemotron-3.5-lightning`
 (free-credit) for genuine model calls; personas whose **name starts with
 `SCRIPTED:`** are answered by the harness with canned text instead, so
 control-flow tests (loops, conditions, failures) are deterministic.

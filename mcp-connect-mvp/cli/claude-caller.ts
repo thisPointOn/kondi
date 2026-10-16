@@ -58,6 +58,8 @@ export interface CallerResult {
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
+  /** Tool calls the runtime actually executed (undefined = unknown). */
+  toolCallCount?: number;
 }
 
 /**
@@ -192,7 +194,7 @@ export async function callClaude(opts: {
         return;
       }
 
-      const { text, tokensUsed, sessionId, inputTokens, outputTokens } = parseStreamJsonOutput(rawStdout);
+      const { text, tokensUsed, sessionId, inputTokens, outputTokens, toolCalls } = parseStreamJsonOutput(rawStdout);
 
       resolve({
         content: text,
@@ -201,6 +203,7 @@ export async function callClaude(opts: {
         sessionId,
         inputTokens,
         outputTokens,
+        toolCallCount: toolCalls,
       });
     });
 

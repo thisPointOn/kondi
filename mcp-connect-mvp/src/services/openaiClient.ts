@@ -1,10 +1,11 @@
 import OpenAI from 'openai';
-import { getToolTimeoutMs } from './localTools';
-import { throwIfAborted } from '../agent-runtime/signals';
+import { runToolLoop } from '../agent-runtime/tool-loop';
+import type { RunToolLoopResult } from '../agent-runtime/types';
+import { createGuiToolExecutor } from './gui-tool-executor';
+import { toLoopHistory } from './chat-history';
+import { openaiCompatibleAdapter } from '../agent-runtime/adapters/openai-compatible';
+import { getModelById } from '../config/models';
 import type { MCPTool, Message, ToolCall } from '../types/mcp';
-import { mcpClient } from './mcpClient';
-import { LOCAL_SERVER_ID, localToolsService } from './localTools';
-import { formatToolCallSummary } from './formatToolCallSummary';
 import {
   resolveApiKey,
   reportSuccess,
@@ -77,43 +78,6 @@ export class OpenAIClient {
     return resolved.profileId;
   }
 
-  /**
-   * Minimize a JSON Schema to reduce token count.
-   */
-  private minimizeSchema(schema: any): any {
-    if (!schema || typeof schema !== 'object') return schema;
-
-    const result: any = {};
-
-    if (schema.type) result.type = schema.type;
-    if (schema.description) {
-      result.description = schema.description.length > 150
-        ? schema.description.slice(0, 147) + '...'
-        : schema.description;
-    }
-    if (schema.enum) result.enum = schema.enum;
-
-    if (schema.properties) {
-      result.properties = {};
-      for (const [key, value] of Object.entries(schema.properties)) {
-        result.properties[key] = this.minimizeSchema(value);
-      }
-    }
-
-    if (schema.required && schema.required.length > 0) {
-      result.required = schema.required;
-    }
-
-    if (schema.items) {
-      result.items = this.minimizeSchema(schema.items);
-    }
-
-    if (schema.oneOf) result.oneOf = schema.oneOf.map((s: any) => this.minimizeSchema(s));
-    if (schema.anyOf) result.anyOf = schema.anyOf.map((s: any) => this.minimizeSchema(s));
-    if (schema.allOf) result.allOf = schema.allOf.map((s: any) => this.minimizeSchema(s));
-
-    return result;
-  }
 
   // Default models to show when /v1/models is inaccessible (restricted API key scopes).
   private static readonly DEFAULT_MODELS = [
@@ -169,36 +133,6 @@ export class OpenAIClient {
     }
   }
 
-  /** Run one completion as an SSE stream, assembling content + tool-call deltas. */
-  private async streamOnce(
-    params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
-    onToken: (delta: string) => void,
-    signal?: AbortSignal,
-  ): Promise<{ content: string | null; tool_calls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number } | null }> {
-    const stream = await this.client!.chat.completions.create(
-      { ...params, stream: true, stream_options: { include_usage: true } },
-      { signal },
-    );
-    let content = '';
-    let usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
-    const toolCallsAcc: any[] = [];
-    for await (const chunk of stream as any) {
-      if (chunk.usage) usage = chunk.usage; // trailing usage chunk (empty choices)
-      const delta = chunk.choices?.[0]?.delta;
-      if (!delta) continue;
-      if (delta.content) { content += delta.content; onToken(delta.content); }
-      if (delta.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          const idx = tc.index ?? 0;
-          if (!toolCallsAcc[idx]) toolCallsAcc[idx] = { id: '', type: 'function', function: { name: '', arguments: '' } };
-          if (tc.id) toolCallsAcc[idx].id = tc.id;
-          if (tc.function?.name) toolCallsAcc[idx].function.name += tc.function.name;
-          if (tc.function?.arguments) toolCallsAcc[idx].function.arguments += tc.function.arguments;
-        }
-      }
-    }
-    return { content: content || null, tool_calls: toolCallsAcc.length ? toolCallsAcc : undefined, usage };
-  }
 
   async chat(
     messages: Message[],
@@ -219,204 +153,56 @@ export class OpenAIClient {
 
     const profileId = await this.ensureClientInitialized(preferredProfileId);
 
-    const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [];
-    const toolMap = new Map<string, { serverId: string; tool: MCPTool }>();
-
-    const serverIds = Array.from(availableTools.keys());
-    const serverIndexMap = new Map(serverIds.map((id, i) => [id, `s${i}`]));
-
-    for (const [serverId, { tools: serverTools }] of availableTools) {
-      const shortPrefix = serverIndexMap.get(serverId) || 's0';
-      for (const tool of serverTools) {
-        const maxToolNameLen = 64 - shortPrefix.length - 2;
-        const truncatedName = tool.name.length > maxToolNameLen
-          ? tool.name.slice(0, maxToolNameLen)
-          : tool.name;
-        const prefixedName = `${shortPrefix}__${truncatedName}`;
-        tools.push({
-          type: 'function',
-          function: {
-            name: prefixedName,
-            description: (tool.description || '').slice(0, 300),
-            parameters: this.minimizeSchema(tool.inputSchema),
-          },
-        });
-        toolMap.set(prefixedName, { serverId, tool });
-      }
-    }
-
-    console.log('[OpenAI] Available tools:', tools.map(t => (t as any).function?.name));
-
+    // Shared agentic loop (src/agent-runtime) over the OpenAI chat-completions
+    // wire format: streaming + usage, tool calls through the chat's tools, real
+    // cancellation. The SDK client stays for listModels/validateKey only.
+    const executor = availableTools.size > 0 ? createGuiToolExecutor(availableTools) : undefined;
     const systemParts = [BASE_SYSTEM_PROMPT];
-    if (workingDirectory) {
-      systemParts.push(`Current working directory: ${workingDirectory}`);
-    }
-    if (additionalSystemPrompt) {
-      systemParts.push(additionalSystemPrompt);
-    }
-    const systemPrompt = systemParts.join('\n\n');
+    if (workingDirectory) systemParts.push(`Current working directory: ${workingDirectory}`);
+    if (additionalSystemPrompt) systemParts.push(additionalSystemPrompt);
+    const { history, userMessage } = toLoopHistory(messages);
 
-    const openaiMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-      { role: 'system', content: systemPrompt },
-      ...messages.map((message) => ({
-        role: message.role as 'user' | 'assistant',
-        content: message.role === 'assistant' && message.toolCalls?.length
-          ? message.content + '\n\n' + formatToolCallSummary(message.toolCalls)
-          : message.content,
-      })),
-    ];
+    const adapter = openaiCompatibleAdapter({
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: this.clientKey || '',
+      model: model || 'gpt-4o',
+      provider: 'openai-api',
+      stream: true,
+      requestOverrides: getModelById(model || 'gpt-4o')?.requestOverrides,
+    });
 
-    const MAX_TOOL_TURNS = 25;
-    const toolCalls: ToolCall[] = [];
-    let currentMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [...openaiMessages];
-    let turnCount = 0;
-    let finalContent = '';
-    // Usage summed across tool-loop turns (billedInput = every turn's prompt;
-    // inputTokens = last turn's context). `stream_options.include_usage` makes
-    // the streaming path report it too (final chunk, empty choices).
-    const usageAcc = { lastInput: 0, billedInput: 0, output: 0, turns: 0 };
-    const addUsage = (u: { prompt_tokens?: number; completion_tokens?: number } | null | undefined) => {
-      if (!u) return;
-      usageAcc.lastInput = u.prompt_tokens || 0;
-      usageAcc.billedInput += u.prompt_tokens || 0;
-      usageAcc.output += u.completion_tokens || 0;
-      usageAcc.turns++;
-    };
-
+    let result: RunToolLoopResult;
     try {
-      while (turnCount < MAX_TOOL_TURNS) {
-        turnCount++;
-        throwIfAborted(signal);
-        const createParams = {
-          model: model || 'gpt-4o',
-          messages: currentMessages,
-          tools: tools.length > 0 ? tools : undefined,
-          tool_choice: (turnCount === 1 && tools.length > 0 ? 'auto' : undefined) as any,
-        };
-
-        let response: { content: string | null; tool_calls?: any[] };
-        if (onToken) {
-          const streamed = await this.streamOnce(createParams, onToken, signal);
-          addUsage(streamed.usage);
-          response = streamed;
-        } else {
-          const completion = await this.client!.chat.completions.create(createParams, { signal });
-          addUsage(completion.usage);
-          response = completion.choices[0].message;
-        }
-
-        if (!response.tool_calls || response.tool_calls.length === 0) {
-          finalContent = typeof response.content === 'string'
-            ? response.content
-            : JSON.stringify(response.content || '');
-          break;
-        }
-
-        console.log(`[OpenAI] Turn ${turnCount}: ${response.tool_calls.length} tool calls`);
-        const toolResults: OpenAI.Chat.Completions.ChatCompletionToolMessageParam[] = [];
-
-        for (const tc of response.tool_calls) {
-          if (tc.type !== 'function') continue;
-
-          console.log('[OpenAI] Processing tool call:', tc.function.name);
-          const toolInfo = toolMap.get(tc.function.name);
-
-          if (!toolInfo) {
-            toolResults.push({
-              role: 'tool',
-              tool_call_id: tc.id,
-              content: `Error: Unknown tool ${tc.function.name}`,
-            });
-            continue;
-          }
-
-          const toolCall: ToolCall = {
-            id: tc.id,
-            serverId: toolInfo.serverId,
-            toolName: toolInfo.tool.name,
-            arguments: JSON.parse(tc.function.arguments),
-            status: 'pending',
-          };
-
-          try {
-            toolCall.status = 'running';
-            console.log('[OpenAI] Calling tool:', toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);
-
-            const TOOL_CALL_TIMEOUT = getToolTimeoutMs(toolInfo.tool.name); // per tool (convene_council runs for minutes)
-            const toolPromise = toolInfo.serverId === LOCAL_SERVER_ID
-              ? localToolsService.callTool(toolInfo.tool.name, toolCall.arguments, workingDirectory)
-              : mcpClient.callTool(toolInfo.serverId, toolInfo.tool.name, toolCall.arguments);
-            const result = await Promise.race([
-              toolPromise,
-              new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error(`Tool ${toolInfo.tool.name} timed out after ${TOOL_CALL_TIMEOUT / 1000}s`)), TOOL_CALL_TIMEOUT)
-              ),
-            ]);
-
-            console.log('[OpenAI] Tool result:', result);
-            toolCall.result = result;
-            toolCall.status = 'completed';
-
-            toolResults.push({
-              role: 'tool',
-              tool_call_id: tc.id,
-              content: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
-            });
-          } catch (error) {
-            console.error('[OpenAI] Tool call failed:', error);
-            toolCall.error = error instanceof Error ? error.message : 'Unknown error';
-            toolCall.status = 'failed';
-
-            toolResults.push({
-              role: 'tool',
-              tool_call_id: tc.id,
-              content: `Error: ${toolCall.error}`,
-            });
-          }
-
-          toolCalls.push(toolCall);
-        }
-
-        currentMessages = [
-          ...currentMessages,
-          {
-            role: 'assistant' as const,
-            content: response.content,
-            tool_calls: response.tool_calls,
-          },
-          ...toolResults,
-        ];
-      }
-
+      result = await runToolLoop({
+        adapter, executor, system: systemParts.join('\n\n'), userMessage, history, workingDir: workingDirectory, signal,
+        onEvent: onToken ? (e) => { if (e.kind === 'text') onToken(e.delta); } : undefined,
+      });
       if (profileId) reportSuccess(profileId);
     } catch (err) {
       if (profileId) {
         const errMsg = err instanceof Error ? err.message : String(err);
         const statusMatch = errMsg.match(/(\d{3})/);
-        const httpStatus = statusMatch ? parseInt(statusMatch[1]) : undefined;
-        reportFailure(profileId, httpStatus);
+        reportFailure(profileId, statusMatch ? parseInt(statusMatch[1]) : undefined);
       }
       throw err;
-    }
-
-    if (turnCount >= MAX_TOOL_TURNS) {
-      console.warn(`[OpenAI] Hit max tool turns (${MAX_TOOL_TURNS})`);
     }
 
     return {
       message: {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: finalContent || '[No content returned]',
+        content: result.content || '[No content returned]',
         timestamp: new Date(),
-        usage: usageAcc.turns > 0 ? {
-          inputTokens: usageAcc.lastInput,
-          outputTokens: usageAcc.output,
-          billedInputTokens: usageAcc.billedInput,
-          apiTurns: usageAcc.turns,
+        usage: result.usage.reported || result.usage.inputTokens > 0 || result.usage.outputTokens > 0 ? {
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          billedInputTokens: result.usage.inputTokens + (result.usage.cacheReadTokens || 0) + (result.usage.cacheWriteTokens || 0),
+          cacheRead: result.usage.cacheReadTokens,
+          cacheCreation: result.usage.cacheWriteTokens,
+          apiTurns: result.usage.apiTurns,
         } : undefined,
       },
-      toolCalls,
+      toolCalls: executor?.toolCalls ?? [],
     };
   }
 }

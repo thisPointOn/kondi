@@ -39,7 +39,7 @@ async function main() {
   type StepConfig = import('../../mcp-connect-mvp/src/pipeline/types').StepConfig;
   type Pipeline = import('../../mcp-connect-mvp/src/pipeline/types').Pipeline;
 
-  const NIM = { model: 'nvidia/nemotron-3-nano-30b-a3b', provider: 'nvidia-router' };
+  const NIM = { model: 'nvidia/nemotron-3.5-lightning-30b-a3b', provider: 'nvidia-router' };
 
   // ---------------- personas ----------------
   const worker = (name: string, extra: Partial<PipelinePersona> = {}): PipelinePersona => ({

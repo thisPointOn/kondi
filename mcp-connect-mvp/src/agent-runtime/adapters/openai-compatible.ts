@@ -8,6 +8,7 @@
  * accumulates `tool_calls` deltas by index, and replays native assistant
  * `tool_calls` + `role:'tool'` messages verbatim on the next turn.
  */
+import { fetchWithRetry } from '../http';
 import type { ToolLoopAdapter, TurnRequest, ModelTurn, LoopMessage, LoopToolCall, TurnUsage } from '../types';
 import { parseSseJson } from '../sse';
 import { anySignal, timeoutSignal, throwIfAborted } from '../signals';
@@ -25,6 +26,10 @@ export interface OpenAICompatibleAdapterOptions {
   /** Abort a streaming response with no bytes for this long (default 90s). */
   idleTimeoutMs?: number;
   includeUsage?: boolean;          // default true (stream_options.include_usage)
+  /** Extra body fields merged into every request (e.g. NIM Nemotron 3.5
+   *  `chat_template_kwargs: { enable_thinking: false }`; see
+   *  `ModelDefinition.requestOverrides`). */
+  requestOverrides?: Record<string, unknown>;
 }
 
 interface OAIToolCall { id: string; type: 'function'; function: { name: string; arguments: string } }
@@ -91,6 +96,7 @@ export function openaiCompatibleAdapter(o: OpenAICompatibleAdapterOptions): Tool
         body.tool_choice = 'auto';
       }
       if (stream && includeUsage) body.stream_options = { include_usage: true };
+      if (o.requestOverrides) Object.assign(body, o.requestOverrides);
 
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -99,7 +105,7 @@ export function openaiCompatibleAdapter(o: OpenAICompatibleAdapterOptions): Tool
       };
 
       throwIfAborted(req.signal);
-      const resp = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: req.signal });
+      const resp = await fetchWithRetry(fetchImpl, url, { method: 'POST', headers, body: JSON.stringify(body), signal: req.signal });
       if (!resp.ok) {
         const text = await resp.text().catch(() => '');
         throw new Error(`HTTP ${resp.status} from ${o.provider}: ${text.slice(0, 500)}`);

@@ -131,7 +131,7 @@ export async function callCodex(opts: {
         }
       }
 
-      const { text, tokensUsed, sessionId, inputTokens, outputTokens } = parseCodexJsonOutput(rawStdout);
+      const { text, tokensUsed, sessionId, inputTokens, outputTokens, toolCalls } = parseCodexJsonOutput(rawStdout);
 
       resolve({
         content: text,
@@ -140,6 +140,7 @@ export async function callCodex(opts: {
         sessionId,
         inputTokens,
         outputTokens,
+        toolCallCount: toolCalls,
       });
     });
 

@@ -39,7 +39,7 @@ async function main() {
   type Pipeline = import('../../mcp-connect-mvp/src/pipeline/types').Pipeline;
 
   const SUPER = { model: 'nvidia/nemotron-3-super-120b-a12b', provider: 'nvidia-router' };
-  const NANO = { model: 'nvidia/nemotron-3-nano-30b-a3b', provider: 'nvidia-router' };
+  const NANO = { model: 'nvidia/nemotron-3.5-lightning-30b-a3b', provider: 'nvidia-router' };
   const CLAUDE_CLI = { model: 'claude-sonnet-4-5-20250929', provider: 'anthropic-cli' };
 
   const persona = (

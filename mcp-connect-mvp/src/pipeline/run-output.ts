@@ -1,7 +1,9 @@
 /**
  * Pipeline Run Output Isolation
  * Structured per-run/per-stage/per-step output directories.
- * Runs live at {workingDir}/kondi-runs/{pipelineName}_run_NNN_date_time/
+ * Runs live at {workingDir}/.kondi/runs/{pipelineName}_run_NNN_date_time/
+ * (everything Kondi writes into a working dir is under .kondi/ — runs, outputs,
+ * memory, worktrees — so a user's repo gets ONE ignorable folder).
  */
 
 import type { StepArtifact, StepMeta, RunManifest, OutputType } from './types';
@@ -44,7 +46,7 @@ export function buildStepDirName(stepIndex: number, stepName: string): string {
 }
 
 export function getRunsBaseDir(workingDir: string): string {
-  return `${workingDir.replace(/\/$/, '')}/kondi-runs`;
+  return `${workingDir.replace(/\/$/, '')}/.kondi/runs`;
 }
 
 export function buildStepOutputDir(

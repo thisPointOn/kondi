@@ -39,7 +39,7 @@
                 {
                   "name": "Skeptic",
                   "role": "consultant",
-                  "model": "nvidia/nemotron-3-nano-30b-a3b",
+                  "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
                   "provider": "nvidia-router",
                   "suppressPersona": false,
                   "traits": [
@@ -135,7 +135,7 @@
                 {
                   "name": "Summarizer",
                   "role": "worker",
-                  "model": "nvidia/nemotron-3-nano-30b-a3b",
+                  "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
                   "provider": "nvidia-router",
                   "suppressPersona": true,
                   "traits": [

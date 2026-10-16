@@ -8,6 +8,7 @@
  * `allowedTools`, runs through `runToolLoop`, and returns REAL summed usage.
  * This closes TEST-runs REPORT #5 ("API personas told they have tools").
  */
+import { getModelById } from '../src/config/models';
 import type { CallerResult } from './claude-caller';
 import { runToolLoop } from '../src/agent-runtime/tool-loop';
 import { ToolRegistry } from '../src/agent-runtime/tool-registry';
@@ -59,7 +60,7 @@ export function adapterFor(o: ApiCallOptions): ToolLoopAdapter {
   }
   const baseUrl = OPENAI_COMPATIBLE_BASE_URLS[o.provider];
   if (!baseUrl) throw new Error(`No API adapter for provider "${o.provider}"`);
-  return openaiCompatibleAdapter({ fetchImpl: o.fetchImpl, baseUrl, apiKey: o.apiKey, model: o.model, provider: o.provider, temperature: o.temperature, stream: o.stream });
+  return openaiCompatibleAdapter({ fetchImpl: o.fetchImpl, baseUrl, apiKey: o.apiKey, model: o.model, provider: o.provider, temperature: o.temperature, stream: o.stream, requestOverrides: getModelById(o.model)?.requestOverrides });
 }
 
 /** Local tools (or none) for this call. MCP tools are not available on the CLI path yet. */
@@ -96,5 +97,6 @@ export async function callApiProvider(o: ApiCallOptions): Promise<CallerResult> 
     model: o.model,
     cacheRead: result.usage.cacheReadTokens,
     cacheCreation: result.usage.cacheWriteTokens,
+    toolCallCount: result.usage.toolCalls,
   };
 }

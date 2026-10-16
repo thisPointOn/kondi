@@ -68,6 +68,8 @@ export interface CallerResult {
   inputTokens?: number;
   outputTokens?: number;
   usageReported?: boolean;
+  /** Tool calls actually executed (undefined when the runtime can't tell). */
+  toolCallCount?: number;
 }
 
 /** Options accepted by all callLLM variants */

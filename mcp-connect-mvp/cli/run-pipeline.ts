@@ -147,7 +147,7 @@ Accepts two JSON formats:
 
 Output:
   After execution, a comprehensive execution report is saved to:
-    <working-dir>/kondi-execution-report.json
+    <working-dir>/.kondi/kondi-execution-report.json
   This includes all personas, step inputs/outputs, timing, and artifacts.
 `);
       process.exit(0);
@@ -472,9 +472,10 @@ function saveExecutionReport(
     steps: executionLog,
   };
 
-  const reportPath = path.join(workingDir, 'kondi-execution-report.json');
+  const reportDir = path.join(workingDir, '.kondi');
+  const reportPath = path.join(reportDir, 'kondi-execution-report.json');
   try {
-    fs.mkdirSync(workingDir, { recursive: true });
+    fs.mkdirSync(reportDir, { recursive: true });
     fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');
     log(C.cyan, 'Report', `Execution report saved to: ${reportPath}`);
   } catch (err) {

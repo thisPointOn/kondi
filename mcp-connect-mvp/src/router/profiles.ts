@@ -193,8 +193,8 @@ export const BUILTIN_PROFILES: Record<string, BudgetProfile> = {
       dispatch: 'nvidia/nemotron-3-ultra-550b-a55b',
       execute: 'z-ai/glm-5.2',
       reflect: 'deepseek-ai/deepseek-v4-pro',
-      compress: 'nvidia/nemotron-3-nano-30b-a3b',
-      state_update: 'nvidia/nemotron-3-nano-30b-a3b',
+      compress: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+      state_update: 'nvidia/nemotron-3.5-lightning-30b-a3b',
     },
   },
 };

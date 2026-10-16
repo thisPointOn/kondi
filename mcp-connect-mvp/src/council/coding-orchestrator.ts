@@ -62,6 +62,7 @@ import { resolveWorkerQuestion, buildWorkerQuestionAnswerPrompt, MAX_QUESTIONS_P
 import type { WorkerQuestionHandler } from './ask-back';
 import type { WorkOrderQA } from './work-order';
 import { anySignal, timeoutSignal, raceSignal, throwIfAborted, isAbortError, isTimeoutError, AbortError } from '../agent-runtime/signals';
+import { looksLikeToolNarration, NO_TOOLS_NOTE, FAKE_CALL_NOTE, NO_TOOLS_REMINDER } from '../agent-runtime/tool-narration';
 import type { AgentStreamEvent } from '../agent-runtime/types';
 import { isBudgetExceededError } from '../pipeline/budget';
 import { collectDiff } from '../pipeline/worktree';
@@ -1260,6 +1261,11 @@ export class CodingOrchestrator {
       invocation = { ...invocation, skipTools: true };
     }
     console.log(`[CodingOrchestrator] invokeAgentSafe context=${context} skipTools=${invocation.skipTools} persona=${persona.name} provider=${persona.provider}`);
+    // Tool-less phases get a standing reminder (model-agnostic): no tool calls,
+    // JSON commands or Action: lines — answer in prose.
+    if (invocation.skipTools) {
+      invocation = { ...invocation, systemPrompt: `${invocation.systemPrompt || ''}${NO_TOOLS_REMINDER}`.trim() };
+    }
 
     // Compute effective allowed servers (intersection of step + persona)
     const council = this.activeCouncilId ? councilStore.get(this.activeCouncilId) : null;
@@ -1350,6 +1356,7 @@ export class CodingOrchestrator {
     const MAX_TRANSIENT_RETRIES = 5;
     const BASE_DELAY_MS = 15_000; // 15 seconds
 
+    let narrationCorrected = false;
     for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
       throwIfAborted(this.config.signal);
       const callSignal = anySignal([
@@ -1361,6 +1368,17 @@ export class CodingOrchestrator {
         const onEvent = this.config.onAgentEvent ? (e: AgentStreamEvent) => this.config.onAgentEvent!(persona, e, context) : invocation.onEvent;
         const response = await raceSignal(this.config.invokeAgent({ ...invocation, signal: callSignal, onEvent }, persona), callSignal);
         this.config.onAgentThinkingEnd?.(persona);
+        // Fake tool calls → one corrective retry (see DeliberationOrchestrator).
+        if (!narrationCorrected && looksLikeToolNarration(response.content, invocation.allowedTools)) {
+          const noTools = !!invocation.skipTools;
+          const fakeWithTools = !noTools && response.toolCallCount === 0;
+          if (noTools || fakeWithTools) {
+            narrationCorrected = true;
+            console.warn(`[CodingOrchestrator] ${persona.name} (${context}) narrated tool calls as text — retrying once with a correction`);
+            invocation = { ...invocation, userMessage: invocation.userMessage + (noTools ? NO_TOOLS_NOTE : FAKE_CALL_NOTE) };
+            continue;
+          }
+        }
         // Per-call metadata for the ledger (self-improvement loop) — mirrors
         // DeliberationOrchestrator.invokeAgentSafe.
         response.structured = {
@@ -1372,6 +1390,8 @@ export class CodingOrchestrator {
             outputTokens: response.outputTokens,
             attempts: attempt + 1,
             routed: isRoutedModel(persona.provider, persona.model),
+            ...(narrationCorrected ? { narrationRetry: true } : {}),
+            ...(response.toolCallCount !== undefined ? { toolCalls: response.toolCallCount } : {}),
           },
         };
         return response;

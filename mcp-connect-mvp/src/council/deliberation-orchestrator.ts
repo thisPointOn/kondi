@@ -79,6 +79,7 @@ import {
 } from './ask-back';
 import type { WorkerQuestionHandler } from './ask-back';
 import { anySignal, timeoutSignal, raceSignal, throwIfAborted, isAbortError, isTimeoutError, AbortError } from '../agent-runtime/signals';
+import { looksLikeToolNarration, NO_TOOLS_NOTE, FAKE_CALL_NOTE } from '../agent-runtime/tool-narration';
 import type { AgentStreamEvent } from '../agent-runtime/types';
 import { isBudgetExceededError } from '../pipeline/budget';
 import { collectDiff } from '../pipeline/worktree';
@@ -139,6 +140,10 @@ export interface AgentResponse {
   provider?: string;
   inputTokens?: number;
   outputTokens?: number;
+  /** Tool calls the runtime ACTUALLY executed for this call (undefined = unknown,
+   *  e.g. a CLI binary that ran its own tools). Lets the orchestrator tell a
+   *  real tool run from narrated pseudo-calls. */
+  toolCallCount?: number;
 }
 
 export type AgentInvoker = (invocation: AgentInvocation, persona: Persona) => Promise<AgentResponse>;
@@ -3173,6 +3178,11 @@ export class DeliberationOrchestrator {
       `timeout: ${Math.round((invocation.timeoutMs || 0) / 1000)}s`
     );
 
+    // Fake tool calls: a reply that narrates tool calls as text gets ONE
+    // corrective retry — whether the persona had no tools (manager phases) or
+    // had tools but wrote the call instead of making it (toolCallCount === 0).
+    let narrationCorrected = false;
+
     for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
       // Real cancellation: run abort ∪ this attempt's timeout, passed to the
       // invoker AND raced here (so a transport that ignores the signal still
@@ -3188,6 +3198,17 @@ export class DeliberationOrchestrator {
         const onEvent = this.config.onAgentEvent ? (e: AgentStreamEvent) => this.config.onAgentEvent!(persona, e, context) : invocation.onEvent;
         const response = await raceSignal(this.config.invokeAgent({ ...invocation, signal: callSignal, onEvent }, persona), callSignal);
         this.config.onAgentThinkingEnd?.(persona);
+        if (!narrationCorrected && looksLikeToolNarration(response.content, invocation.allowedTools)) {
+          const noTools = !!invocation.skipTools;
+          const fakeWithTools = !noTools && response.toolCallCount === 0;
+          if (noTools || fakeWithTools) {
+            narrationCorrected = true;
+            console.warn(`[Orchestrator] ${persona.name} (${context}) narrated tool calls as text${noTools ? ' with no tools' : ' without calling any'} — retrying once with a correction`);
+            this.config.onError?.(new Error(`${persona.name} wrote tool calls as text — retrying with a correction`), context);
+            invocation = { ...invocation, userMessage: invocation.userMessage + (noTools ? NO_TOOLS_NOTE : FAKE_CALL_NOTE) };
+            continue;
+          }
+        }
         const callDuration = ((Date.now() - startedAt) / 1000).toFixed(1);
         console.log(`[Orchestrator:Call] ${persona.name} (${context}) completed in ${callDuration}s — ${response.tokensUsed} tokens`);
         // Attach context inspection + per-call metadata (concrete model, token
@@ -3201,6 +3222,8 @@ export class DeliberationOrchestrator {
           outputTokens: response.outputTokens,
           attempts: attempt + 1,
           routed: isRoutedModel(persona.provider, persona.model),
+          ...(narrationCorrected ? { narrationRetry: true } : {}),
+          ...(response.toolCallCount !== undefined ? { toolCalls: response.toolCallCount } : {}),
         };
         response.structured = { ...response.structured, contextInspection: inspection, callMeta };
         return response;

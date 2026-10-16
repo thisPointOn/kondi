@@ -12,6 +12,8 @@ export interface ParsedOutput {
   /** Real usage split from the CLI's stream events (0 when not reported). */
   inputTokens?: number;
   outputTokens?: number;
+  /** Tool calls the CLI binary actually made (tool_use blocks / function_call items). */
+  toolCalls?: number;
 }
 
 /**
@@ -37,6 +39,7 @@ export function parseStreamJsonOutput(rawOutput: string): ParsedOutput {
   const errorChunks: string[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
+  let toolCalls = 0;
   let sessionId: string | undefined;
 
   for (const line of lines) {
@@ -64,6 +67,7 @@ export function parseStreamJsonOutput(rawOutput: string): ParsedOutput {
           if (block.type === 'text' && block.text) {
             textChunks.push(block.text);
           }
+          if (block.type === 'tool_use') toolCalls++;
         }
         if (json.message?.usage) {
           inputTokens += json.message.usage.input_tokens || 0;
@@ -97,7 +101,7 @@ export function parseStreamJsonOutput(rawOutput: string): ParsedOutput {
   }
 
   const text = parts.length > 0 ? parts.join('').trim() : rawOutput;
-  return { text, tokensUsed: inputTokens + outputTokens, sessionId, inputTokens, outputTokens };
+  return { text, tokensUsed: inputTokens + outputTokens, sessionId, inputTokens, outputTokens, toolCalls };
 }
 
 // ============================================================================
@@ -215,11 +219,16 @@ export function parseCodexJsonOutput(rawOutput: string): ParsedOutput {
   const textChunks: string[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
+  let toolCalls = 0;
   let sessionId: string | undefined;
 
   for (const line of lines) {
     try {
       const json = JSON.parse(line);
+
+      if (json.type === 'item.completed' && json.item && /function_call|command_execution|mcp_tool_call|file_change|tool/i.test(String(json.item.type || ''))) {
+        toolCalls++;
+      }
 
       if (json.type === 'thread.started' && json.thread_id) {
         sessionId = json.thread_id;
@@ -247,5 +256,5 @@ export function parseCodexJsonOutput(rawOutput: string): ParsedOutput {
   }
 
   const text = textChunks.join('\n').trim() || rawOutput;
-  return { text, tokensUsed: inputTokens + outputTokens, sessionId, inputTokens, outputTokens };
+  return { text, tokensUsed: inputTokens + outputTokens, sessionId, inputTokens, outputTokens, toolCalls };
 }

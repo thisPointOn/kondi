@@ -117,6 +117,8 @@ export interface SimpleCompletionResult {
   outputTokens?: number;
   /** True when inputTokens/outputTokens came from the provider, not an estimate. */
   usageReported?: boolean;
+  /** Tool calls actually executed during this completion. */
+  toolCallCount?: number;
 }
 
 // ============================================================================
@@ -354,5 +356,6 @@ export async function simpleCompletion(params: SimpleCompletionParams): Promise<
     inputTokens,
     outputTokens,
     usageReported: reported,
+    toolCallCount: result.toolCalls?.length ?? 0,
   };
 }

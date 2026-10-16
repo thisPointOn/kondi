@@ -108,4 +108,8 @@ export interface RunToolLoopResult {
   usage: UsageTotals;
   turns: number;
   hitMaxTurns: boolean;
+  /** Tool calls the model wrote as TEXT that the loop recovered and executed for real. */
+  recoveredToolCalls: number;
+  /** Times the loop had to tell the model its "calls" were only text (max 1). */
+  narrationNudges: number;
 }

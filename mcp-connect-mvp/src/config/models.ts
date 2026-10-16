@@ -47,6 +47,14 @@ export interface ModelDefinition {
    * registry builder derives a reasonable set from `capabilities` + `tier`.
    */
   routingCapabilities?: string[];
+  /**
+   * Extra request-body fields merged into every chat/completions call for this
+   * model (OpenAI-compatible providers). Used to switch off a reasoning model's
+   * hidden thinking (e.g. NIM Nemotron 3.5: `chat_template_kwargs.enable_thinking`),
+   * which otherwise burns the whole token budget on `reasoning_content` and
+   * returns an empty answer for anything longer than a sentence.
+   */
+  requestOverrides?: Record<string, unknown>;
 }
 
 // ============================================================================
@@ -586,17 +594,26 @@ export const NVIDIA_MODELS: ModelDefinition[] = [
     tier: 3,
     routingCapabilities: ['fast-coding', 'reasoning', 'summarization', 'general'],
   },
+  // Nemotron 3 Nano (nvidia/nemotron-3-nano-30b-a3b) reached end of life on
+  // 2026-09-01 (HTTP 410) and was replaced by the newest small Nemotron.
+  // `nvidia/nemotron-nano-3-30b-a3b` is listed by /models but 404s ("Function
+  // not found") for this account — excluded. Verified 2026-10-16 with real
+  // token counts: Lightning streams, calls tools, but is a REASONING model that
+  // spends thousands of hidden `reasoning_content` tokens by default (a 150-word
+  // essay never reached `content` within 2000 tokens, ~2 min); with thinking
+  // off it answers in ~10s. Hence the requestOverrides.
   {
-    id: 'nvidia/nemotron-3-nano-30b-a3b',
-    name: 'Nemotron 3 Nano 30B',
+    id: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+    name: 'Nemotron 3.5 Lightning 30B',
     provider: 'nvidia-router',
     contextWindow: 128000,
-    capabilities: ['text', 'code'],
+    capabilities: ['text', 'code', 'reasoning'],
     inputCostPer1K: 0,
     outputCostPer1K: 0,
     costDisplay: 'NIM',
     tier: 3,
     routingCapabilities: ['fast-coding', 'summarization', 'general'],
+    requestOverrides: { chat_template_kwargs: { enable_thinking: false } },
   },
 ];
 
