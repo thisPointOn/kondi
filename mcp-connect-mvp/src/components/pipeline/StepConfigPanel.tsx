@@ -614,12 +614,19 @@ export function BoundCouncilStepPanel({
   onOpenCouncil,
   onDelete,
   onClose,
+  codebaseMode,
+  keepWorktree,
+  onCodebaseChange,
 }: {
   councilId: string;
   problems?: string[];
   onOpenCouncil?: (councilId: string) => void;
   onDelete: () => void;
   onClose: () => void;
+  /** Pipeline-owned (top-level step config) worktree settings — bound councils keep an empty councilSetup. */
+  codebaseMode?: 'isolated' | 'worktree';
+  keepWorktree?: boolean;
+  onCodebaseChange?: (patch: { codebaseMode?: 'isolated' | 'worktree'; keepWorktree?: boolean }) => void;
 }) {
   const [, force] = useState(0);
   useEffect(() => councilStore.subscribe(() => force((n) => n + 1)), []);
@@ -631,6 +638,25 @@ export function BoundCouncilStepPanel({
         <h3>Council Step</h3>
         <button className="config-close-btn" onClick={onClose}>&times;</button>
       </div>
+
+      {onCodebaseChange && (
+        <div className="config-section">
+          <div className="config-section-title">Codebase</div>
+          <div className="config-field">
+            <label>Where the workers operate</label>
+            <select value={codebaseMode || 'isolated'} onChange={(e) => onCodebaseChange({ codebaseMode: e.target.value as 'isolated' | 'worktree' })}>
+              <option value="isolated">Isolated — the working directory as-is</option>
+              <option value="worktree">Git worktree — a branch of the real repository</option>
+            </select>
+            {codebaseMode === 'worktree' && (
+              <label className="hint">
+                <input type="checkbox" checked={!!keepWorktree} onChange={(e) => onCodebaseChange({ keepWorktree: e.target.checked })} />
+                {' '}Keep the worktree after the step
+              </label>
+            )}
+          </div>
+        </div>
+      )}
 
       {problems && problems.length > 0 && (
         <div className="config-problems">
@@ -1238,6 +1264,37 @@ function CouncilConfig({
           )}
         </div>
       )}
+
+      <div className="config-section">
+        <div className="config-section-title">Codebase</div>
+        <div className="config-field">
+          <label>Where the workers operate</label>
+          <select
+            value={config.codebaseMode || 'isolated'}
+            onChange={(e) => onChange({ ...config, codebaseMode: e.target.value as 'isolated' | 'worktree' } as StepConfig)}
+          >
+            <option value="isolated">Isolated — the working directory as-is</option>
+            <option value="worktree">Git worktree — a branch of the real repository</option>
+          </select>
+          <span className="hint">
+            {config.codebaseMode === 'worktree'
+              ? 'The pipeline working directory must be a git repo root. The step runs in .kondi/worktrees/<run>-<step> on branch kondi/<pipeline>/<run>; Kondi commits after the step and emits the diff + a .patch as the artifact. Workers never commit.'
+              : 'Workers write into the configured working directory; nothing is committed.'}
+          </span>
+        </div>
+        {config.codebaseMode === 'worktree' && (
+          <div className="config-field checkbox-field">
+            <label>
+              <input
+                type="checkbox"
+                checked={!!config.keepWorktree}
+                onChange={(e) => onChange({ ...config, keepWorktree: e.target.checked } as StepConfig)}
+              />
+              {' '}Keep the worktree on disk after the step (the branch is always kept)
+            </label>
+          </div>
+        )}
+      </div>
 
       <div className="config-section">
         <div className="config-section-title">Input / Output</div>

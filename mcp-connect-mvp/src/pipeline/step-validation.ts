@@ -103,7 +103,11 @@ export function validateStep(
   const config = step.config;
 
   if (isCouncilType(config.type)) {
-    return validateCouncilStep(config as CouncilStepConfig, configuredProviders);
+    const problems = validateCouncilStep(config as CouncilStepConfig, configuredProviders);
+    if ((config as CouncilStepConfig).codebaseMode === 'worktree' && !pipeline.settings.workingDirectory?.trim()) {
+      problems.push('Worktree mode needs a pipeline working directory (a git repository root)');
+    }
+    return problems;
   }
   if (config.type === 'script') {
     const c = config as ScriptStepConfig;

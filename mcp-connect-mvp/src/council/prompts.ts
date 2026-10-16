@@ -788,13 +788,16 @@ export function buildManagerReviewPrompt(
   stepType?: CouncilStepType,
   consultantReviews?: string,
   verification?: string,
+  diff?: string,
 ): string {
   const criteriaSection = acceptanceCriteria
     ? `\nACCEPTANCE CRITERIA (from your decision):\n${acceptanceCriteria}\n`
     : '';
-  const verificationSection = verification
+  const verificationSection = (verification
     ? `\nVERIFICATION (run by the orchestrator, not the worker): ${verification}\nTreat this as the authoritative test result.\n`
-    : '';
+    : '') + (diff
+    ? `\n## DIFF (authoritative — what ACTUALLY changed in the repository since the step started)\n\`\`\`diff\n${diff}\n\`\`\`\nReview the diff, not the worker's description of it.\n`
+    : '');
 
   const expectedOutputSection = expectedOutput
     ? `\nEXPECTED OUTPUT (the deliverable MUST match this):\n${expectedOutput}\n`
@@ -1584,14 +1587,17 @@ export function buildCodeReviewPrompt(
   spec: string,
   workerOutputs: Array<{ moduleName: string; output: string }>,
   expectedOutput?: string,
+  diff?: string,
 ): string {
   const outputsSection = workerOutputs
     .map((w) => `### Module: ${w.moduleName}\n${w.output}`)
     .join('\n\n---\n\n');
 
-  const expectedSection = expectedOutput
+  const expectedSection = (expectedOutput
     ? `\n## EXPECTED OUTPUT\n${expectedOutput}\n`
-    : '';
+    : '') + (diff
+    ? `\n## DIFF (authoritative — what ACTUALLY changed since the snapshot)\n\`\`\`diff\n${diff}\n\`\`\`\nReview the diff first; the worker prose below is only its own account.\n`
+    : '');
 
   return `You are a code reviewer. Review all worker implementations against the original specification.
 

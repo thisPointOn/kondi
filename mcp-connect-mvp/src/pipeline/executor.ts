@@ -52,6 +52,8 @@ import { BudgetMeter, hasBudget, formatBudgetLine, isBudgetExceededError } from 
 import type { BudgetState } from './budget';
 import { buildLessonBundle } from '../improve/lessons';
 import { buildSeatBriefs } from '../improve/seat-brief';
+import { isRepoTopLevel, ensureKondiExcluded, prepareWorktree, collectDiff, commitWorktree, formatPatch, removeWorktree, formatWorktreeArtifact, slugify } from './worktree';
+import type { WorktreeInfo } from './worktree';
 import { runImprovementCycle, liveSettings } from '../improve/cycle';
 import type { RunScorecard, ImproveEvent } from '../improve/types';
 import {
@@ -979,17 +981,84 @@ export class PipelineExecutor {
       seatBriefs,
     };
 
-    if (config.type === 'coding') {
-      const codingOrchestrator = new CodingOrchestrator({
-        ...orchestratorCallbacks,
-        runCommand: this.platform.runCommand,
-        readFile: this.platform.readFile,
-      });
-      await codingOrchestrator.runCodingWorkflow(council, rawProblem);
-    } else {
-      const deliberator = new DeliberationOrchestrator(orchestratorCallbacks);
-      await deliberator.runFullDeliberation(council, rawProblem);
+    // Worktree mode: the step works on the REAL repository in its own git
+    // worktree + branch (pipeline working dir must be a repo top-level; else
+    // fall back to isolated). Workers never commit — we do, after the step.
+    let worktree: WorktreeInfo | undefined;
+    const repoRoot = pipelineSettings.workingDirectory;
+    if (config.codebaseMode === 'worktree' && this.platform.runCommand && repoRoot) {
+      const run = this.platform.runCommand;
+      if (await isRepoTopLevel(run, repoRoot)) {
+        try {
+          await ensureKondiExcluded(run, repoRoot);
+          worktree = await prepareWorktree(run, {
+            repoRoot, runId: this.runId,
+            stepSlug: slugify(step.name), pipelineSlug: slugify(pipelineStore.get(pipelineId)?.name || pipelineId),
+          });
+          this.callbacks.onLog?.(`${step.name}: worktree ${worktree.worktreePath} on branch ${worktree.branch} (base ${worktree.baseSha.slice(0, 8)})`);
+        } catch (err) {
+          console.warn('[Pipeline:Council] Worktree setup failed — running isolated:', err);
+          this.callbacks.onLog?.(`${step.name}: worktree setup failed (${(err as Error).message}) — running isolated`);
+          worktree = undefined;
+        }
+      } else {
+        console.warn(`[Pipeline:Council] Worktree mode requested but ${repoRoot} is not a git repo top-level — running isolated`);
+        this.callbacks.onLog?.(`${step.name}: working dir is not a git repo top-level — worktree mode skipped (isolated)`);
+      }
+    } else if (config.codebaseMode === 'worktree') {
+      this.callbacks.onLog?.(`${step.name}: worktree mode needs a pipeline working directory — running isolated`);
     }
+
+    // Worktree bookkeeping runs after the council whether it succeeded or failed:
+    // commit what was done, write the .patch, and remove the worktree (kept on
+    // failure or when keepWorktree is set; the branch is always kept).
+    let worktreeResult: { headSha: string; diff: Awaited<ReturnType<typeof collectDiff>>; patchPath?: string } | undefined;
+    const finishWorktree = async (failed: boolean) => {
+      if (!worktree || !this.platform.runCommand) return;
+      const run = this.platform.runCommand;
+      try {
+        const diff = await collectDiff(run, worktree.worktreePath, worktree.baseSha);
+        const { headSha } = await commitWorktree(run, worktree.worktreePath, `kondi(${slugify(step.name)}): ${step.name}${failed ? ' [step failed]' : ''}`);
+        let patchPath: string | undefined;
+        if (this.currentRunDir) {
+          try {
+            const patch = await formatPatch(run, worktree.worktreePath, worktree.baseSha);
+            patchPath = `${this.currentRunDir}/${slugify(step.name)}.patch`;
+            await this.platform.writeFile(patchPath, patch);
+          } catch (err) { console.warn('[Pipeline:Council] Could not write patch:', err); patchPath = undefined; }
+        }
+        worktreeResult = { headSha, diff, patchPath };
+        if (!failed && !config.keepWorktree) {
+          await removeWorktree(run, worktree.repoRoot, worktree.worktreePath);
+          this.callbacks.onLog?.(`${step.name}: committed ${headSha.slice(0, 8)} on ${worktree.branch}; worktree removed (branch kept)`);
+        } else {
+          this.callbacks.onLog?.(`${step.name}: committed ${headSha.slice(0, 8)} on ${worktree.branch}; worktree kept at ${worktree.worktreePath}`);
+        }
+      } catch (err) {
+        console.warn('[Pipeline:Council] Worktree finish failed:', err);
+        this.callbacks.onLog?.(`${step.name}: worktree commit/patch failed (${(err as Error).message}); worktree left at ${worktree.worktreePath}`);
+      }
+    };
+
+    try {
+      if (config.type === 'coding') {
+        const codingOrchestrator = new CodingOrchestrator({
+          ...orchestratorCallbacks,
+          runCommand: this.platform.runCommand,
+          readFile: this.platform.readFile,
+          codebase: worktree,
+        });
+        await codingOrchestrator.runCodingWorkflow(council, rawProblem);
+      } else {
+        const deliberator = new DeliberationOrchestrator({ ...orchestratorCallbacks, codebase: worktree });
+        await deliberator.runFullDeliberation(council, rawProblem);
+      }
+    } catch (err) {
+      await finishWorktree(true);
+      throw err;
+    }
+    const endPhase = councilStore.get(council.id)?.deliberationState?.currentPhase;
+    await finishWorktree(endPhase === 'failed' || endPhase === 'paused' || endPhase === 'cancelled');
 
     // HONEST STEP OUTCOME: a council that ended in the 'failed' phase (rule 17:
     // the worker produced nothing usable) or was left 'paused' is NOT a
@@ -1100,6 +1169,20 @@ export class PipelineExecutor {
     // wrapping so downstream `{{input.field}}` access stays reliable.
     if (metadata.outputType === 'json') {
       content = extractJsonBlock(content);
+    }
+
+    // Worktree steps: the artifact IS the change (branch, base→head, files,
+    // diff, then the worker's own summary) so a downstream step or script can
+    // merge / open a PR from it.
+    if (worktree && worktreeResult) {
+      content = formatWorktreeArtifact(worktree, worktreeResult.headSha, worktreeResult.diff, content, worktreeResult.patchPath);
+      metadata.codebaseMode = 'worktree';
+      metadata.branch = worktree.branch;
+      metadata.worktreePath = worktree.worktreePath;
+      metadata.baseSha = worktree.baseSha;
+      metadata.headSha = worktreeResult.headSha;
+      metadata.patchPath = worktreeResult.patchPath;
+      metadata.filesChanged = worktreeResult.diff.files;
     }
 
     // Strip the localStorage copy of this council's metadata to keep the

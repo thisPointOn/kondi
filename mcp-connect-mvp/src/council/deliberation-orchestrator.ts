@@ -81,6 +81,8 @@ import type { WorkerQuestionHandler } from './ask-back';
 import { anySignal, timeoutSignal, raceSignal, throwIfAborted, isAbortError, isTimeoutError, AbortError } from '../agent-runtime/signals';
 import type { AgentStreamEvent } from '../agent-runtime/types';
 import { isBudgetExceededError } from '../pipeline/budget';
+import { collectDiff } from '../pipeline/worktree';
+import type { WorktreeInfo } from '../pipeline/worktree';
 
 import {
   buildManagerFramingPrompt,
@@ -185,6 +187,9 @@ export interface OrchestratorConfig {
   /** Run budget status line injected into EVERY persona's prompt (after the
    *  lessons). Supplied per run by the executor's BudgetMeter. */
   budgetLine?: () => string | undefined;
+  /** Worktree mode (executor-prepared): workers operate in `worktreePath` on
+   *  `branch`; the council record's workingDirectory is NEVER mutated. */
+  codebase?: WorktreeInfo;
   /** Whether this runtime can actually EXECUTE tools for a persona's provider.
    *  Default true (app, where API clients run tool loops). The headless CLI
    *  runner returns true only for the claude/codex binaries so API-provider
@@ -779,9 +784,9 @@ export class DeliberationOrchestrator {
 
     // Bootstrap directory context if enabled
     let enrichedProblem = rawProblem;
-    if (council.deliberation?.bootstrapContext && council.deliberation?.workingDirectory) {
+    if (council.deliberation?.bootstrapContext && this.workDir(council)) {
       try {
-        const dirContext = await bootstrapDirectoryContext(council.deliberation.workingDirectory);
+        const dirContext = await bootstrapDirectoryContext(this.workDir(council)!);
         if (dirContext) {
           enrichedProblem = `${dirContext}\n\n---\n\n${rawProblem}`;
         }
@@ -1684,11 +1689,21 @@ export class DeliberationOrchestrator {
    * The verify command for this council: explicit config → `deliberation.testCommand`
    * → auto-detected (file/directory outputs, when a readFile hook exists). Cached.
    */
+  /** Effective working dir: the executor's worktree (if any) else the council's. */
+  private workDir(council: Council): string | undefined {
+    return this.config.codebase?.worktreePath ?? council.deliberation?.workingDirectory;
+  }
+
+  private codebasePerm(): WorkerPermissions['codebase'] {
+    const c = this.config.codebase;
+    return c ? { mode: 'worktree', branch: c.branch, repoRoot: c.repoRoot } : undefined;
+  }
+
   private async resolveVerifyCommand(council: Council): Promise<string | undefined> {
     if (this.verifyCommands.has(council.id)) return this.verifyCommands.get(council.id) || undefined;
     let cmd: string | null = this.config.verify?.command?.trim() || council.deliberation?.testCommand?.trim() || null;
     const outputType = council.deliberation?.outputType;
-    const wd = council.deliberation?.workingDirectory;
+    const wd = this.workDir(council);
     const auto = this.config.verify?.autoDetect ?? (outputType === 'file' || outputType === 'directory');
     if (!cmd && auto && wd && this.config.readFile) {
       try {
@@ -1702,6 +1717,7 @@ export class DeliberationOrchestrator {
 
   /** Attach the verify command to a FULL-tools worker's permissions (text workers can't run it). */
   private async withVerify(council: Council, perms: WorkerPermissions): Promise<WorkerPermissions> {
+    perms = { ...perms, workingDirectory: this.workDir(council), codebase: this.codebasePerm() };
     if (!perms.writePermissions) return perms;
     const cmd = await this.resolveVerifyCommand(council);
     if (!cmd) return perms;
@@ -1715,7 +1731,7 @@ export class DeliberationOrchestrator {
    */
   private async runFinalVerification(council: Council, phase: DeliberationPhase): Promise<{ passed: boolean; exitCode: number; tail: string; command: string } | undefined> {
     const cmd = await this.resolveVerifyCommand(council);
-    const wd = council.deliberation?.workingDirectory;
+    const wd = this.workDir(council);
     if (!cmd || !wd || !this.config.runCommand) return undefined;
     const manager = getPersonaByRole(council, 'manager')[0] || getPersonaByRole(council, 'worker')[0];
     let result: { stdout: string; stderr: string; exit_code: number };
@@ -1884,7 +1900,7 @@ export class DeliberationOrchestrator {
     // is driven as a text agent (not told to write files it can't write).
     const workerPermissions: WorkerPermissions = await this.withVerify(council, {
       writePermissions: this.effectiveWrite(assignment, council.deliberation?.outputType),
-      workingDirectory: council.deliberation?.workingDirectory,
+      workingDirectory: this.workDir(council),
       directoryConstrained: council.deliberation?.directoryConstrained,
     });
 
@@ -2107,6 +2123,14 @@ export class DeliberationOrchestrator {
       // Build prompts per Section 9.8
       const systemPrompt = manager.predisposition.systemPrompt;
       const expectedOutput = council.deliberation?.expectedOutput;
+      // Worktree mode: the manager reviews the real DIFF, not the worker's account.
+      let diffText: string | undefined;
+      if (this.config.codebase && this.config.runCommand && hasWritePermissions) {
+        try {
+          const d = await collectDiff(this.config.runCommand, this.config.codebase.worktreePath, this.config.codebase.baseSha);
+          diffText = d.diff.trim() ? d.diff : '(no changes in the repository)';
+        } catch (err) { console.warn('[Orchestrator] collectDiff failed:', err); }
+      }
       const userMessage = buildManagerReviewPrompt(
         output.content,
         directive.content,
@@ -2116,6 +2140,7 @@ export class DeliberationOrchestrator {
         stepType,
         consultantReviews,
         verification ? `PASSED — the orchestrator ran \`${verification.command}\` and it exited 0.` : undefined,
+        diffText,
       );
 
       const response = await this.invokeAgentSafe(
@@ -2242,7 +2267,7 @@ export class DeliberationOrchestrator {
     // Build worker permissions from role assignment + deliberation config
     const workerPermissions: WorkerPermissions = await this.withVerify(council, {
       writePermissions: this.effectiveWrite(assignment, council.deliberation?.outputType),
-      workingDirectory: council.deliberation?.workingDirectory,
+      workingDirectory: this.workDir(council),
       directoryConstrained: council.deliberation?.directoryConstrained,
     });
 
@@ -2340,9 +2365,9 @@ export class DeliberationOrchestrator {
 
     // Bootstrap directory context if enabled
     let enrichedProblem = rawProblem;
-    if (council.deliberation?.bootstrapContext && council.deliberation?.workingDirectory) {
+    if (council.deliberation?.bootstrapContext && this.workDir(council)) {
       try {
-        const dirContext = await bootstrapDirectoryContext(council.deliberation.workingDirectory);
+        const dirContext = await bootstrapDirectoryContext(this.workDir(council)!);
         if (dirContext) {
           enrichedProblem = `${dirContext}\n\n---\n\n${rawProblem}`;
         }
@@ -2371,7 +2396,7 @@ export class DeliberationOrchestrator {
     // Build worker permissions
     const workerPermissions: WorkerPermissions = await this.withVerify(council, {
       writePermissions: this.effectiveWrite(assignment, council.deliberation?.outputType),
-      workingDirectory: council.deliberation?.workingDirectory,
+      workingDirectory: this.workDir(council),
       directoryConstrained: council.deliberation?.directoryConstrained,
     });
 
@@ -3076,7 +3101,7 @@ export class DeliberationOrchestrator {
     }
 
     // Thread working directory from council so each invocation uses its own dir
-    const councilDir = council?.deliberation?.workingDirectory;
+    const councilDir = council ? this.workDir(council) : undefined;
     if (councilDir) {
       invocation = { ...invocation, workingDirectory: councilDir };
     }

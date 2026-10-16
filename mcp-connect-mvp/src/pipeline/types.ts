@@ -78,6 +78,14 @@ export interface StepArtifact {
     conditionNote?: string;
     /** Council steps that FAILED: the council's terminal phase ('failed' | 'paused' | 'cancelled'). */
     terminalPhase?: string;
+    /** Worktree-mode steps (see CouncilStepConfig.codebaseMode). */
+    codebaseMode?: 'isolated' | 'worktree';
+    branch?: string;
+    worktreePath?: string;
+    baseSha?: string;
+    headSha?: string;
+    patchPath?: string;
+    filesChanged?: string[];
   };
   createdAt: string;
 }
@@ -211,6 +219,14 @@ export interface CouncilStepConfig {
   outputType?: OutputType;
   /** Include pipeline's initial input as additional context, regardless of stage */
   includePipelineInput?: boolean;
+  /** Where the step's workers operate. 'isolated' (default): the configured
+   *  working dir as-is. 'worktree': a `git worktree` of the pipeline's working
+   *  dir (which must be a repo top-level) on branch `kondi/<pipeline>/<run>`;
+   *  the executor commits after the step and emits a diff artifact + .patch.
+   *  See `src/pipeline/worktree.ts`. */
+  codebaseMode?: 'isolated' | 'worktree';
+  /** Worktree mode: keep the worktree on disk after the step (default: removed; the branch is always kept). */
+  keepWorktree?: boolean;
 }
 
 export interface LlmStepConfig {

@@ -443,6 +443,9 @@ export default function PipelineBuilder({
           onOpenCouncil={onOpenCouncil}
           onDelete={handleRemoveStep}
           onClose={() => setSelectedStepId(null)}
+          codebaseMode={(selectedStep.step.config as { codebaseMode?: 'isolated' | 'worktree' }).codebaseMode}
+          keepWorktree={(selectedStep.step.config as { keepWorktree?: boolean }).keepWorktree}
+          onCodebaseChange={(patch) => pipelineStore.updateStepConfig(pipelineId, selectedStep.step.id, { ...selectedStep.step.config, ...patch } as StepConfig)}
         />
       ) : selectedStep ? (
         <StepConfigPanel

@@ -64,6 +64,8 @@ import type { WorkOrderQA } from './work-order';
 import { anySignal, timeoutSignal, raceSignal, throwIfAborted, isAbortError, isTimeoutError, AbortError } from '../agent-runtime/signals';
 import type { AgentStreamEvent } from '../agent-runtime/types';
 import { isBudgetExceededError } from '../pipeline/budget';
+import { collectDiff } from '../pipeline/worktree';
+import type { WorktreeInfo } from '../pipeline/worktree';
 
 export interface CodingOrchestratorConfig {
   invokeAgent: AgentInvoker;
@@ -86,6 +88,8 @@ export interface CodingOrchestratorConfig {
   /** Run budget status line injected into EVERY persona's prompt (after the
    *  lessons). Supplied per run by the executor's BudgetMeter. */
   budgetLine?: () => string | undefined;
+  /** Worktree mode (executor-prepared): see OrchestratorConfig.codebase. */
+  codebase?: WorktreeInfo;
   onPhaseChange?: (from: DeliberationPhase, to: DeliberationPhase) => void;
   onEntryAdded?: (entry: LedgerEntry) => void;
   onError?: (error: Error, context: string) => void;
@@ -123,6 +127,18 @@ export class CodingOrchestrator {
   private config: CodingOrchestratorConfig;
   /** councilId → verify command (install && build && test) or null; resolved before implementation. */
   private verifyCommands = new Map<string, string | null>();
+  /** councilId → pre-run git snapshot sha (the base the reviewer's diff is taken from). */
+  private snapshotShas = new Map<string, string>();
+
+  /** Effective working dir: the executor's worktree (if any) else the council's. */
+  private workDir(council: Council): string | undefined {
+    return this.config.codebase?.worktreePath ?? council.deliberation?.workingDirectory;
+  }
+
+  private codebasePerm(): WorkerPermissions['codebase'] {
+    const c = this.config.codebase;
+    return c ? { mode: 'worktree', branch: c.branch, repoRoot: c.repoRoot } : undefined;
+  }
   /** Active council ID for the current workflow */
   private activeCouncilId: string | null = null;
   /** Phase-level rate limit retry count (reset per workflow start) */
@@ -152,9 +168,9 @@ export class CodingOrchestrator {
 
     // Bootstrap directory context if enabled
     let enrichedSpec = spec;
-    if (council.deliberation?.bootstrapContext && council.deliberation?.workingDirectory) {
+    if (council.deliberation?.bootstrapContext && this.workDir(council)) {
       try {
-        const dirContext = await bootstrapDirectoryContext(council.deliberation.workingDirectory);
+        const dirContext = await bootstrapDirectoryContext(this.workDir(council)!);
         if (dirContext) {
           enrichedSpec = `${dirContext}\n\n---\n\n${spec}`;
         }
@@ -166,6 +182,7 @@ export class CodingOrchestrator {
     try {
       // Git snapshot before any changes
       snapshotSha = await this.createGitSnapshot(council);
+      if (snapshotSha) this.snapshotShas.set(council.id, snapshotSha);
 
       // Pre-create the worker's output dir. A sandboxed CLI worker (e.g. Codex)
       // often can't mkdir it itself (the patch tool can't create missing parents,
@@ -569,10 +586,11 @@ export class CodingOrchestrator {
 
         const workerPermissions: WorkerPermissions = {
           writePermissions: assignment?.writePermissions,
-          workingDirectory: council.deliberation?.workingDirectory,
+          workingDirectory: this.workDir(council),
           directoryConstrained: council.deliberation?.directoryConstrained,
           verifyCommand: assignment?.writePermissions ? (this.verifyCommands.get(council.id) || undefined) : undefined,
           verifyMaxTries: 3,
+          codebase: this.codebasePerm(),
         };
 
         const systemPrompt = suppressPersona
@@ -669,7 +687,18 @@ export class CodingOrchestrator {
       ? buildReviewerSystemPrompt()
       : reviewer.predisposition.systemPrompt;
 
-    const userMessage = buildCodeReviewPrompt(spec, workerOutputs, expectedOutput);
+    // The reviewer gets the real DIFF since the snapshot (worktree base or the
+    // pre-run commit) — authoritative over the workers' prose.
+    let diffText: string | undefined;
+    const base = this.config.codebase?.baseSha ?? this.snapshotShas.get(council.id);
+    const reviewDir = this.workDir(council);
+    if (base && reviewDir && this.config.runCommand) {
+      try {
+        const d = await collectDiff(this.config.runCommand, reviewDir, base);
+        diffText = d.diff.trim() ? d.diff : '(no changes on disk since the snapshot)';
+      } catch (err) { console.warn('[CodingOrchestrator] collectDiff failed:', err); }
+    }
+    const userMessage = buildCodeReviewPrompt(spec, workerOutputs, expectedOutput, diffText);
 
     console.log(`[CodingOrchestrator] Reviewer ${reviewer.name} reviewing ${workerOutputs.length} module(s)`);
 
@@ -711,7 +740,7 @@ export class CodingOrchestrator {
     council: Council,
     testCommand: string
   ): Promise<{ passed: boolean; output: string; skipped?: boolean }> {
-    const workingDir = council.deliberation?.workingDirectory;
+    const workingDir = this.workDir(council);
     // No way to run the command → the verification is SKIPPED, not passed. The
     // caller records a warning so the completion summary says so honestly.
     if (!workingDir) {
@@ -782,10 +811,11 @@ export class CodingOrchestrator {
 
         const workerPermissions: WorkerPermissions = {
           writePermissions: assignment?.writePermissions,
-          workingDirectory: council.deliberation?.workingDirectory,
+          workingDirectory: this.workDir(council),
           directoryConstrained: council.deliberation?.directoryConstrained,
           verifyCommand: assignment?.writePermissions ? (this.verifyCommands.get(council.id) || undefined) : undefined,
           verifyMaxTries: 3,
+          codebase: this.codebasePerm(),
         };
 
         const systemPrompt = suppressPersona
@@ -832,10 +862,11 @@ export class CodingOrchestrator {
 
       const workerPermissions: WorkerPermissions = {
         writePermissions: assignment?.writePermissions,
-        workingDirectory: council.deliberation?.workingDirectory,
+        workingDirectory: this.workDir(council),
         directoryConstrained: council.deliberation?.directoryConstrained,
         verifyCommand: assignment?.writePermissions ? (this.verifyCommands.get(council.id) || undefined) : undefined,
         verifyMaxTries: 3,
+        codebase: this.codebasePerm(),
       };
 
       const systemPrompt = suppressPersona
@@ -1035,7 +1066,7 @@ export class CodingOrchestrator {
   }
 
   private async autoDetectTestCommand(council: Council): Promise<string | null> {
-    const workingDir = council.deliberation?.workingDirectory;
+    const workingDir = this.workDir(council);
     if (!workingDir) return null;
 
     try {
@@ -1051,7 +1082,7 @@ export class CodingOrchestrator {
   }
 
   private async autoDetectBuildCommand(council: Council): Promise<string | null> {
-    const workingDir = council.deliberation?.workingDirectory;
+    const workingDir = this.workDir(council);
     if (!workingDir) return null;
 
     try {
@@ -1067,7 +1098,7 @@ export class CodingOrchestrator {
   }
 
   private async autoDetectInstallCommand(council: Council): Promise<string | null> {
-    const workingDir = council.deliberation?.workingDirectory;
+    const workingDir = this.workDir(council);
     if (!workingDir) return null;
 
     try {
@@ -1094,7 +1125,7 @@ export class CodingOrchestrator {
    * name the deliverable in the final output so the user doesn't have to hunt.
    */
   private async listChangedFiles(council: Council): Promise<string[]> {
-    const workingDir = council.deliberation?.workingDirectory;
+    const workingDir = this.workDir(council);
     if (!workingDir || !this.config.runCommand) return [];
     try {
       const res = await this.config.runCommand('git status --porcelain', workingDir);
@@ -1118,7 +1149,8 @@ export class CodingOrchestrator {
 
   /** Ensure `<workingDir>/.kondi/workspace` exists before the worker runs. */
   private async ensureWorkspaceDir(council: Council): Promise<void> {
-    const workingDir = council.deliberation?.workingDirectory;
+    if (this.config.codebase) return; // worktree mode: workers edit the repo in place
+    const workingDir = this.workDir(council);
     if (!workingDir || !this.config.runCommand) return;
     try {
       // POSIX mkdir -p; harmless no-op error on the rare Windows runner (caught).
@@ -1129,7 +1161,13 @@ export class CodingOrchestrator {
   }
 
   private async createGitSnapshot(council: Council): Promise<string | null> {
-    const workingDir = council.deliberation?.workingDirectory;
+    // Worktree mode: the executor already created the branch from HEAD — that
+    // IS the snapshot. Never commit here (the executor commits after the step).
+    if (this.config.codebase) {
+      console.log(`[CodingOrchestrator] Worktree mode — base ${this.config.codebase.baseSha} on ${this.config.codebase.branch}`);
+      return this.config.codebase.baseSha;
+    }
+    const workingDir = this.workDir(council);
     if (!workingDir || !this.config.runCommand) return null;
 
     try {
@@ -1290,7 +1328,7 @@ export class CodingOrchestrator {
     }
 
     // Thread working directory from council so each invocation uses its own dir
-    const councilDir = council?.deliberation?.workingDirectory;
+    const councilDir = council ? this.workDir(council) : undefined;
     if (councilDir) {
       invocation = { ...invocation, workingDirectory: councilDir };
     }
@@ -1549,7 +1587,7 @@ export class CodingOrchestrator {
 
   /** Read a module's files from disk (capped) so the debugger sees real code, not prose. */
   private async readModuleFiles(council: Council, files: string[]): Promise<Record<string, string> | undefined> {
-    const wd = council.deliberation?.workingDirectory;
+    const wd = this.workDir(council);
     if (!this.config.readFile || !wd || files.length === 0) return undefined;
     const PER_FILE = 8_000, TOTAL = 40_000;
     const out: Record<string, string> = {};
