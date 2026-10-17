@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Kondi is a desktop studio for assembling LLM workflow pipelines — visual graphs where every step is a deliberating council of models from any provider.">
+<meta name="description" content="Kondi is a free, open-source desktop studio for assembling LLM workflow pipelines — visual graphs where every step is a deliberating council of models from any provider. Agents get real tools, ask back when stuck and verify their own work; every run is scored and the pipeline learns from it.">
 <title>Kondi — Assemble Pipelines of Deliberating AI Councils</title>
 <style>
 /* minimal reset (the artifact host normally provides this) */
@@ -370,9 +370,11 @@ img{max-width:100%;}
     <a class="logo" href="#/"><b>⚙</b> kondi</a>
     <div class="links">
       <a href="#councils">Councils</a>
-      <a href="#flow">Control flow</a>
+      <a href="#agents">Agents</a>
       <a href="#providers">Providers</a>
       <a href="#honest">Verification</a>
+      <a href="#improve">Self-improving</a>
+      <a href="#chat">Chat</a>
       <a href="#/examples">Examples</a>
       <a href="https://github.com/thisPointOn/kondi">GitHub</a>
     </div>
@@ -383,9 +385,9 @@ img{max-width:100%;}
 
 <header class="hero" id="top">
   <div class="wrap">
-    <span class="anno">desktop llm orchestration · pipelines of councils</span>
+    <span class="anno">desktop llm orchestration · pipelines of councils · self-improving · mit</span>
     <h1>Don't prompt a model.<br><span class="convene">Convene a council.</span></h1>
-    <p class="lede">Kondi is a desktop studio for assembling LLM workflow pipelines — visual graphs where every step is a <b>deliberating council</b> of models from any provider, wired together with human gates, mechanical checks, and loops that carry feedback. Built for work you need to be <i>right</i>, not just plausible.</p>
+    <p class="lede">Kondi is a desktop studio for assembling LLM workflow pipelines — visual graphs where every step is a <b>deliberating council</b> of models from any provider, wired together with human gates, mechanical checks, and loops that carry feedback. Every seat gets real tools, a typed work order and the right to ask back; every run is scored, and the pipeline learns from it. Free and open source. Built for work you need to be <i>right</i>, not just plausible.</p>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://github.com/thisPointOn/kondi/releases">Download for desktop</a>
       <a class="btn btn-secondary" href="#/examples">See it proven end-to-end</a>
@@ -404,13 +406,13 @@ img{max-width:100%;}
       </div>
       <div class="card">
         <span class="anno">02 · any provider</span>
-        <h3>Mix nine providers in one graph</h3>
-        <p>Claude next to GPT next to DeepSeek next to a free-tier NVIDIA NIM model — per persona, per step. Even full CLI coding agents sit inside steps as tool-wielding workers.</p>
+        <h3>Mix ten providers in one graph</h3>
+        <p>Claude next to GPT next to DeepSeek next to a free-tier NVIDIA NIM model — per persona, per step. Every model gets the same contained tool loop: API models read, write and run tests in the working directory, not just the CLI coding agents.</p>
       </div>
       <div class="card">
         <span class="anno">03 · verified</span>
         <h3>Proof over plausibility</h3>
-        <p>Scripts run your tests for real. File claims are checked against git, not the model's prose. A council that fails says so — loudly.</p>
+        <p>Scripts run your tests for real. File claims are checked against git, not the model's prose. Reviewers read the diff. A council that fails — blocked, over budget, or cancelled — says so, loudly.</p>
       </div>
     </div>
   </div>
@@ -437,7 +439,7 @@ img{max-width:100%;}
           <div class="tour-copy">
             <span class="anno">deliberate</span>
             <h3>Watch the argument, entry by entry</h3>
-            <p>Every framing, debate round, decision, and revision is a ledger entry with its persona, model, token count, and cost. Multi-step workflows show a step rail; you can drill into any step's full deliberation — and ask follow-ups after it completes.</p>
+            <p>Every framing, debate round, decision, and revision is a ledger entry with its persona, model, token count, and cost. Multi-step workflows show a step rail; you can drill into any step's full deliberation — and ask follow-ups after it completes. Under each thinking seat a live tail streams its text and tool calls as they happen.</p>
           </div>
           <figure class="shot-frame">
             <div class="chrome"><i></i><i></i><i></i><span>deliberation — ledger</span></div>
@@ -448,7 +450,7 @@ img{max-width:100%;}
           <div class="tour-copy">
             <span class="anno">verify</span>
             <h3>Results with receipts</h3>
-            <p>Each step's card shows who ran it, on what models, for how long — and the actual deliverable, with the on-disk path it was saved to. Script steps show the machine's verdict, not the model's summary of it.</p>
+            <p>Each step's card shows who ran it, on what models, for how long — and the actual deliverable, with the on-disk path it was saved to. Script steps show the machine's verdict, not the model's summary of it. A run budget shows as a chip in the header; a scorecard strip tracks cost, revisions and review outcomes across runs.</p>
           </div>
           <figure class="shot-frame">
             <div class="chrome"><i></i><i></i><i></i><span>pipeline results — code factory</span></div>
@@ -476,13 +478,54 @@ img{max-width:100%;}
         </div>
         <div class="role-card">
           <span class="role-tag">worker</span>
-          <h4>Executes grounded</h4>
-          <p>Delivers the output — text, JSON, files, or code — with the original source re-attached so summaries can't drift into fiction.</p>
+          <h4>Works from a work order</h4>
+          <p>Gets a typed WORK ORDER — objective, deliverable, acceptance criteria, verification command, attempt N of M — with the original source re-attached so summaries can't drift into fiction. Can stop and ask instead of guessing.</p>
         </div>
         <div class="role-card">
           <span class="role-tag">review</span>
           <h4>Checks &amp; revises</h4>
-          <p>The deliverable is reviewed against the declared expected output; revision rounds are bounded, never endless.</p>
+          <p>The test command and the real diff are checked first, mechanically; then the deliverable is reviewed against the declared expected output. Revision rounds are bounded, never endless.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="agents">
+    <div class="wrap">
+      <h2><span class="anno secnum">§3</span>Agents that work like colleagues</h2>
+      <p class="sub">A model inside a step is not a prompt target. It gets the brief a good contractor would demand, the tools to do the job, a way to say “I'm stuck”, and the honesty to fail instead of pretend. Same protocol for every provider, in the desktop app and the headless CLI.</p>
+      <div class="desk">
+        <div class="d-card">
+          <h4>A typed work order, not a bare directive</h4>
+          <p>Objective, deliverable, acceptance criteria, constraints, verification command, attempt N of M with the reviewer's feedback, upstream inputs, and the original source material — assembled in fixed sections so nothing is lost in two hops of summarization.</p>
+        </div>
+        <div class="d-card">
+          <h4>Workers can ask back</h4>
+          <p>A worker that writes <code style="font-family:var(--mono);font-size:12px">## NEEDS INPUT</code> stops. The manager answers; if it can't, you get the question — a card in the run view or a prompt in the terminal; if nobody is there, the worker proceeds on its best judgment and <i>states its assumptions</i>. Two questions per phase, then it delivers.</p>
+        </div>
+        <div class="d-card">
+          <h4>Workers own their test loop</h4>
+          <p>Any file-producing step carries a test command — configured or auto-detected. The worker runs it before handing off; the orchestrator runs it again before any reviewer reads a word. A failure comes back as a fix order, mechanically, without spending a manager call.</p>
+        </div>
+        <div class="d-card">
+          <h4>Blocked means blocked</h4>
+          <p><code style="font-family:var(--mono);font-size:12px">Status: Blocked</code> is never quality-reviewed: the council re-deliberates once with the new information, asks for a best effort, then fails the step. No “completed” with an apology inside.</p>
+        </div>
+        <div class="d-card">
+          <h4>Watch each seat think</h4>
+          <p>Every persona streams a live tail — text as it arrives, tool calls as <code style="font-family:var(--mono);font-size:12px">→ Read(src/x.ts)</code>, results as ✓/✗ — from API models and CLI agents alike. Display only: the recorded output is always the full, parsed result.</p>
+        </div>
+        <div class="d-card">
+          <h4>Budgets and a real Abort</h4>
+          <p>Cap a run by dollars, tokens or minutes; every seat is told what's left and to prefer a smaller correct deliverable. A breach is an honest <b>failure</b>, scored like any other. Abort cancels in-flight calls and ends the run as <b>cancelled</b> — a different outcome, never confused with failure.</p>
+        </div>
+        <div class="d-card">
+          <h4>Every seat sees its own track record</h4>
+          <p>After two runs of a step, the worker is told how often it was accepted first try and which reviewer objections keep recurring; the manager sees its accept/revise counts. Brief, automatic, per seat.</p>
+        </div>
+        <div class="d-card">
+          <h4>Work on the real repo, on a branch</h4>
+          <p>Set a step's codebase to <b>git worktree</b> and it works in <code style="font-family:var(--mono);font-size:12px">.kondi/worktrees/</code> on <code style="font-family:var(--mono);font-size:12px">kondi/&lt;pipeline&gt;/&lt;run&gt;</code>. Reviewers judge the diff. Kondi commits — never the worker — writes a <code style="font-family:var(--mono);font-size:12px">.patch</code>, and keeps the branch. Follow with a script step that merges or opens the PR.</p>
         </div>
       </div>
     </div>
@@ -490,7 +533,7 @@ img{max-width:100%;}
 
   <section id="flow">
     <div class="wrap">
-      <h2><span class="anno secnum">§3</span>Control flow that argues back</h2>
+      <h2><span class="anno secnum">§4</span>Control flow that argues back</h2>
       <p class="sub">Parallel branches with strict joins, human gates, shell-script checks, typed JSON between steps, real-world inputs (text, file, directory, live URL) — and conditions that loop back to an earlier step carrying <i>exactly why</i> it was sent back, bounded by a retry budget.</p>
       <div class="compact-strip">
         <span>council</span><span>coding</span><span>code_planning</span><span>analysis</span><span>agent</span>
@@ -501,7 +544,7 @@ img{max-width:100%;}
 
   <section id="providers">
     <div class="wrap">
-      <h2><span class="anno secnum">§4</span>Every provider is a first-class citizen</h2>
+      <h2><span class="anno secnum">§5</span>Every provider is a first-class citizen</h2>
       <p class="sub">No lock-in, no lowest-common-denominator wrapper. Each persona picks its own provider and model — credentials never silently fall over between providers.</p>
       <div class="providers">
         <span>Anthropic API</span>
@@ -523,11 +566,11 @@ img{max-width:100%;}
         </div>
         <div class="router-card">
           <h4>Free-credit councils</h4>
-          <p>The NVIDIA NIM path serves curated Nemotron, DeepSeek, and GLM models on credit-based keys — iterate on multi-model councils without a USD meter.</p>
+          <p>The NVIDIA NIM path serves curated Nemotron 3 Super and Ultra, Nemotron 3.5 Lightning, DeepSeek V4 and GLM 5.2 on credit-based keys — iterate on multi-model councils without a USD meter. Every model is verified live, streaming, with tools, before it enters the catalog.</p>
         </div>
         <div class="router-card">
-          <h4>CLI agents as workers</h4>
-          <p>Put the actual <code style="font-family:var(--mono);font-size:12px">claude</code> or <code style="font-family:var(--mono);font-size:12px">codex</code> binary inside a step — a tool-wielding coding agent, write-contained to its working directory by a hardened guard.</p>
+          <h4>Tools for every model</h4>
+          <p>Put the actual <code style="font-family:var(--mono);font-size:12px">claude</code> or <code style="font-family:var(--mono);font-size:12px">codex</code> binary inside a step — or any API model: one provider-neutral tool loop gives NIM, DeepSeek, Anthropic, OpenAI and Ollama models read, write, edit, search and shell tools, path-contained to the working directory by the same hardened guard rules.</p>
         </div>
       </div>
     </div>
@@ -535,7 +578,7 @@ img{max-width:100%;}
 
   <section id="honest">
     <div class="wrap">
-      <h2><span class="anno secnum">§5</span>Engineered against the confident lie</h2>
+      <h2><span class="anno secnum">§6</span>Engineered against the confident lie</h2>
       <p class="sub">The failure mode of LLM workflows isn't crashing — it's <i>completing</i> with something plausible and wrong. Kondi's engine is built to make that hard.</p>
       <div class="honest">
         <div class="h-card">
@@ -543,8 +586,8 @@ img{max-width:100%;}
           <p>A coding council's "files produced" comes from <code>git status</code> after the run — a worker that only narrated writing files means a <b>failed</b> council, not a completed one.</p>
         </div>
         <div class="h-card">
-          <h4>Tools matched to reality</h4>
-          <p>A persona is never offered tools it can't run — the failure where a model roleplays <code>write_file(...)</code> as its answer is designed out at the grant layer.</p>
+          <h4>Tools matched to reality — and fakes caught</h4>
+          <p>A persona is never offered tools it can't run. When a model writes a tool call as text anyway — <code>Action: read_file</code>, a JSON blob, a pseudo-call — Kondi recovers the real call and executes it, or sends the reply back once with a correction. Model-agnostic, so a new cheap model can't fake its way through.</p>
         </div>
         <div class="h-card">
           <h4>Workers grounded in the source</h4>
@@ -562,20 +605,89 @@ img{max-width:100%;}
           <h4>Pre-flight validation</h4>
           <p>Misconfigured steps carry a ⚠ with the exact problems; a pipeline with warnings refuses to run until they're resolved.</p>
         </div>
+        <div class="h-card">
+          <h4>Reviewers read the diff</h4>
+          <p>Code review and the manager's final review receive the actual <code>git diff</code> of the step — authoritative over whatever the worker says it did.</p>
+        </div>
+        <div class="h-card">
+          <h4>Three honest endings</h4>
+          <p><b>completed</b> means verified. <b>failed</b> means an error, a blocked worker or a blown budget — and it is scored so the loop can learn. <b>cancelled</b> means you hit Abort. None of them hands “FAILED” text to the next step as if it were a result.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="improve">
+    <div class="wrap">
+      <h2><span class="anno secnum">§7</span>Pipelines that learn from their own runs</h2>
+      <p class="sub">Every run is scored without a single model call. Opt in, and a retrospective council reads the evidence and proposes concrete edits to the pipeline — which you approve, or let it apply itself. Nothing it does ever blocks or mutates a run in progress.</p>
+      <div class="anatomy">
+        <div class="role-card">
+          <span class="role-tag">scorecard</span>
+          <h4>Always on</h4>
+          <p>Tokens, cost, duration, revisions, review outcomes, errors, and per-step flags like “revise loop” or “tool narration” — per run, per step, per seat. A trend strip sits on top of every results view.</p>
+        </div>
+        <div class="role-card">
+          <span class="role-tag">retrospective</span>
+          <h4>A council reviews the run</h4>
+          <p>Proposes edits to prompts, tasks and settings — before/after, reasoning, evidence. <b>Manual</b> queues them; <b>auto</b> applies them. Flip between the two any time, even mid-cycle. Models, routing and structure stay off unless you allow them.</p>
+        </div>
+        <div class="role-card">
+          <span class="role-tag">eval</span>
+          <h4>Replay + blind judge</h4>
+          <p>A proposal can be replayed on the step's recorded input and compared to the original by a position-swapped blind judge. Auto-apply only above a score you set. Stale proposals are detected; anything applied can be reverted.</p>
+        </div>
+        <div class="role-card">
+          <span class="role-tag">lessons</span>
+          <h4>Short rules that stick</h4>
+          <p>“Always include a test plan.” Lessons attach to the relevant roles on later runs — also for councils whose records must stay untouched — and each seat gets its own track record. Mute one with a click.</p>
+        </div>
+      </div>
+      <div class="compact-strip">
+        <span>Improve ▸ Enable</span><span>manual · auto</span><span>none · judge · replay+judge</span><span>Retrospect now</span><span>kondi improve pipeline.json --status</span><span>kondi pipeline … --improve</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="chat">
+    <div class="wrap">
+      <h2><span class="anno secnum">§8</span>The chat is the front door</h2>
+      <p class="sub">Work in an ordinary chat — files, tools, a working directory — and hand the hard question to a council without leaving it. The council runs in the background; its answer comes back into the thread, with receipts.</p>
+      <div class="flowgrid">
+        <div class="flow-card hot">
+          <span class="glyph">⚖</span>
+          <h4>Escalate in one click</h4>
+          <p>Type the task and press <b>⚖</b> instead of Send, or use <code>/council &lt;task&gt;</code>. The recent conversation rides along as background context.</p>
+        </div>
+        <div class="flow-card">
+          <span class="glyph">↻</span>
+          <h4>Second opinion</h4>
+          <p>On any assistant answer, <b>⚖ Second opinion</b> convenes an analysis council that checks the answer and writes an improved one.</p>
+        </div>
+        <div class="flow-card">
+          <span class="glyph">⌁</span>
+          <h4>The model decides</h4>
+          <p>The chat model can call <code>convene_council</code> itself when it judges a task needs one. Chat-only by construction — a council can never recurse into another.</p>
+        </div>
+        <div class="flow-card">
+          <span class="glyph">▣</span>
+          <h4>A live card, then a saved pipeline</h4>
+          <p>Status, phase, who's thinking, elapsed time, live tail, branch and patch for worktree runs. Open the full deliberation any time. Every escalation is saved as a one-step pipeline you can rerun and improve.</p>
+        </div>
       </div>
     </div>
   </section>
 
   <section id="desktop">
     <div class="wrap">
-      <h2><span class="anno secnum">§6</span>A desktop app, deliberately</h2>
-      <p class="sub">Kondi is a native app (Tauri: Rust + web UI), not a hosted service. Your keys stay on your machine and calls go direct to providers. Deliberations persist to disk past any browser quota. Pipelines operate in a working directory you choose — coding steps write real files there, script steps test them there, containment guards keep agents inside. MCP tool servers connect per step or per persona.</p>
+      <h2><span class="anno secnum">§9</span>A desktop app, deliberately</h2>
+      <p class="sub">Kondi is a native app (Tauri: Rust + web UI), not a hosted service. Your keys stay on your machine and calls go direct to providers. Deliberations persist to disk past any browser quota. Pipelines operate in a working directory you choose — coding steps write real files there, script steps test them there, containment guards keep agents inside. Everything a run writes — outputs, memory, scorecards, worktrees — lives under one <code style="font-family:var(--mono);font-size:12px">.kondi/</code> folder there. The same orchestrators run headless from the <code style="font-family:var(--mono);font-size:12px">kondi</code> CLI with budget flags and a Ctrl-C that actually stops the model calls. MCP tool servers connect per step or per persona. MIT-licensed, no account, no fees.</p>
     </div>
   </section>
 
   <section id="proof-teaser">
     <div class="wrap">
-      <h2><span class="anno secnum">§7</span>Proven end-to-end, step by step</h2>
+      <h2><span class="anno secnum">§10</span>Proven end-to-end, step by step</h2>
       <p class="sub">Four showcase pipelines run with real models, every step's output inspected and verdicted — including the failures that became engine fixes.</p>
       <div class="teaser">
         <a class="t-card" href="#/examples">
@@ -610,7 +722,7 @@ img{max-width:100%;}
   <div class="closing">
     <div class="wrap">
       <h2>Assemble your first pipeline tonight.</h2>
-      <p>Download Kondi, paste one API key (or grab free NVIDIA NIM credits), and click together a council pipeline on the graph. The examples import in one click.</p>
+      <p>Download Kondi, paste one API key (or grab free NVIDIA NIM credits), and click together a council pipeline on the graph — or just ask the chat and press ⚖. The examples import in one click.</p>
       <div class="cta-row">
         <a class="btn btn-primary" href="https://github.com/thisPointOn/kondi/releases">Download for desktop</a>
         <a class="btn btn-secondary" href="https://github.com/thisPointOn/kondi">Star on GitHub</a>
@@ -691,7 +803,7 @@ SCRIPT-VERIFIED</pre></div>
         </div>
         <div class="caught">
           <div class="c-label">what verification caught</div>
-          <p><b>An earlier run failed the exact-string gate, looped, and failed again</b> — the retry's feedback was just the test output, which read as success (<span class="mono">✓ All tests passed!</span>), so it fixed the wrong things. Loop feedback now leads with the condition's expression and verdict; the next run passed the gate on the first attempt. <b>An agent once claimed it wrote a file that didn't exist</b> — text-output agents are no longer offered write tools, so the deliverable lands in the artifact where the pipeline can check it.</p>
+          <p><b>An earlier run failed the exact-string gate, looped, and failed again</b> — the retry's feedback was just the test output, which read as success (<span class="mono">✓ All tests passed!</span>), so it fixed the wrong things. Loop feedback now leads with the condition's expression and verdict; the next run passed the gate on the first attempt. <b>An agent once claimed it wrote a file that didn't exist</b> — text-output agents are no longer offered write tools, so the deliverable lands in the artifact where the pipeline can check it — and a tool call narrated as text is now recovered or corrected engine-wide, whatever the model.</p>
         </div>
       </article>
 
@@ -705,7 +817,7 @@ SCRIPT-VERIFIED</pre></div>
         <p class="ex-goal">A genuinely adversarial council: a chair, an advocate, and a skeptic debate a real question over two rounds — should a 40-person software company adopt a 4-day work week? — then a guard verifies a recommendation exists before an agent distills the executive summary.</p>
         <ul class="chips">
           <li class="hot">council · 4 personas · 2 rounds</li><li class="hot">condition</li><li class="hot">agent</li>
-          <li>input: text question</li><li>models: NIM nemotron super + nano</li>
+          <li>input: text question</li><li>models: NIM nemotron super + lightning (verified on nano, since retired)</li>
         </ul>
         <div class="steps-scroll"><table class="steps">
           <tr><th>Step</th><th>Type</th><th>What it does</th><th>Expected output</th></tr>
@@ -769,7 +881,7 @@ LENGTH OK (446 words)</pre></div>
 
 <footer>
   <div class="wrap">
-    <span>kondi · multi-LLM council pipeline studio</span>
+    <span>kondi · multi-LLM council pipeline studio · MIT · free</span>
     <a href="https://github.com/thisPointOn/kondi">github.com/thisPointOn/kondi</a>
     <span>desktop · Tauri (Rust + React)</span>
   </div>
