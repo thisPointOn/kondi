@@ -12,8 +12,11 @@ export default defineConfig({
   },
   server: {
     watch: {
-      // Exclude Rust build artifacts from file watching
-      ignored: ['**/src-tauri/target/**', '**/node_modules/**'],
+      // Tauri's own watcher handles src-tauri/ (Rust, icons); watching it from
+      // Vite only burns inotify watches (ENOSPC kills the dev server when the
+      // system-wide fs.inotify.max_user_watches is exhausted). Run output under
+      // .kondi/ is written by pipelines and must never trigger HMR.
+      ignored: ['**/src-tauri/**', '**/node_modules/**', '**/.kondi/**', '**/dist/**'],
     },
   },
 })
